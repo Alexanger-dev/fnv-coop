@@ -17,6 +17,10 @@ use engine_core::prelude::*;
 
 use crate::{addr, forms};
 
+// fights: actors with health, combat and a process, and the stand-ins fights call.
+#[path = "fight_kit.rs"]
+pub mod fight_kit;
+
 /// Where the story lives.
 const HEAP: u32 = 0x0200_0000;
 const HEAP_LEN: u32 = 0x0010_0000;
@@ -40,7 +44,7 @@ const SETTER: u32 = RAN + 0x40;
 /// An object script whose body is `evp` on the reference it runs on.
 const EVP_SCRIPT: u32 = 0x0150_0400;
 /// Where an actor's count of package evaluations is kept, in its own block.
-const EVALUATIONS_OFFSET: u32 = 0x300;
+const EVALUATIONS_OFFSET: u32 = 0xe80;
 /// The player, and the arena placed references come from (0x100 bytes each; the count of placed
 /// references is the word at `PLACED`).
 const PLAYER: u32 = 0x0140_0000;
@@ -263,6 +267,20 @@ fn place_at_me(e: &mut Engine, a: &[u32]) -> Ret {
     e.mem.set_u32(TABLE, count + 1);
     eax(r)
 }
+
+// world: the world kit (`crate::worldkit`) adds its forms to the story's form table.
+/// Enters `form` under `id` in the story's id-to-form table, as a form of the game's data.
+pub(crate) fn add_form(e: &mut Engine, id: u32, form: u32) {
+    let count = e.mem.u32(TABLE);
+    assert!(
+        8 * (count + 1) < TABLE_LEN,
+        "a test story's form table is full"
+    );
+    e.mem.set_u32(TABLE + 4 + 8 * count, id);
+    e.mem.set_u32(TABLE + 8 + 8 * count, form);
+    e.mem.set_u32(TABLE, count + 1);
+}
+// world: end
 
 fn runner(e: &mut Engine, a: &[u32]) -> Ret {
     let n = e.mem.u32(RAN);
@@ -500,8 +518,25 @@ impl Story {
             bump(e, GHOSTS);
             Ret::default()
         });
+        // fights
+        fight_kit::register(&mut e);
+        // social: the stand-ins of conversations, saves and rests.
+        crate::social_kit::register(&mut e);
         crate::install(&mut e);
         Story { e }
+    }
+
+    // social
+    /// Where the count of scripts that really ran is kept.
+    pub(crate) const RAN_AT: u32 = RAN;
+
+    // social
+    /// Adds a form made outside the story's heap to its form table.
+    pub fn add_form(&mut self, id: u32, form: u32) {
+        let n = self.e.mem.u32(TABLE);
+        self.e.mem.set_u32(TABLE + 4 + 8 * n, id);
+        self.e.mem.set_u32(TABLE + 8 + 8 * n, form);
+        self.e.mem.set_u32(TABLE, n + 1);
     }
 
     /// Sets a quest's stage as a script's `SetStage` does.

@@ -18,8 +18,18 @@
 //! The transport is coop-core's `Transport`: coop-net's endpoint in the game, the loopback and
 //! chaos transports in tests.
 
+// fights
+pub mod fight;
 pub mod ladder;
 pub mod record;
+// world
+pub mod world;
+
+// social: conversations, party saves and the rest vote (docs/coop/SPECS.md S12 to S15).
+pub mod party;
+pub mod rest;
+pub mod social;
+pub mod talk;
 
 use std::collections::BTreeSet;
 
@@ -115,6 +125,8 @@ pub fn hello(plugins: Vec<String>) -> Hello {
         CLOCK_TAG,
         LIFE_TAG
     );
+    // world
+    let rules = format!("{rules} {}", world::rules());
     Hello {
         proto: proto::PROTOCOL_VERSION,
         build_hash: compat::plugin_list_hash(&[build]),
@@ -177,6 +189,8 @@ pub struct HostDriver {
     pub unencodable: u32,
     /// The live ladder (players in the world); `None` leaves the session story-only.
     pub ladder: Option<ladder::Ladder>,
+    /// Shared fights (fights); `None` leaves every game running its own actors.
+    pub fight: Option<fight::Fight>,
     sender: AvatarSender,
     /// The host player's own view of the other players (their interpolated states).
     view: GuestLive,
@@ -190,9 +204,24 @@ pub struct HostDriver {
     pub bad_packets: u32,
     /// Sends that failed.
     pub send_failures: u32,
+    // world
+    /// The rest of the world's state (records, doors, locks); `None` leaves it unshared. Set it
+    /// with [`HostDriver::share_world`].
+    pub world: Option<world::HostWorld>,
+    // social
+    /// Conversations, party saves and the rest vote.
+    pub social: social::HostSocial,
 }
 
 impl HostDriver {
+    // world
+    /// Shares the rest of the world's state: changed forms' records to the guests, doors and
+    /// locks both ways (docs/coop/SPECS.md S12).
+    pub fn share_world(&mut self, w: world::HostWorld) {
+        self.sync.claim_tags.insert(world::LOCK_TAG);
+        self.world = Some(w);
+    }
+
     /// A host with coop-core's config `cfg`, replicating the quests `quest_ids` (the shared story's:
     /// leave out the quests each player runs for themself; all of them are
     /// written at the start, so a guest gets every quest's state from the snapshot, whatever save
@@ -219,6 +248,7 @@ impl HostDriver {
             claim_notes: Vec::new(),
             unencodable: 0,
             ladder: None,
+            fight: None, // fights
             sender: AvatarSender::new(PlayerId::HOST),
             view: GuestLive::new(PlayerId::HOST),
             unencodable_notes: Vec::new(),
@@ -227,6 +257,9 @@ impl HostDriver {
             hash_every: 10,
             bad_packets: 0,
             send_failures: 0,
+            world: None, // world
+            // social
+            social: social::HostSocial::default(),
         }
     }
 
@@ -358,6 +391,10 @@ impl HostDriver {
         // Only the quests this session replicates: a player's own quests (the opening, character
         // creation, ...) change on the host too and are not the shared story.
         let changes = coop_engine::drain(e);
+        // world
+        if let Some(w) = self.world.as_mut() {
+            w.collect(e, &mut self.sync, &changes);
+        }
         let quests: BTreeSet<u32> = changes
             .iter()
             .filter(|c| c.kind == addr::FORM_TYPE_QUEST && self.quests.contains(&c.form))
@@ -417,9 +454,31 @@ impl HostDriver {
                 send(net, to, &reply, &mut self.send_failures);
             }
         }
+        // world: doors and locks guests moved, before the other claims are judged.
+        if let Some(w) = self.world.as_mut() {
+            for (to, msg) in w.enact(e, &mut self.sync) {
+                send(net, to, &msg, &mut self.send_failures);
+            }
+        }
+        // social
+        social::host_step(self, e, net, now_ms);
         self.enact_claims(e);
         self.collect(e);
         self.write_clock(e, now_ms);
+        // fights
+        if let Some(f) = self.fight.as_mut() {
+            let avatars = self
+                .ladder
+                .as_ref()
+                .map(ladder::Ladder::avatar_ids)
+                .unwrap_or_default();
+            for (to, msg) in f.host_step(e, &mut self.sync, &avatars, now_ms) {
+                send(net, to, &msg, &mut self.send_failures);
+            }
+            for (to, msg) in f.host_body(e, &mut self.sync, &mut self.view, now_ms) {
+                send(net, to, &msg, &mut self.send_failures);
+            }
+        }
         let mut out = self.sync.tick();
         self.steps += 1;
         if self.steps % self.hash_every.max(1) == 0 {
@@ -450,7 +509,12 @@ impl HostDriver {
         let Some(me) = ladder.frame(e, now_ms, &peers) else {
             return;
         };
-        let Some(m) = self.sender.tick(now_ms, &ladder::state_of(&me)) else {
+        // fights: the host's own health and fall, for the other players.
+        let mut state = ladder::state_of(&me);
+        if let Some(f) = self.fight.as_ref() {
+            f.stamp(e, &mut state);
+        }
+        let Some(m) = self.sender.tick(now_ms, &state) else {
             return;
         };
         let relayed = self.sync.live.on_msg(
@@ -517,6 +581,8 @@ pub struct GuestDriver {
     healed_seen: BTreeSet<(u32, u8)>,
     /// The live ladder (players in the world); `None` leaves the session story-only.
     pub ladder: Option<ladder::Ladder>,
+    /// Shared fights (fights); `None` leaves this game running its own actors.
+    pub fight: Option<fight::Fight>,
     /// Drifted entries the game refused when applied again (counted once each time they are
     /// tried; the same entry is in [`GuestDriver::refused`] from its first apply).
     pub heal_refused: u32,
@@ -527,6 +593,12 @@ pub struct GuestDriver {
     pub bad_packets: u32,
     /// Sends that failed.
     pub send_failures: u32,
+    // world
+    /// The rest of the world's state (records, doors, locks); `None` leaves it unshared.
+    pub world: Option<world::GuestWorld>,
+    // social
+    /// Conversations, this player's part of a party save, and the rest vote.
+    pub social: social::GuestSocial,
 }
 
 impl GuestDriver {
@@ -552,10 +624,14 @@ impl GuestDriver {
             healed_notes: Vec::new(),
             healed_seen: BTreeSet::new(),
             ladder: None,
+            fight: None, // fights
             heal_refused: 0,
             refused: 0,
             bad_packets: 0,
             send_failures: 0,
+            world: None, // world
+            // social
+            social: social::GuestSocial::default(),
         }
     }
 
@@ -589,15 +665,36 @@ impl GuestDriver {
                 self.sync.live.local = ladder::state_of(&me);
             }
         }
+        // fights
+        if let Some(f) = self.fight.as_mut() {
+            let avatars = self
+                .ladder
+                .as_ref()
+                .map(ladder::Ladder::avatar_ids)
+                .unwrap_or_default();
+            for msg in f.guest_step(e, &mut self.sync, &avatars, now_ms) {
+                send(net, PlayerId::HOST, &msg, &mut self.send_failures);
+            }
+        }
         for msg in self.sync.tick(Tick(0)) {
             send(net, PlayerId::HOST, &msg, &mut self.send_failures);
         }
+        // social
+        social::guest_step(self, e, net, now_ms);
         self.claim_deaths(e, net);
         self.apply(e);
+        // world
+        if let Some(w) = self.world.as_mut() {
+            w.apply(e, &self.sync.store);
+        }
         self.keep_clock(e, now_ms);
         self.steps += 1;
         if self.steps % self.heal_every.max(1) == 0 {
             self.heal(e);
+            // world
+            if let Some(w) = self.world.as_mut() {
+                w.heal(e, &self.sync.store);
+            }
         }
     }
 
@@ -608,6 +705,12 @@ impl GuestDriver {
         for c in &changes {
             if let Some(cause) = c.cause {
                 self.causes.insert(c.form, cause);
+            }
+        }
+        // world: this game's own doors and locks, told to the host.
+        if let Some(w) = self.world.as_mut() {
+            for msg in w.observe(e, &mut self.sync, &changes) {
+                send(net, PlayerId::HOST, &msg, &mut self.send_failures);
             }
         }
         self.life_pending.extend(life_changes(&changes));

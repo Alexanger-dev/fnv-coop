@@ -9,6 +9,13 @@
 //! sends the players' places only, `warp` also moves a guest to the host's cell, `avatar` (the
 //! default) also shows the other players; `off` leaves the session story-only.
 //! `NV_COOP_AVATAR=<hex form id>` is the base form of an avatar (default 7, the player's own).
+//! `NV_COOP_WORLD=doors` shares doors and locks but no changed-form records, `off` neither
+//! (docs/coop/SPECS.md S12).
+//!
+//! Shared fights (fights; docs/coop/SPECS.md S13) run with the ladder: `NV_COOP_FIGHT=state` shows
+//! the host's actors on the guests, `damage` also sends hits through the host, `threat` also lets
+//! the host's actors turn on a guest, `revive` (the default) also holds a player's death for a
+//! revive; `off` leaves every game running its own fights.
 //!
 //! Both players start the same game (a new game, or the same save) from installations whose
 //! plugins load in the same order; the handshake refuses a guest whose plugins differ.
@@ -186,6 +193,19 @@ fn local_ip() -> IpAddr {
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
 }
 
+/// The address in a host's join code. `NV_COOP_ADDRESS` gives it when friends reach the host at
+/// another address than its own network's: its public address, or its address in a private network
+/// app. Anything else there is ignored, and the local network's address stands.
+fn join_ip() -> IpAddr {
+    address_from(std::env::var("NV_COOP_ADDRESS").ok().as_deref()).unwrap_or_else(local_ip)
+}
+
+fn address_from(value: Option<&str>) -> Option<IpAddr> {
+    value
+        .and_then(|v| v.trim().parse::<IpAddr>().ok())
+        .filter(|ip| !ip.is_unspecified())
+}
+
 enum Role {
     Host(Box<HostDriver>),
     /// A guest before the host accepted it, then with its driver.
@@ -203,6 +223,26 @@ pub struct Coop {
     last_status: Option<Instant>,
     /// The skipped story scripts already named in the log.
     gate_named: std::collections::BTreeSet<u32>,
+    // social
+    /// This player's name (its party key is a hash of it) and own quests, for a guest's part of
+    /// a party save; whether the parts of co-op that found no function to wrap were named.
+    social: Social,
+}
+
+// social
+struct Social {
+    name: String,
+    own_quests: Vec<u32>,
+    missing_named: bool,
+}
+
+// social
+/// Where a host keeps the party's files: `NV_COOP_PARTY_DIR`, or `coop-party` in the folder the
+/// game was started from.
+fn party_dir() -> std::path::PathBuf {
+    std::env::var_os("NV_COOP_PARTY_DIR")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| "coop-party".into(), std::path::PathBuf::from)
 }
 
 impl Coop {
@@ -221,6 +261,47 @@ impl Coop {
         (
             Some(Ladder::new(guest, cap, base)),
             format!("co-op live: ladder up to {cap:?}, avatar base form {base:08x}"),
+        )
+    }
+
+    // world
+    /// The world sharing's counters, for the status lines; `None` when it is off.
+    fn world_status(&self) -> Option<String> {
+        match &self.role {
+            Role::Host(h) => h.world.as_ref().map(|w| {
+                format!(
+                    "co-op host world: records sent {}, too large {}, guests' doors and locks done {}, refused {}",
+                    w.records, w.too_large, w.enacted, w.refused
+                )
+            }),
+            Role::Guest(Some(g)) => g.world.as_ref().map(|w| {
+                format!(
+                    "co-op guest world: records loaded {} (own record differs after {}), refused {}, doors and locks set {}, told the host {}, put back {}",
+                    w.records_applied, w.records_differ, w.refused, w.set, w.told_host, w.put_back
+                )
+            }),
+            Role::Guest(None) => None,
+        }
+    }
+
+    // world
+    /// What `NV_COOP_WORLD` asks to share of the world beyond the story (everything unless it
+    /// says `doors` or `off`).
+    fn world_share() -> session::world::Share {
+        session::world::Share::parse(&std::env::var("NV_COOP_WORLD").unwrap_or_default())
+    }
+
+    /// fights: the shared fights `NV_COOP_FIGHT` asks for; `None` for `off` or without the ladder.
+    /// Returns the line that says so.
+    fn fight(guest: bool, ladder: bool) -> (Option<session::fight::Fight>, String) {
+        let ask = std::env::var("NV_COOP_FIGHT").unwrap_or_default();
+        if ask.trim() == "off" || !ladder {
+            return (None, "co-op fights: off".into());
+        }
+        let cap = session::fight::Cap::parse(&ask);
+        (
+            Some(session::fight::Fight::new(guest, cap)),
+            format!("co-op fights: shared up to {cap:?}"),
         )
     }
 
@@ -246,7 +327,7 @@ impl Coop {
                 let bind = SocketAddr::from(([0, 0, 0, 0], *port));
                 let b = UdpBackend::host(bind, token, UdpConfig::default())
                     .map_err(|e| format!("co-op: UDP port {port}: {e}"))?;
-                let ip = local_ip();
+                let ip = join_ip();
                 let code = JoinCode::new(JoinTarget::Direct(SocketAddr::new(ip, *port)), token);
                 lines.push(format!(
                     "co-op: hosting on UDP port {port}; join code for this network: {code} (over the internet: forward UDP port {port} and give your public address)"
@@ -262,8 +343,20 @@ impl Coop {
                     clock.len()
                 ));
                 host.set_clock(clock);
+                // social
+                host.social.party.dir = Some(party_dir());
                 let (ladder, line) = Self::ladder(false);
                 host.ladder = ladder;
+                lines.push(line);
+                // world
+                let share = Self::world_share();
+                lines.push(share.line().into());
+                if let Some(w) = share.host() {
+                    host.share_world(w);
+                }
+                // fights
+                let (fight, line) = Self::fight(false, host.ladder.is_some());
+                host.fight = fight;
                 lines.push(line);
                 (Endpoint::host(b, token, cfg), Role::Host(Box::new(host)))
             }
@@ -285,11 +378,17 @@ impl Coop {
                 ep,
                 role,
                 plugins,
-                own_quests,
+                own_quests: own_quests.clone(),
                 own_scripts,
                 started: Instant::now(),
                 last_status: None,
                 gate_named: Default::default(),
+                // social
+                social: Social {
+                    name: name.to_string(),
+                    own_quests,
+                    missing_named: false,
+                },
             },
             lines,
         ))
@@ -311,6 +410,17 @@ impl Coop {
                             let (ladder, line) = Self::ladder(true);
                             g.ladder = ladder;
                             lines.push(line);
+                            // world
+                            let share = Self::world_share();
+                            lines.push(share.line().into());
+                            g.world = share.guest();
+                            // fights
+                            let (fight, line) = Self::fight(true, g.ladder.is_some());
+                            g.fight = fight;
+                            lines.push(line);
+                            // social
+                            g.social.party.key = session::party::key_of(&self.social.name);
+                            g.social.party.own_quests = self.social.own_quests.clone();
                             *slot = Some(Box::new(g));
                         }
                         // Joined again after losing the host: resume from what this guest has.
@@ -369,14 +479,40 @@ impl Coop {
                 for note in h.stage_notes.drain(..) {
                     lines.push(format!("co-op host: {note}"));
                 }
+                // world
+                for note in h.world.iter_mut().flat_map(|w| w.notes.drain(..)) {
+                    lines.push(format!("co-op host world: {note}"));
+                }
+                // social
+                for note in (h.social.party.notes.drain(..)).chain(h.social.enactor.notes.drain(..))
+                {
+                    lines.push(format!("co-op host: {note}"));
+                }
             }
             Role::Guest(Some(g)) => {
                 g.step(e, &mut self.ep, now_ms);
                 for note in g.healed_notes.drain(..) {
                     lines.push(note);
                 }
+                // world
+                for note in g.world.iter_mut().flat_map(|w| w.notes.drain(..)) {
+                    lines.push(format!("co-op guest world: {note}"));
+                }
+                // social
+                for note in g.social.party.notes.drain(..) {
+                    lines.push(format!("co-op guest: {note}"));
+                }
             }
             Role::Guest(None) => {}
+        }
+        // social
+        if !self.social.missing_named {
+            self.social.missing_named = true;
+            for at in coop_engine::social::missing(e) {
+                lines.push(format!(
+                    "co-op: no function at {at:08x} to take part in; that part of conversations or rests is off"
+                ));
+            }
         }
         if self
             .last_status
@@ -384,6 +520,20 @@ impl Coop {
         {
             self.last_status = Some(Instant::now());
             lines.push(self.status(e));
+            // world
+            lines.extend(self.world_status());
+            // fights
+            match &self.role {
+                Role::Host(h) => {
+                    lines.extend(h.fight.iter().map(|f| format!("co-op {}", f.status())))
+                }
+                Role::Guest(Some(g)) => {
+                    lines.extend(g.fight.iter().map(|f| format!("co-op {}", f.status())))
+                }
+                Role::Guest(None) => {}
+            }
+            // social
+            lines.push(self.social_status(e));
             if let Role::Guest(_) = self.role {
                 // Which story scripts this guest holds back, each named once (the first 80): what
                 // a guest would have to run itself to have its own start.
@@ -399,6 +549,44 @@ impl Coop {
             }
         }
         lines
+    }
+
+    // social
+    /// A one-line status of conversations, party saves and rests.
+    fn social_status(&self, e: &mut Engine) -> String {
+        let (held, own, unknown) = coop_engine::talk::counts(e);
+        match &self.role {
+            Role::Host(h) => {
+                let s = &h.social;
+                format!(
+                    "co-op host social: conversations {} (guests' results run {}, left {}), lines watched {}, party saves {} ({} files), parts given back {}, rests passed {} ({} h)",
+                    s.talker.opened,
+                    s.enactor.enacted,
+                    s.enactor.left,
+                    s.talker.lines_shown,
+                    s.party.saved,
+                    s.party.files_written,
+                    s.party.given_back,
+                    s.rester.passed,
+                    s.rester.hours
+                )
+            }
+            Role::Guest(Some(g)) => {
+                let s = &g.social;
+                format!(
+                    "co-op guest social: conversations {} (refused {}, not started {}), results held for the host {held}, run here as own {own}, with no quest known {unknown}, lines watched {}, part sent {} time(s), put back {}, rests passed {} ({} h)",
+                    s.talker.opened,
+                    s.talker.denied,
+                    s.talker.blocked,
+                    s.talker.lines_shown,
+                    s.party.uploads,
+                    s.party.restored,
+                    s.rester.passed,
+                    s.rester.hours
+                )
+            }
+            Role::Guest(None) => "co-op guest social: waiting for the host".into(),
+        }
     }
 
     /// A one-line status: players and the story's revision on a host; on a guest what it applied,
@@ -444,6 +632,18 @@ impl Coop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_join_address_is_taken_only_from_a_real_address() {
+        assert_eq!(
+            address_from(Some(" 203.0.113.7 ")),
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)))
+        );
+        assert_eq!(address_from(Some("")), None);
+        assert_eq!(address_from(Some("my-pc")), None);
+        assert_eq!(address_from(Some("0.0.0.0")), None);
+        assert_eq!(address_from(None), None);
+    }
 
     #[test]
     fn the_opening_quests_are_each_player_s_own_in_any_load_order() {

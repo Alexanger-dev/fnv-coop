@@ -295,7 +295,7 @@ DLCs. **Not verified here:** that the guest's opening then plays through in the 
 
 - PC run 6: after her dialogue Sunny stood still. Stage 10 of VCG02 says `SunnyREF.evp` in its result
   script, which runs on the host only; the guest's copy was never told.
-- `coop_engine::commands`: a wrap of `Actor::EvaluatePackage` (`008a6ce0`, WRAPS step C-2) notes, on a host
+- `coop_engine::commands`: a wrap of `Actor::EvaluatePackage` (`008a6ce0`, WRAPS step C-4) notes, on a host
   whose journal is armed, each evaluation asked for while a script runs (`gate::cause`) of an actor both
   games know. The AI's own evaluations are not noted.
 - Session: `EVALUATE_TAG` (`Field::Custom`, a count). The guest tells its copy the same, inside the apply
@@ -305,3 +305,227 @@ DLCs. **Not verified here:** that the guest's opening then plays through in the 
   and VMQ01's (a result script of quest 00104c1c on the player). Script variables had no cause: the journal
   does not see them, as B's planner expected, so the heal's diff stays their capture.
 
+## S12: the rest of the world (implemented on stand-ins; docs/coop/DECISIONS.md D1, option C)
+
+Nothing in this section has run in the real game. Its tests use stand-ins for the game's functions
+(`coop_engine::worldkit`).
+
+### The changed-form stream (`coop_engine::changes`, `coop_engine_session::world`)
+
+- **A record** is what the game writes for one form into a save: the nine-byte form header (the
+  form's index, change flags, save type, version) and the data. `capture` makes it as
+  `BGSSaveLoadGame::SaveGame` and `UnloadForm` do for each changed form: a `BGSSaveFormBuffer`
+  (`008659c0`), its header (`00865ad0`), the form (`0050f9c0`), the form's `CheckSaveGame` (slot
+  0x80), the initial data (`0084eb80`) and the form's `SaveGame` (slot 0x54). It is written with
+  every change flag the game's save holds for the form (`008456e0`), so it is the whole changed
+  form.
+- **Loading** is what `BGSSaveLoadGame::LoadForm` (`008495d0`) does when the game loads a form's
+  stored record while playing: a `BGSLoadFormBuffer` (`008643b0`) with the record's bytes, the
+  form set (`007037c0`), the header's flags (`00428130`), the form marked (`0046a010`), the
+  initial data (`0084f330`), the form's `LoadGame` (slot 0x5c), the data freed, the buffer handed
+  to the game's form buffer array (`007cb2e0`), then the game's unload pass (`008492b0`, which
+  runs `InitLoadGame` and `FinishLoadGame` and deletes the buffer). Not while a load runs
+  (`0042ce10`). On a guest all of it is inside the script gate's apply scope. Nothing is reverted
+  first.
+- **The numbering.** A record names other forms by three-byte indices into a
+  `BGSSaveLoadFormIDMap`, through the map the game object points at (+0x08), and every game
+  numbers for itself. Co-op makes one map of its own per game (`00846b60`) and puts it in the game
+  object's place only while a record is made or loaded. The host's grows as it captures; its ids
+  travel in index order (`NUMBERS_TAG`, 120 ids a field); a guest enters them in the same order
+  (`00846c90`). The game's own save numbering is never used or changed. A record says how many ids
+  it needs and waits on a guest until they are there.
+- **What travels** (`changes::class_of`, in D1's order): a placed object (`REFR`) whose form
+  flags (enabled or not), place, lock or open state changed; a placed object whose contents
+  changed; a faction; a reputation; a note read; a dialogue response said once. Not: actors, cells,
+  quests (their own channel), objects only pushed about by physics, forms made while playing (ids
+  from `ff000000`). A record that does not fit one field (512 bytes) is not sent, counted and named
+  once in the host's log.
+- **On a guest** a record waits while its form is not in the game or the game is loading. After a
+  load the guest makes its own record of the form with the same flags and counts a difference
+  (`records_differ`, named once): on a PC that number says, per kind of form, whether its live load
+  holds. A form of another type than the record's is refused.
+- **D1's condition 1.** No kind of form has its live-load proof on a PC yet. `NV_COOP_WORLD=doors`
+  runs without records, `off` without any of this section.
+
+### Doors and locks (`coop_engine::world`, `coop_engine_session::world`)
+
+- A door is read with `BGSOpenCloseForm::GetOpenState` (`0047b250`) and moved with `SetOpenState`
+  (`0047aec0`, not immediate). A door opened gets its change flag through `AddChange`; shut again
+  it loses the flag through `RemoveChange`, which does not pass the journal's wrap. So the host
+  reads every door it has seen change once a step and writes its state as `DOOR_TAG`.
+- A lock (`REFR_LOCK`: level +0x00, flags +0x08, tries +0x0c) is read from the reference's own
+  lock (`00569140`) and set with `TESObjectREFR::Lock` (`00569250`) and `UnLock` (`005692a0`),
+  then the other values in place and `AddLockChange` (`005789b0`). The host writes it as `LOCK_TAG`
+  when the journal names the lock's change. A lock picked, a lock opened from a terminal and a
+  lock's failed tries (a broken lock is one whose tries reached the game's limit) are all in it.
+- A guest's own door goes to the host as coop-core's `Act::World(Shared::Door)`; the host's game
+  moves the door and the state comes back to everyone. A guest's own lock change goes as a claim
+  (as a death does, D4); the host's game sets the lock. A guest's change the host does not take up
+  (the object is not in the host's game) is put back after 120 steps.
+- The host refuses every other interaction request for now, so a guest is never left waiting.
+
+**Verified here** (no game): `coop-engine` 44 tests, among them a round trip per kind of form
+(host record, guest load, guest record, byte for byte) with `crates/fos` decoding the reference's
+place, the faction, the reputation, the note and the response; `coop-engine-session` 9 tests on two
+and three test games over loopback. Twins: a record loaded with another numbering names other
+forms; a load on a game that is not a guest runs the object's script; with doors not shared a door
+shut on the host stays open on the guest.
+
+**Not verified here:** every game function above (the stand-ins only do what co-op relies on), what
+a placed object's real record holds after its initial data, that a live `LoadGame` shows on screen
+(a door swinging, a container's menu), and two real games.
+
+**Not done:** a guest's take from a container and a guest's trade do not reach the host (loot can
+be taken twice; each game has its own trader stock and caps); terminals' own state beyond their
+lock; references moved to another cell; records above 512 bytes.
+
+## S13: shared fights (implemented with unit tests; not yet run on a PC)
+
+The host's game is the authority for actors that are not players (`coop_engine::fight`,
+`coop_engine_session::fight`). `NV_COOP_FIGHT=state|damage|threat|revive|off` caps it (default `revive`);
+it needs the live ladder. With it off, or with co-op off, every game runs its own fights as before.
+
+| Part | What | Game facts (each from this tree's translation) |
+| --- | --- | --- |
+| State | About 20 times a second the host reads the actors its game runs around its player and tracks each placed one in coop-core's actor ledger (`ActorHost`), pinned to the host as owner. The ledger announces it to the guests in that space and relays place, heading, health, life, combat flag and combat target. A guest holds each such actor that is in its own space: AI off (`bProcessMe`), moved with `SetPosBase`/`SetAngleBase`, health set, killed inside the apply scope when the host says it died. An actor the host stops running goes back to the guest's game | the process lists' close-to-player array (`011e0e80` +0x88, count +0x150, 50 entries; `processlists.rs`); health through the `ActorValueOwner` at +0xa4, virtual `0x0c`, value `0x10`; the in-combat test `00493bb0`; the combat target, virtual `0x42c`; a value change, virtual `0x3ac` |
+| Damage | A wrap of `Actor::HitMe` decides whose game applies a weapon hit. A guest's hit on a held actor is kept from its own copy and sent as `ActorMsg::Hit`; the ledger judges it and the host's game applies it, credited to the guest's avatar; a kill is `Actor::Kill`. The host's actors' hits on an avatar are kept from the avatar and become `PlayerHurt` through coop-core's vitals; the guest's game applies it to its player. A guest's game applies no hit of a held actor on anyone | `Actor::HitMe` `0089a760` and `HitData` (+0x00 aggressor, +0x10 limb, +0x14 health damage); the damage applier, virtual `0x338` (`fn_0089d6f0`); `Actor::GetEssential` `0087f3d0` |
+| Threat | Twice a second coop-core's `ThreatDirector` picks the player each of the host's actors that is fighting a player attends to; the host's game is asked to start that combat. Avatars on the host stop being ghosts | the process's start of combat, virtual `0x33c`, with the words the `StartCombat` command passes; `Actor::pCurrentProcess` +0x68; the alarmed test, virtual `0x304` |
+| Downed and revive | A wrap of `Actor::Kill` holds the kill of the game's own player in a session. The player is left with 1 health and no controls and reports down; coop-core's `Reviver` on the host decides revive (a player standing within 150 units, after 3 s, 30 percent health), respawn (after 60 s, full health in place) or wipe (everyone down: every game lets its player die) | `Actor::Kill` `0089d900`; the player's disabled-controls byte at +0x680 |
+
+- `engine-core`'s wrap table gets two Coop rows: `0089a760` (`C-2`) and `0089d900` (`C-3`). Each wrap is installed
+  only where the address is registered, and passes every call on unless a session set its role.
+- No new wire message: coop-core's `Msg::Actor`, `Msg::Combat` and `Msg::Rules` carry everything.
+
+**Limits, stated.** Only placed actors (ids below `ff000000`) among the up to 50 the host's game runs near
+its player; an actor made while playing, or one near a guest who is elsewhere, runs in each game by itself.
+A held actor slides without animation and is not interpolated between states. A hit's kind and limb are not
+read (a direct hit, no limb), so limbs are not crippled through this path. Damage that does not go through
+`Actor::HitMe` (explosions, falls, effects) stays local to the game it happens in. Friendly fire is off
+(coop-core's default). A revive needs no key: standing next to the downed player starts it. A respawn does
+not move the player. Only the controls byte is written for a downed player, not the rest of what
+`DisablePlayerControls` does.
+
+**Not done.** V.A.T.S. for two players (the host's own V.A.T.S. still stops or slows its game, and so the
+actors everyone sees): the time multiplier's setter (`00aa4db0`) and the V.A.T.S. mode (`011f2250` +8) are
+in the translation, but what stops the game while a target is picked was not traced in this work, so
+nothing was wired rather than half of it.
+
+**Verified here:** 7 unit tests in `coop-engine` (`fight.rs`) and 17 two-game tests
+(`coop-engine-session/tests/fights.rs`); in each the story channel's echo, desyncs, refusals and guest script
+count are unchanged. **Not verified here:** every game call above (stand-ins only), and whether the game's
+own combat lets an actor fight an avatar whose AI is off.
+## S14: conversations (implemented with unit tests; not run on a PC)
+
+The player who talks to an NPC drives the conversation in the own game's dialogue menu. The other
+players see each line; a line's results happen once, in the host's game.
+
+- **In the game** (`coop_engine::talk`). Co-op wraps `TESTopicInfo::RunResult` (`0061f170`: the info,
+  index 0 when the line is said and 1 when it ends, the speaker) and `DialogMenu::Create` (`00761a20`),
+  both as owner `Coop` (new rows of the wrap table). With sharing off (no session, or a host with no
+  guest) both pass every call on. With it on, a call that belongs to the player's own conversation (the
+  open dialogue menu's speaker, `011d9510` +0x80) is noted, and on a guest a line of the shared story
+  runs inside the apply scope, so its result script does not run there. Which story a line belongs to
+  is its quest: the quest its topic holds it under (`0061a310`, `00619d00`), else the info's own owner
+  quest (+0x48). A line of one of the player's own quests (the opening), and a line whose quest cannot
+  be told, runs on the guest as before. An info's result script has no owner quest of its own
+  (`Script::InitItem` gives one only for a quest), so until now the script gate let it run on a guest
+  and the heal put the story back.
+- **In the session** (`coop_engine_session::talk`, coop-core's `dialogue`). The first shared line asks
+  the host for the NPC (`Open`); each line said is a `Pick` of its info; its end, or the next line, a
+  `LineDone`; the menu closing a `Close`. The host's own conversations go through the same table. The
+  host's game runs a guest's result through `RunResult` itself (`talk::enact`) at the protocol's
+  `RunBegin` and `RunEnd`, when the line's quest is one the session shares and the speaker is in the
+  host's game; anything else is counted and named in the log.
+- **Watching.** A machine that is not the talker shows a picked line when its player is in the NPC's
+  cell: what was chosen (the info's prompt, when it has one) and each response, as the game's own HUD
+  messages (`007052f0`; the text from `TESTopicInfo::GetInfoDisplayText`, `0061e2b0`). It reports the
+  line done at once, so the talker never waits for a watcher.
+- **One conversation per NPC.** The host's table grants an NPC to one player. A game that knows
+  another player has the NPC opens no menu on it (`Create` answers 0, the game's own answer for a
+  conversation that could not start) and says so on the HUD. Two players who start in the same moment:
+  the host grants one, and the other's menu is closed through `DialogMenu::Close` (`00762160`).
+- **Limits, stated.** A result that gives something to "the player" gives it to the host's character
+  (the host's game runs the script; a guest's reward is not carried to the guest). A result's
+  conditions were judged in the talker's game. Only the newest conversation of another player is known
+  to a machine (the host still refuses a second one). No voice or lip movement on a watcher; the line
+  is text. A choice with no prompt of its own (the topic's name was the choice) shows the response
+  only. A conversation that started before a player joined is not replayed to it.
+
+**Verified here:** 7 tests in the bridge (the wraps with sharing off and on, a host's and a guest's
+lines, lines outside the player's conversation, the host running a guest's result, a busy NPC, the text
+and the message) and 7 two- and three-game tests (a guest's line once on the host and seen by the
+others, a line whose end never comes, the host's line, an own-quest line, one conversation per NPC, two
+players at once, a pick the host cannot run). Removing the hold on a guest fails five of them.
+**Not verified here:** every game function named above in the real game; in particular that the
+dialogue menu's lines all pass `RunResult` with the menu open, and that closing the menu from outside
+its own code leaves the game sound.
+
+## S15: party saves (implemented with unit tests; not run on a PC)
+
+- **A part** (`coop_engine_session::party::Part`) is a guest's own piece of the game: where the player
+  is (space, position, heading) and the state of the quests each player runs for themself (the story
+  channel's quest record and the script's variables). The file: `NVCP`, a version byte (1), the
+  player's key, then tagged sections (tag, length, body). A reader refuses a higher version and skips
+  a section it does not know.
+- **A player's key** is a hash of the name the player chose (`NV_COOP_NAME` as the viewer passes it),
+  not the session slot. Two guests who keep the default name share a key, and so one part: each player sets a name.
+- **Guest to host.** A guest in the world reads its part every 5 s and sends it when it changed, as
+  claims (`Field::Custom` tag 60, chunks of at most 480 bytes). The host keeps the newest part of each
+  key in memory; nothing is written to the story.
+- **Saving.** Co-op is a second owner of the script extender's seams in `BGSSaveLoadGame::SaveGame`
+  (`00847c45`) and `LoadGame` (`00848c3c`), after `nvse`; it takes neither call and only notes the
+  save's name (`coop_engine::saves`). When the host's game writes a save, the host writes each part it
+  holds as `<save>.<key as 16 hex digits>.nvcoop` in its party folder (`NV_COOP_PARTY_DIR`, default
+  `coop-party` in the folder the game was started from). The game's `.fos` is not touched.
+- **Loading.** When the host's game reads a save, the parts found for it are published in the
+  replicated store (`Field::Custom` tag 61 on ids from `fe500000`), so deltas, the join snapshot and
+  the hashes carry them. Each guest takes the newest part with its key once: its own quests are put
+  back as on a load (no script runs) and the player is asked to be moved to the saved place, once the
+  player is in the world.
+- **Limits, stated.** The character's values and the inventory are not in the part yet: no function
+  of the repository was established for reading and writing them here, so a guest keeps those in its
+  own game and its own `.fos`. A guest's part is as old as its last upload (at most 5 s). The party
+  folder is not the save folder: the platform layer keeps saves, and co-op writes plain files.
+
+## S16: rejoining and joining late (implemented with unit tests; not run on a PC)
+
+- A guest that joins a running game gets coop-core's snapshot, which now also holds the published
+  parts; one that lost the host resumes from its replica (S7). Either ends with the host's hashes.
+- When a guest leaves, the host publishes its last part, marked as left behind. A guest takes such a
+  part only in a game that just started (its driver's first join): a guest that merely lost the
+  connection keeps what its still running game has; one whose game was started anew gets its place and
+  own quests back. A part from a load is always taken.
+
+**Verified here (S15, S16):** 5 unit tests of the format (round trip, unknown sections, refusals, chunks,
+file names) and 4 multi-game tests: a save writes one file per guest and a load gives each part back
+once (place and own quests, files unchanged by later play); a player who joins late gets the snapshot
+and its saved part while a stranger gets none; a dropped guest keeps its game while a restarted one
+gets its part back; a guest at its main menu gets its part once it is in the world. Hash checks ran
+with 0 desyncs in each. **Not verified here:** the seams in the real game, the real save names, the
+move of a player to a saved place across cells.
+
+## S17: sleep and wait (implemented with unit tests; not run on a PC)
+
+- **In the game** (`coop_engine::rest`). Co-op wraps `SleepWaitMenu::DoClick` (`007c0220`). With
+  sharing on, the rest button (4) does not start the rest: the hours (the slider's value plus one, as
+  the button reads it) and the bed flag are noted and the click goes on as the game's own cancel (5),
+  which closes the menu.
+- **In the session** (`coop_engine_session::rest`, coop-core's `rules::vote`). The click proposes the
+  rest to the party (sleep in a bed, wait otherwise). The others are told on the HUD and agree by
+  pressing rest in their own menu while the vote is open; coop-core's vote needs everyone and runs out
+  after 30 s. When all agreed, every game passes the hours itself as the menu does for each hour (the
+  scripts once, `00455490`; the player's hour step, `0094df80`, which moves the clock and restores the
+  player), and the host sends its clock at once, which holds every guest on the host's time (S10).
+- **Limits, stated.** The fade and the menu's hour counter are not shown (the hours pass in one frame).
+  Hardcore needs are not updated per hour as the menu does. A vote is not refused in combat yet (the
+  rules' combat flag is not set by the engine session).
+
+**Verified here:** 3 tests in the bridge (the button with sharing off, the click turned into a cancel
+with the hours asked, the hours through the hour step with its limits) and 3 multi-game tests (three
+players agree and the hours pass in every game, ending on the host's clock; one player does not agree
+and nothing passes; a host alone rests as the game does). **Not verified here:** the real menu and
+hour step.
+
+## Not done: followers
+
+A companion that follows the player who hired it, as the host's actor, was not started.

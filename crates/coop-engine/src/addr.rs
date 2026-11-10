@@ -222,3 +222,351 @@ pub const ACTOR_KILL: u32 = 0x0089_d900;
 /// `evp` ends in (`run_005c8a50.rs`, with `(0, reset)`). With `now` zero the evaluation is
 /// buffered and done by the actor's next AI update.
 pub const ACTOR_EVALUATE_PACKAGE: u32 = 0x008a_6ce0;
+
+// world: the changed-form stream, doors and locks (docs/coop/SPECS.md S12). Everything below is
+// named by the translation of `fallout/misc/saveload` (`engine-fallout-misc`) or of the reference
+// and open-close code (`engine-fallout-cell`, `engine-fallout-forms`), as each comment says.
+
+/// The pointer to the game's one `BGSSaveLoadGame` (`011ddf38`, `bgssaveloadgame.rs`,
+/// `SAVE_LOAD_GAME`); 0 before the game has made it.
+pub const SAVE_LOAD_GAME: u32 = 0x011d_df38;
+/// `BGSSaveLoadGame::pChangesMap` at +0x00, `pFormIDMap` at +0x08 and the embedded
+/// `FormBufferArray` at +0x24 (`bgssaveloadgame.rs`, the `BGSSaveLoadGame` layout).
+pub const GAME_CHANGES_MAP_OFFSET: u32 = 0x00;
+/// See [`GAME_CHANGES_MAP_OFFSET`].
+pub const GAME_FORM_ID_MAP_OFFSET: u32 = 0x08;
+/// See [`GAME_CHANGES_MAP_OFFSET`].
+pub const GAME_FORM_BUFFER_ARRAY_OFFSET: u32 = 0x24;
+/// Whether a load is running: mask 2 of the game object's word at +0x244 (`0042ce10`,
+/// `thiscall`; `bgssaveloadgame.rs`, `GAME_LOADING_FLAG_TEST`). `BGSSaveLoadGame::LoadForm` does
+/// nothing while it is set.
+pub const GAME_LOADING_FLAG_TEST: u32 = 0x0042_ce10;
+/// `BGSSaveLoadChangesMap`'s "get flags" `(map, &out, id)` (`008456e0`, `bgssaveloadgame.rs`,
+/// `CHANGES_MAP_GET_FLAGS`): the change flags the save holds for a form id, 0 for none.
+pub const CHANGES_MAP_GET_FLAGS: u32 = 0x0084_56e0;
+/// The pointer to the `BGSSaveLoadManager` (`011de134`, `MANAGER_INSTANCE`) and its "minor
+/// version" getter (`00851110`, `thiscall`, `MANAGER_GET_MINOR_VERSION`), the version byte every
+/// form record's header carries (`bgssaveloadgame.rs`).
+pub const SAVE_LOAD_MANAGER: u32 = 0x011d_e134;
+/// See [`SAVE_LOAD_MANAGER`].
+pub const MANAGER_GET_MINOR_VERSION: u32 = 0x0085_1110;
+
+/// `BGSSaveFormBuffer` (0x24 bytes, `bgssaveformbuffer.rs`): its constructor `(this)`
+/// (`008659c0`), the header setter `(this, form id, change flags, form type, minor version)`
+/// (`00865ad0`), the form setter `(this, form)` (`0050f9c0`) and its destructor `(this)`
+/// (`00847dd0`), used as `BGSSaveLoadGame::SaveGame` and `UnloadForm` use them
+/// (`bgssaveloadgame.rs`).
+pub const SAVE_FORM_BUFFER_SIZE: u32 = 0x24;
+/// See [`SAVE_FORM_BUFFER_SIZE`].
+pub const SAVE_FORM_BUFFER_CONSTRUCT: u32 = 0x0086_59c0;
+/// See [`SAVE_FORM_BUFFER_SIZE`].
+pub const SAVE_FORM_BUFFER_SET_HEADER: u32 = 0x0086_5ad0;
+/// See [`SAVE_FORM_BUFFER_SIZE`].
+pub const SAVE_FORM_BUFFER_SET_FORM: u32 = 0x0050_f9c0;
+/// See [`SAVE_FORM_BUFFER_SIZE`].
+pub const SAVE_FORM_BUFFER_DESTRUCT: u32 = 0x0084_7dd0;
+/// A save or load buffer's bytes: `pBuffer` at +0x04, `iBufferSize` at +0x08 and
+/// `iBufferPosition` at +0x0c (`bgssavegamebuffer.rs` and `bgsloadgamebuffer.rs`, the
+/// `BGSSaveGameBuffer` and `BGSLoadGameBuffer` layouts).
+pub const BUFFER_DATA_OFFSET: u32 = 0x04;
+/// See [`BUFFER_DATA_OFFSET`].
+pub const BUFFER_SIZE_OFFSET: u32 = 0x08;
+/// See [`BUFFER_DATA_OFFSET`].
+pub const BUFFER_POSITION_OFFSET: u32 = 0x0c;
+/// A form buffer's nine-byte `BGSSaveLoadFormHeader` at +0x14, in a save and a load form buffer
+/// alike: the form's three-byte index, the change flags at +3, the form info (its save type) at
+/// +7 and the version at +8 (`bgssaveformbuffer.rs`, `bgsloadformbuffer.rs`).
+pub const FORM_BUFFER_HEADER_OFFSET: u32 = 0x14;
+/// See [`FORM_BUFFER_HEADER_OFFSET`].
+pub const FORM_HEADER_LEN: usize = 9;
+
+/// `TESForm::SaveGame` (slot 0x54), `LoadGame` (0x5c) and `CheckSaveGame` (0x80), each called
+/// with a form buffer (`bgssaveloadgame.rs`, `FORM_SLOT_SAVE`, `FORM_SLOT_LOAD`,
+/// `FORM_SLOT_CHECK_SAVE_GAME`).
+pub const FORM_SLOT_SAVE_GAME: u32 = 0x54;
+/// See [`FORM_SLOT_SAVE_GAME`].
+pub const FORM_SLOT_LOAD_GAME: u32 = 0x5c;
+/// See [`FORM_SLOT_SAVE_GAME`].
+pub const FORM_SLOT_CHECK_SAVE_GAME: u32 = 0x80;
+/// The initial data written before a reference's or cell's own data: saved by `(save buffer,
+/// form, change flags)` (`0084eb80`) and loaded by `(load buffer, form, change flags)`
+/// (`0084f330`), both cdecl (`bgssaveloadgame.rs`, `SAVE_INITIAL_DATA`, `LOAD_INITIAL_DATA`).
+pub const SAVE_INITIAL_DATA: u32 = 0x0084_eb80;
+/// See [`SAVE_INITIAL_DATA`].
+pub const LOAD_INITIAL_DATA: u32 = 0x0084_f330;
+
+/// `BGSLoadFormBuffer` (0x30 bytes, `bgsloadformbuffer.rs`): its constructor `(this)`
+/// (`008643b0`), `iFormID` at +0x10 and `iSize` at +0x20, the form setter `(this, form)`
+/// (`007037c0`) and the header's change flags setter `(this, flags)` (`00428130`), used as
+/// `BGSSaveLoadGame::LoadForm` uses them (`bgssaveloadgame.rs`).
+pub const LOAD_FORM_BUFFER_SIZE: u32 = 0x30;
+/// See [`LOAD_FORM_BUFFER_SIZE`].
+pub const LOAD_FORM_BUFFER_CONSTRUCT: u32 = 0x0086_43b0;
+/// See [`LOAD_FORM_BUFFER_SIZE`].
+pub const LOAD_FORM_BUFFER_FORM_ID_OFFSET: u32 = 0x10;
+/// See [`LOAD_FORM_BUFFER_SIZE`].
+pub const LOAD_FORM_BUFFER_DATA_SIZE_OFFSET: u32 = 0x20;
+/// See [`LOAD_FORM_BUFFER_SIZE`].
+pub const LOAD_FORM_BUFFER_SET_FORM: u32 = 0x0070_37c0;
+/// See [`LOAD_FORM_BUFFER_SIZE`].
+pub const LOAD_FORM_BUFFER_SET_HEADER_FLAGS: u32 = 0x0042_8130;
+/// `(form, on)`: called on a form around the application of its load data (`0046a010`,
+/// `bgssaveloadgame.rs`, `FORM_MARK_LOADED`); `LoadForm` sets it, the unload pass clears it.
+pub const FORM_MARK_LOADED: u32 = 0x0046_a010;
+/// `operator delete(block)` (`00401030`, `bgssaveloadgame.rs`, `OPERATOR_DELETE`):
+/// `BGSLoadGameBuffer::DeleteBuffer` frees a load buffer's data with it.
+pub const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// Adds a word to a `BSSimpleArray` `(array, &word)` (`007cb2e0`, `bgssaveloadgame.rs`,
+/// `ARRAY_ADD`): `LoadForm` hands each load buffer to the game's form buffer array with it.
+pub const ARRAY_ADD: u32 = 0x007c_b2e0;
+/// The unload pass `(game, full)` (`008492b0`, `bgssaveloadgame.rs`, `fn_008492b0`): every
+/// buffer in the form buffer array gets `InitLoadGame` and `FinishLoadGame` and is deleted. The
+/// game runs it with `full` 0 after cells were attached (`tes.rs`).
+pub const GAME_UNLOAD_PASS: u32 = 0x0084_92b0;
+
+/// `BGSSaveLoadFormIDMap` (0x24 bytes; `run_00846b60.rs`, `bgssaveloadformidmap.rs`): the
+/// numbering of form ids every record's references use. Its constructor `(this, buckets)`
+/// (`00846b60`; the game passes 0x13af), "get or add the index of a form id" `(map, id)`
+/// (`00846c90`: index 0 is the null id, a created form's id is answered as it is), "the form id
+/// of an index" `(map, index)` (`00846d20`), and the next index at +0x20. A record's three-byte
+/// indices are made and resolved through the map the game object points at
+/// (`bgssaveloadstructs.rs`, `BGSNumericIDIndex`).
+pub const FORM_ID_MAP_SIZE: u32 = 0x24;
+/// See [`FORM_ID_MAP_SIZE`].
+pub const FORM_ID_MAP_CONSTRUCT: u32 = 0x0084_6b60;
+/// See [`FORM_ID_MAP_SIZE`].
+pub const FORM_ID_MAP_BUCKETS: u32 = 0x13af;
+/// See [`FORM_ID_MAP_SIZE`].
+pub const FORM_ID_MAP_GET_OR_ADD: u32 = 0x0084_6c90;
+/// See [`FORM_ID_MAP_SIZE`].
+pub const FORM_ID_MAP_RESOLVE: u32 = 0x0084_6d20;
+/// See [`FORM_ID_MAP_SIZE`].
+pub const FORM_ID_MAP_NEXT_INDEX_OFFSET: u32 = 0x20;
+/// Empties a `BGSSaveLoadFormIDMap` `(map)` and reserves index 0 for the null id again
+/// (`00846c50`, `thiscall`; `bgssaveloadformidmap.rs`, `fn_00846c50`).
+pub const FORM_ID_MAP_RESET: u32 = 0x0084_6c50;
+/// `(game, on)` on the per-thread flag `LoadForm` lowers while it loads a form; answers the
+/// flag as it was, which is passed back to restore it (`004623f0`, `bgssaveloadgame.rs`,
+/// `SET_THREAD_FLAG`).
+pub const SET_THREAD_FLAG: u32 = 0x0046_23f0;
+
+/// See [`FORM_TYPE_REFR`].
+pub const FORM_TYPE_FACTION: u8 = 8;
+/// See [`FORM_TYPE_REFR`].
+pub const FORM_TYPE_NOTE: u8 = 0x31;
+/// See [`FORM_TYPE_REFR`].
+pub const FORM_TYPE_INFO: u8 = 0x46;
+/// See [`FORM_TYPE_REFR`].
+pub const FORM_TYPE_REPUTATION: u8 = 0x68;
+
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_REFR_MOVE: u32 = 0x2;
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_REFR_HAVOK_MOVE: u32 = 0x4;
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_REFR_CELL_CHANGED: u32 = 0x8;
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_REFR_INVENTORY: u32 = 0x20;
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_OBJECT_EXTRA_LOCK: u32 = 0x1000;
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_OBJECT_EMPTY: u32 = 0x20_0000;
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_OBJECT_OPEN_STATE: u32 = 0x80_0000;
+/// See [`CHANGE_FORM_FLAGS`].
+pub const CHANGE_REFR_LEVELED_INVENTORY: u32 = 0x800_0000;
+
+/// `BGSOpenCloseForm::GetOpenState(reference)` (`0047b250`, cdecl; `bgsopencloseform.rs`): 0 for
+/// a reference that does not open, 1 open, 2 opening, 3 closed, 4 closing.
+pub const GET_OPEN_STATE: u32 = 0x0047_b250;
+/// `BGSOpenCloseForm::SetOpenState(reference, open, immediate)` (`0047aec0`, cdecl;
+/// `bgsopencloseform.rs`): sets or clears the reference's "open" action, which adds or removes
+/// its open state's change flag (`tesobjectrefr_p4.rs`, `fn_00572d50` and `ClearAction`), and
+/// plays the open or close sequence. A door closed again loses its change flag through
+/// `RemoveChange`, which the change journal does not see.
+pub const SET_OPEN_STATE: u32 = 0x0047_aec0;
+
+/// A reference's own lock `(reference)` (`00569140`, `thiscall`; `tesobjectrefr_p2.rs`,
+/// `LOCK_OF_REFERENCE`): its `REFR_LOCK`, or 0 without one.
+pub const REF_OWN_LOCK: u32 = 0x0056_9140;
+/// `REFR_LOCK` (`extradataobjects.rs`, `RefrLock`): `cBaseLevel` at +0x00, `cFlags` at +0x08
+/// (bit 0 locked) and `uiNumTries` at +0x0c (a lock is broken once the tries reach the game's
+/// limit, `REFR_LOCK::IsBroken`).
+pub const LOCK_LEVEL_OFFSET: u32 = 0x00;
+/// See [`LOCK_LEVEL_OFFSET`].
+pub const LOCK_FLAGS_OFFSET: u32 = 0x08;
+/// See [`LOCK_LEVEL_OFFSET`].
+pub const LOCK_TRIES_OFFSET: u32 = 0x0c;
+/// See [`LOCK_LEVEL_OFFSET`].
+pub const LOCK_FLAG_LOCKED: u8 = 1;
+/// `TESObjectREFR::Lock(this)` (`00569250`) and `UnLock(this)` (`005692a0`): they lock or
+/// unlock the reference's lock and record the change; nothing without a lock
+/// (`tesobjectrefr_p2.rs`).
+pub const REF_LOCK: u32 = 0x0056_9250;
+/// See [`REF_LOCK`].
+pub const REF_UNLOCK: u32 = 0x0056_92a0;
+/// `TESObjectREFR::AddLockChange(this)` (`005789b0`, `tesobjectrefr_p2.rs`, `ADD_LOCK_CHANGE`):
+/// records that the reference's lock changed, as `Lock` and `UnLock` do.
+pub const REF_ADD_LOCK_CHANGE: u32 = 0x0057_89b0;
+// world: end
+// fights (docs/coop/SPECS.md S12): every constant below names the translation it is read from.
+
+/// The game's one `ProcessLists` object (`011e0e80`, `processlists.rs`, `PROCESS_LISTS`), its
+/// `pActorsCloseToPlayerA` (50 `Actor *` at +0x88, sorted by distance to the player) and
+/// `iActorsCloseToPlayer` (the count of used entries, at +0x150): the actors the game runs at
+/// full detail around its player (`processlists.rs`, `ProcessLists` layout).
+pub const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// See [`PROCESS_LISTS`].
+pub const CLOSE_ACTORS_OFFSET: u32 = 0x88;
+/// See [`PROCESS_LISTS`].
+pub const CLOSE_ACTORS_COUNT_OFFSET: u32 = 0x150;
+/// See [`PROCESS_LISTS`] (`MAX_ACTORS_CLOSE_TO_PLAYER`).
+pub const CLOSE_ACTORS_MAX: u32 = 50;
+
+/// The `ActorValueOwner` part of an actor, at +0xa4, and its virtual `+0x0c`, the current value
+/// of an actor value as a float (`tesconditionfunctions.rs`, `fn_0059c4f0`, the `GetActorValue`
+/// condition; `actor_p6.rs`, `ACTOR_VALUE_OWNER_OFFSET`).
+pub const ACTOR_VALUE_OWNER_OFFSET: u32 = 0xa4;
+/// See [`ACTOR_VALUE_OWNER_OFFSET`].
+pub const OWNER_CURRENT_VALUE_SLOT: u32 = 0x0c;
+/// The actor value that is health (`actor_p3.rs`, `actor_get_health_percentage`: value `0x10`).
+pub const ACTOR_VALUE_HEALTH: u32 = 0x10;
+
+/// `Actor` virtual slot `0x3ac`: changes an actor value by an amount, `(value, amount as f32,
+/// source actor or 0)` (`actor_p3.rs`, `ACTOR_SLOT_MODIFY_ACTOR_VALUE`; `actor_p2.rs`,
+/// `actor_restore_actor_value` raises a value through it, `fn_0089d6f0` lowers health through
+/// it).
+pub const ACTOR_MODIFY_VALUE_SLOT: u32 = 0x3ac;
+
+/// `Actor` virtual slot `0x338`: applies a health and a fatigue loss from an attacker,
+/// `(health loss as f32, fatigue loss as f32, attacker or 0)` (`actor_p3.rs`, `fn_0089d6f0`,
+/// `ACTOR_SLOT_APPLY_DAMAGE`): the difficulty's adjustment, the attacker's and the victim's
+/// combat controllers told, then health lowered. `Actor::HitMe` applies a hit's damage through
+/// it. It does nothing for a protected actor and does not itself kill.
+pub const ACTOR_APPLY_DAMAGE_SLOT: u32 = 0x338;
+
+/// The actor's "in combat" byte test (`00493bb0`: the byte at +0x104; `actor_p3.rs`,
+/// `ACTOR_IN_COMBAT`; the `IsInCombat` condition, `tesconditionfunctions_p2.rs`).
+pub const ACTOR_IN_COMBAT: u32 = 0x0049_3bb0;
+
+/// `Actor` virtual slot `0x42c`: the actor's combat target, or 0 (`tesscriptfunctions_p5.rs`,
+/// `script_get_combat_target_function`).
+pub const ACTOR_COMBAT_TARGET_SLOT: u32 = 0x42c;
+
+/// `Actor::pCurrentProcess`: the word at +0x68 (`leaf::word_at_68`, typed from `008d8520`).
+pub const ACTOR_PROCESS_OFFSET: u32 = 0x68;
+
+/// How the `StartCombat` command starts an actor's combat with a target
+/// (`tesscriptfunctions_p2.rs`, `script_start_combat_function`): the process's virtual `0x33c`
+/// with the thirteen words `(actor, target, 1, 1, 0, 0, 0, not alarmed, 0, 1, 0, 1, 0)`, where
+/// "not alarmed" is the negation of the actor's virtual `0x304`.
+pub const PROCESS_START_COMBAT_SLOT: u32 = 0x33c;
+/// See [`PROCESS_START_COMBAT_SLOT`].
+pub const ACTOR_ALARMED_SLOT: u32 = 0x304;
+
+/// `Actor::GetEssential` (`0087f3d0`, `tesconditionfunctions_p2.rs`, `ACTOR_GET_ESSENTIAL`).
+pub const ACTOR_GET_ESSENTIAL: u32 = 0x0087_f3d0;
+
+/// `Actor::HitMe` (`0089a760`, `actor_p3.rs`, `actor_hit_me`): `thiscall` on the actor that is
+/// hit, with the `HitData` and a kind byte. Every weapon hit on an actor goes through it.
+pub const ACTOR_HIT_ME: u32 = 0x0089_a760;
+/// `HitData` (`actor_p3.rs`, `HitData` layout): `pAggressor` at +0x00, `eDamageLimb` at +0x10
+/// (-1 for none), `fHealthDamage` at +0x14.
+pub const HIT_AGGRESSOR_OFFSET: u32 = 0x00;
+/// See [`HIT_AGGRESSOR_OFFSET`].
+pub const HIT_LIMB_OFFSET: u32 = 0x10;
+/// See [`HIT_AGGRESSOR_OFFSET`].
+pub const HIT_HEALTH_DAMAGE_OFFSET: u32 = 0x14;
+
+/// The byte of the player's disabled-controls flags, at +0x680, one bit for each of the seven
+/// controls (`tesconditionfunctions.rs`, `fn_005a03d0`, `PLAYER_DISABLED_CONTROLS_OFFSET`; the
+/// `GetPlayerControlsDisabled` condition reads it).
+pub const PLAYER_DISABLED_CONTROLS_OFFSET: u32 = 0x680;
+/// See [`PLAYER_DISABLED_CONTROLS_OFFSET`]: all seven controls.
+pub const PLAYER_ALL_CONTROLS: u8 = 0x7f;
+// social: conversations, party saves, sleep and wait (docs/coop/SPECS.md S12 to S15).
+
+/// `TESTopicInfo::RunResult` (`thiscall`: info, index, reference; `RET 8`; `0061f170`,
+/// `testopicinfo.rs`, `tes_topic_info_run_result`): runs the info's result script at the index
+/// on the reference (index 0 when the line is said, `menutopic.rs`; index 1 when it ends,
+/// `dialogmenu.rs`), nothing without a reference.
+pub const INFO_RUN_RESULT: u32 = 0x0061_f170;
+/// `TESTopicInfo::pOwnerQuest`: the word at +0x48 (`testopicinfo.rs`, `TesTopicInfo` layout).
+pub const INFO_OWNER_QUEST_OFFSET: u32 = 0x48;
+/// The info's prompt, a string object at +0x28 whose first word is its characters
+/// (`testopicinfo.rs`: "the prompt string (+0x28)"; `00559450` reads a string's characters at
+/// +0).
+pub const INFO_PROMPT_OFFSET: u32 = 0x28;
+/// `TESTopic::GetOwnerTopic` (`cdecl`: info; `0061a310`, `testopic.rs`): the topic that holds
+/// the info, or 0.
+pub const TOPIC_GET_OWNER_TOPIC: u32 = 0x0061_a310;
+/// The quest under which a topic holds an info (`thiscall`: topic, info; `RET 4`; `00619d00`,
+/// `run_00619b60.rs`), or 0.
+pub const TOPIC_INFO_QUEST: u32 = 0x0061_9d00;
+/// `TESTopicInfo::GetInfoDisplayText` (`thiscall`: info, string, first only; `RET 8`;
+/// `0061e2b0`, `testopicinfo.rs`): fills the string with the text of the info's responses,
+/// `" | "` between them.
+pub const INFO_GET_DISPLAY_TEXT: u32 = 0x0061_e2b0;
+/// A string object's constructor and destructor (`thiscall`; `004037b0`, `004037d0`;
+/// `testopicinfo.rs`: "construct and destroy"). The object is 8 bytes: its characters at +0.
+pub const STRING_CONSTRUCT: u32 = 0x0040_37b0;
+/// See [`STRING_CONSTRUCT`].
+pub const STRING_DESTROY: u32 = 0x0040_37d0;
+/// See [`STRING_CONSTRUCT`].
+pub const STRING_SIZE: u32 = 8;
+/// Shows a HUD message (`cdecl`, six words: text, 0, icon path or 0, 0, time as `f32`, 0;
+/// `007052f0`, `run_008c51f0.rs` and `actor_p3.rs`). The text is copied (at most 0x103
+/// characters, `hudmainmenu.rs`, `fn_00775380`), so the caller's buffer may be freed.
+pub const SHOW_HUD_MESSAGE: u32 = 0x0070_52f0;
+/// The longest text [`SHOW_HUD_MESSAGE`] keeps.
+pub const HUD_MESSAGE_MAX: usize = 0x103;
+/// `DialogMenu::Create` (`cdecl`: speaker, a word for the topic manager, a target or 0;
+/// `00761a20`, `dialogmenu.rs`): the menu's tile, or 0 when no menu was made (as for a null
+/// speaker).
+pub const DIALOG_MENU_CREATE: u32 = 0x0076_1a20;
+/// `DialogMenu::Close` (no arguments; `00762160`, `dialogmenu.rs`): ends the open conversation
+/// as the game's own goodbye does.
+pub const DIALOG_MENU_CLOSE: u32 = 0x0076_2160;
+/// The open dialogue menu (`011d9510`, `dialogmenu.rs`: `Create` stores it, the destructor
+/// clears it) and `DialogMenu::pSpeaker` at +0x80 (`dialogmenu.rs` layout).
+pub const DIALOG_MENU_OPEN: u32 = 0x011d_9510;
+/// See [`DIALOG_MENU_OPEN`].
+pub const DIALOG_MENU_SPEAKER_OFFSET: u32 = 0x80;
+
+/// The seam in `BGSSaveLoadGame::SaveGame` where the co-save is written (`00847c45`, word: the
+/// save's name) and the one in `LoadGame` after the `.fos` was read (`00848c3c`, word: the
+/// save's name); `bgssaveloadgame.rs`, engine-core's seam table.
+pub const SAVE_GAME_SITE: u32 = 0x0084_7c45;
+/// See [`SAVE_GAME_SITE`].
+pub const LOAD_GAME_SITE: u32 = 0x0084_8c3c;
+
+/// `SleepWaitMenu::DoClick` (`thiscall`: menu, button id, tile; `RET 8`; `007c0220`,
+/// `sleepwaitmenu.rs`): button 4 starts the rest, button 5 cancels and closes the menu.
+pub const SLEEP_WAIT_DO_CLICK: u32 = 0x007c_0220;
+/// See [`SLEEP_WAIT_DO_CLICK`].
+pub const SLEEP_WAIT_REST_BUTTON: u32 = 4;
+/// See [`SLEEP_WAIT_DO_CLICK`].
+pub const SLEEP_WAIT_CANCEL_BUTTON: u32 = 5;
+/// `SleepWaitMenu`: `pTiles[1]` at +0x2c (the hours slider) and `bSleepingInBed` at +0x45
+/// (`sleepwaitmenu.rs`).
+pub const SLEEP_WAIT_HOURS_TILE_OFFSET: u32 = 0x2c;
+/// See [`SLEEP_WAIT_HOURS_TILE_OFFSET`].
+pub const SLEEP_WAIT_IN_BED_OFFSET: u32 = 0x45;
+/// The trait id of the slider's value (`iUT_CurrentValue`, `011da918`) and `Tile`'s float
+/// getter (`thiscall`: tile, trait; the value in `ST0`; `00a011b0`); the hours asked for are
+/// that value plus one (`sleepwaitmenu.rs`, `DoClick`).
+pub const SLEEP_WAIT_VALUE_TRAIT: u32 = 0x011d_a918;
+/// See [`SLEEP_WAIT_VALUE_TRAIT`].
+pub const TILE_GET_FLOAT: u32 = 0x00a0_11b0;
+/// The player's wait: `(player, hours, in bed)` stores the hours left and the bed flag
+/// (`thiscall`; `005c1a00`, `tesscriptfunctions_p2.rs`; the rest button calls it,
+/// `sleepwaitmenu.rs`).
+pub const PLAYER_SET_WAIT: u32 = 0x005c_1a00;
+/// One hour of waiting or sleeping (`thiscall`: player; `0094df80`, `playercharacter_p2.rs`):
+/// the clock and the calendar move an hour, health comes back, the hours left count down.
+pub const PLAYER_WAIT_HOUR: u32 = 0x0094_df80;
+/// What the menu runs before each hour (`sleepwaitmenu.rs`, `UpdateSleeping`): the scripts once
+/// (`thiscall` on the object at `011dea10`; `00455490`, `tes.rs`).
+pub const TES_SINGLETON: u32 = 0x011d_ea10;
+/// See [`TES_SINGLETON`].
+pub const TES_RUN_SCRIPTS: u32 = 0x0045_5490;
