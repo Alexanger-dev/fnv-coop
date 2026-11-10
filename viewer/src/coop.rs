@@ -370,7 +370,7 @@ impl Coop {
             Role::Guest(Some(g)) => {
                 g.step(e, &mut self.ep, now_ms);
                 for note in g.healed_notes.drain(..) {
-                    lines.push(format!("co-op guest healed: {note}"));
+                    lines.push(note);
                 }
             }
             Role::Guest(None) => {}
@@ -423,10 +423,12 @@ impl Coop {
                     g.refused,
                     g.heal_refused,
                 ) + &format!(
-                    ", own quest scripts run {}, objectives put back in the Pip-Boy {}, deaths told to the host {}",
+                    ", own quest scripts run {}, objectives put back in the Pip-Boy {}, deaths told to the host {}, drifts with a named cause {} (unknown {})",
                     coop_engine::gate::ran_own(e),
                     g.relisted,
-                    g.claims_sent
+                    g.claims_sent,
+                    g.drift_named,
+                    g.drift_unnamed
                 )
                     + "; "
                     + &g.ladder.as_ref().map_or("live: off".into(), Ladder::status)

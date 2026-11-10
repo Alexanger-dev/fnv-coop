@@ -283,3 +283,11 @@ DLCs. **Not verified here:** that the guest's opening then plays through in the 
   `Disable`; change flag 1) is written as `Field::RefDisabled`; the guest sets its own through the game's
   `Enable` (`00573f40`) and `Disable` (`00574400`) inside the apply scope, and its heal keeps it there.
 
+## S12: the drift census (implemented; docs/coop/DECISIONS.md D5, rung 1)
+
+- `gate::Cause` (script id, owner quest, quest-script flag, reference) and `gate::cause`: the innermost
+  script running now, none while the host's state is applied. The gate's `Run` wrap keeps the stack.
+- `journal::Change::cause`: the script running when the form was first changed.
+- The guest keeps the last cause per form; the heal writes one `COOP-DRIFT` line per distinct (form, kind)
+  it puts back, with that cause or "cause unknown" (`drift_named`, `drift_unnamed` in the status line).
+

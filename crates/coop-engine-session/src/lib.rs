@@ -448,6 +448,14 @@ pub struct GuestDriver {
     claimed: BTreeSet<u32>,
     /// Actors whose life changed in this game before the host could be told.
     life_pending: BTreeSet<u32>,
+    /// The script last seen changing each form in this game (the guest's own journal): what a
+    /// drift of that form is put down to.
+    causes: std::collections::BTreeMap<u32, gate::Cause>,
+    /// Distinct drifts whose cause the journal named, and those it did not (docs/coop/DECISIONS.md
+    /// D5, rung 1: the census of what a guest's own scripts write to the shared story).
+    pub drift_named: u32,
+    /// See [`GuestDriver::drift_named`].
+    pub drift_unnamed: u32,
     /// How many such claims were sent.
     pub claims_sent: u32,
     /// Every this many steps the guest's game is read back ([`echo`]) and whatever drifted from the
@@ -490,6 +498,9 @@ impl GuestDriver {
             clock_set_ms: None,
             claimed: BTreeSet::new(),
             life_pending: BTreeSet::new(),
+            causes: std::collections::BTreeMap::new(),
+            drift_named: 0,
+            drift_unnamed: 0,
             claims_sent: 0,
             heal_every: 20,
             healed: 0,
@@ -550,6 +561,11 @@ impl GuestDriver {
     /// story (a death applied from the host is in the replica by then, so it is not sent back).
     fn claim_deaths(&mut self, e: &mut Engine, net: &mut dyn Transport) {
         let changes = coop_engine::drain(e);
+        for c in &changes {
+            if let Some(cause) = c.cause {
+                self.causes.insert(c.form, cause);
+            }
+        }
         self.life_pending.extend(life_changes(&changes));
         if self.sync.phase() != GuestPhase::Active || self.life_pending.is_empty() {
             return;
@@ -627,10 +643,20 @@ impl GuestDriver {
             if apply_field(e, m.form, &m.want) {
                 self.healed += 1;
                 let key = (m.form, m.want.kind());
-                if self.healed_seen.len() < 40 && self.healed_seen.insert(key) {
+                if self.healed_seen.len() < 200 && self.healed_seen.insert(key) {
+                    let cause = match self.causes.get(&m.form) {
+                        Some(c) => {
+                            self.drift_named += 1;
+                            format!("changed here by {c}")
+                        }
+                        None => {
+                            self.drift_unnamed += 1;
+                            "cause unknown".into()
+                        }
+                    };
                     self.healed_notes.push(format!(
-                        "form {:08x}: this game had {:?}, the host's story has {:?}",
-                        m.form, m.found, m.want
+                        "COOP-DRIFT form {:08x} kind {}: {cause}; this game had {:?}, the host's story has {:?}; put back",
+                        m.form, key.1, m.found, m.want
                     ));
                 }
             } else {

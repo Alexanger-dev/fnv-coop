@@ -939,3 +939,60 @@ fn a_reference_the_hosts_scripts_enable_or_disable_is_the_same_on_the_guest() {
     assert_eq!((gd.refused, gd.sync.desyncs_detected), (0, 0));
     assert_eq!(guest.scripts_run(), 0);
 }
+
+/// D5, rung 1 (the census): a shared quest a guest's own script advanced is put back, as before,
+/// and the log names the script that did it. Nothing else changes.
+#[test]
+fn a_drift_is_put_back_and_its_cause_named() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    // An object script of the guest's game (a trigger, a line of dialogue) sets a shared stage.
+    guest.run_object_script_setting_stage(CHET, MQ, 20);
+    // A change no script made (the cause is not known).
+    guest.set_global(0x39, 7.0);
+    frames(
+        25,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_same_game(&mut host, &mut guest);
+    assert_eq!((gd.drift_named, gd.drift_unnamed), (1, 1));
+    let notes = gd.healed_notes.join("\n");
+    assert!(
+        notes.contains(&format!("COOP-DRIFT form {MQ:08x}"))
+            && notes.contains(&format!(
+                "object script 00000000 (quest 00000000) on reference {CHET:08x}"
+            )),
+        "{notes}"
+    );
+    assert!(notes.contains("cause unknown"), "{notes}");
+    // The same drift again is not logged again.
+    guest.run_object_script_setting_stage(CHET, MQ, 20);
+    frames(
+        25,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!((gd.drift_named, gd.drift_unnamed), (1, 1));
+    assert_eq!(hd.claims_enacted + hd.claims_dropped, 0);
+}

@@ -47,6 +47,90 @@ pub struct Gate {
     /// The distinct story scripts skipped (at most [`SEEN_MAX`]): the script's form id to whether
     /// it is a quest script, its owner quest's form id (0 for none) and how often it was skipped.
     seen: Mutex<BTreeMap<u32, SkippedScript>>,
+    /// The scripts running now, outermost first ([`cause`]).
+    running: Mutex<Vec<Cause>>,
+}
+
+/// A script that is running: what a change made meanwhile is put down to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cause {
+    /// The script's form id (0 for a script without one, as a dialogue line's result).
+    pub script: u32,
+    /// Its owner quest's form id, 0 for none.
+    pub owner_quest: u32,
+    /// `SCRIPT_HEADER::bIsQuestScript`.
+    pub quest_script: bool,
+    /// The form id of the reference it runs on, 0 for none.
+    pub reference: u32,
+}
+
+impl std::fmt::Display for Cause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match (self.quest_script, self.owner_quest != 0) {
+            (true, _) => "quest script",
+            (false, true) => "result script",
+            (false, false) => "object script",
+        };
+        write!(
+            f,
+            "{kind} {:08x} (quest {:08x}) on reference {:08x}",
+            self.script, self.owner_quest, self.reference
+        )
+    }
+}
+
+/// The innermost script running now, unless the host's state is being applied (a change made
+/// then is the host's, not a script's of this game).
+pub fn cause(e: &mut Engine) -> Option<Cause> {
+    let g = e.ext_free::<Gate>();
+    if g.applying.load(Ordering::SeqCst) > 0 {
+        return None;
+    }
+    g.running
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .last()
+        .copied()
+}
+
+/// Runs the script of the call `a` with itself named as the cause of what changes meanwhile.
+fn run_named(e: &mut Engine, a: &[u32]) -> Ret {
+    let script = a.get(1).copied().unwrap_or(0);
+    let reference = a.get(2).copied().unwrap_or(0);
+    let id_of = |e: &mut Engine, form: u32| match form {
+        0 => 0,
+        f => e.mem.u32(f.wrapping_add(addr::FORM_ID_OFFSET)),
+    };
+    let owner = match script {
+        0 => 0,
+        s => e.mem.u32(s.wrapping_add(addr::SCRIPT_OWNER_QUEST_OFFSET)),
+    };
+    let named = Cause {
+        script: id_of(e, script),
+        owner_quest: id_of(e, owner),
+        quest_script: script != 0
+            && e.mem.u8(script.wrapping_add(addr::SCRIPT_IS_QUEST_OFFSET)) != 0,
+        reference: id_of(e, reference),
+    };
+    let depth = {
+        let g = e.ext_free::<Gate>();
+        let mut s = g.running.lock().unwrap_or_else(PoisonError::into_inner);
+        s.push(named);
+        s.len() - 1
+    };
+    // Unwound or not, the stack goes back to where it was.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        e.call_next(addr::SCRIPT_RUNNER_RUN, a)
+    }));
+    e.ext_free::<Gate>()
+        .running
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .truncate(depth);
+    match result {
+        Ok(r) => r,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// One story script a guest skipped ([`skipped_scripts`]).
@@ -165,7 +249,7 @@ pub(crate) fn run(e: &mut Engine, a: &[u32]) -> Ret {
                     .contains(&id);
             if own {
                 g.ran_own.fetch_add(1, Ordering::SeqCst);
-                return e.call_next(addr::SCRIPT_RUNNER_RUN, a);
+                return run_named(e, a);
             }
             g.skipped_story.fetch_add(1, Ordering::SeqCst);
             let mut seen = g.seen.lock().unwrap_or_else(PoisonError::into_inner);
@@ -181,7 +265,7 @@ pub(crate) fn run(e: &mut Engine, a: &[u32]) -> Ret {
             return Ret::default();
         }
     }
-    e.call_next(addr::SCRIPT_RUNNER_RUN, a)
+    run_named(e, a)
 }
 
 #[cfg(test)]

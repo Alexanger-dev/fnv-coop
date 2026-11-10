@@ -34,6 +34,9 @@ const RESULT_SCRIPT: u32 = 0x0150_0100;
 const DEATH_SCRIPT: u32 = 0x0150_0200;
 /// Set on a form table entry's id while the form is not in the game (its cell is not loaded).
 const AWAY: u32 = 0x4000_0000;
+/// An object script whose body sets a quest's stage (the quest and stage at [`SETTER`]).
+const SETTER_SCRIPT: u32 = 0x0150_0300;
+const SETTER: u32 = RAN + 0x40;
 /// The player, and the arena placed references come from (0x100 bytes each; the count of placed
 /// references is the word at `PLACED`).
 const PLAYER: u32 = 0x0140_0000;
@@ -261,6 +264,10 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
     let n = e.mem.u32(RAN);
     e.mem.set_u32(RAN, n + 1);
     e.mem.set_u32(RAN + 4, a[1]);
+    if a[1] == SETTER_SCRIPT {
+        let (quest, stage) = (e.mem.u32(SETTER + 4), e.mem.u32(SETTER + 8) as u8);
+        forms::set_quest_stage(e, quest, stage);
+    }
     eax(0)
 }
 
@@ -630,6 +637,18 @@ impl Story {
             .mem
             .set_u32(script + addr::SCRIPT_OWNER_QUEST_OFFSET, q);
         run(&mut self.e, script);
+    }
+
+    /// Runs an object script on `reference` that sets `quest`'s stage, as a trigger's or an
+    /// activator's script does (the stage's result script is tried too, as in the game).
+    pub fn run_object_script_setting_stage(&mut self, reference: u32, quest: u32, stage: u8) {
+        let r = forms::form(&mut self.e, reference).expect("a reference of the story");
+        self.e.mem.set_u32(SETTER + 4, quest);
+        self.e.mem.set_u32(SETTER + 8, u32::from(stage));
+        self.e.call(
+            addr::SCRIPT_RUNNER_RUN,
+            &args![0u32, SETTER_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
     }
 
     /// Kills a placed actor as a lethal hit by this game's player does.
