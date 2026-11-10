@@ -59,9 +59,12 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
         h.view.on_msg(msg, now_ms);
     }
     let players = h.sync.players();
-    let shared = !players.is_empty();
+    let shared = h.social_on && !players.is_empty();
     game_talk::set_sharing(e, shared);
     game_rest::set_sharing(e, shared);
+    if !h.social_on {
+        return;
+    }
 
     // The guests' parts: taken out of the claims before the driver judges the rest.
     let claims = std::mem::take(&mut h.sync.claims);
@@ -117,7 +120,7 @@ pub(crate) fn guest_step(
     net: &mut dyn Transport,
     now_ms: u64,
 ) {
-    let active = g.sync.phase() == GuestPhase::Active;
+    let active = g.social_on && g.sync.phase() == GuestPhase::Active;
     game_talk::set_sharing(e, active);
     game_rest::set_sharing(e, active);
     if !active {

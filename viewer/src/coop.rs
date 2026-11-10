@@ -285,16 +285,37 @@ impl Coop {
     }
 
     // world
-    /// What `NV_COOP_WORLD` asks to share of the world beyond the story (everything unless it
-    /// says `doors` or `off`).
+    /// What `NV_COOP_WORLD` asks to share of the world beyond the story: `all`, `doors`, or
+    /// nothing. Unset is nothing for now: none of it has run on a PC, and the parts are being
+    /// switched on one PC run at a time (docs/coop/PLAN.md).
     fn world_share() -> session::world::Share {
-        session::world::Share::parse(&std::env::var("NV_COOP_WORLD").unwrap_or_default())
+        match std::env::var("NV_COOP_WORLD") {
+            Ok(v) if !v.trim().is_empty() => session::world::Share::parse(&v),
+            _ => session::world::Share::Off,
+        }
+    }
+
+    /// Whether conversations, party saves and the rest vote are shared: `NV_COOP_TALK=on`. Off
+    /// unless asked for, for the same reason. Returns the line that says so.
+    fn social_on() -> (bool, String) {
+        let on = std::env::var("NV_COOP_TALK").is_ok_and(|v| v.trim() == "on");
+        let line = if on {
+            "co-op talk, party saves, rest vote: shared (NV_COOP_TALK=on)"
+        } else {
+            "co-op talk, party saves, rest vote: off (NV_COOP_TALK=on shares them)"
+        };
+        (on, line.into())
     }
 
     /// fights: the shared fights `NV_COOP_FIGHT` asks for; `None` for `off` or without the ladder.
     /// Returns the line that says so.
     fn fight(guest: bool, ladder: bool) -> (Option<session::fight::Fight>, String) {
-        let ask = std::env::var("NV_COOP_FIGHT").unwrap_or_default();
+        // Unset is `state` for now (the host's actors shown on the guests, nothing else): the
+        // further parts follow one PC run at a time.
+        let ask = match std::env::var("NV_COOP_FIGHT") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => "state".into(),
+        };
         if ask.trim() == "off" || !ladder {
             return (None, "co-op fights: off".into());
         }
@@ -358,6 +379,9 @@ impl Coop {
                 let (fight, line) = Self::fight(false, host.ladder.is_some());
                 host.fight = fight;
                 lines.push(line);
+                let (on, line) = Self::social_on();
+                host.social_on = on;
+                lines.push(line);
                 (Endpoint::host(b, token, cfg), Role::Host(Box::new(host)))
             }
             Ask::Join(code) => {
@@ -417,6 +441,9 @@ impl Coop {
                             // fights
                             let (fight, line) = Self::fight(true, g.ladder.is_some());
                             g.fight = fight;
+                            lines.push(line);
+                            let (on, line) = Self::social_on();
+                            g.social_on = on;
                             lines.push(line);
                             // social
                             g.social.party.key = session::party::key_of(&self.social.name);

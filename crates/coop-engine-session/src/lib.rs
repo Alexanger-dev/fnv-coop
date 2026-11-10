@@ -211,6 +211,9 @@ pub struct HostDriver {
     // social
     /// Conversations, party saves and the rest vote.
     pub social: social::HostSocial,
+    /// Whether conversations, party saves and the rest vote are shared (on unless the caller
+    /// turns it off: none of it has run on a PC yet, and it is switched on by itself).
+    pub social_on: bool,
 }
 
 impl HostDriver {
@@ -260,6 +263,7 @@ impl HostDriver {
             world: None, // world
             // social
             social: social::HostSocial::default(),
+            social_on: true,
         }
     }
 
@@ -599,6 +603,8 @@ pub struct GuestDriver {
     // social
     /// Conversations, this player's part of a party save, and the rest vote.
     pub social: social::GuestSocial,
+    /// See [`HostDriver::social_on`].
+    pub social_on: bool,
 }
 
 impl GuestDriver {
@@ -632,6 +638,7 @@ impl GuestDriver {
             world: None, // world
             // social
             social: social::GuestSocial::default(),
+            social_on: true,
         }
     }
 
