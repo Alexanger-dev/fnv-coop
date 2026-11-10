@@ -48,3 +48,35 @@ pub fn kill(e: &mut Engine, id: u32) -> bool {
     e.call(addr::ACTOR_KILL, &args![a, 0u32, 0.0f32.to_bits()]);
     true
 }
+
+/// Whether `kind` is a placed reference's form type (an object, an NPC or a creature).
+pub fn is_ref_type(kind: u8) -> bool {
+    kind == addr::FORM_TYPE_REFR || is_actor_type(kind)
+}
+
+/// The placed reference with id `id` in this game now, or `None`.
+pub fn reference(e: &mut Engine, id: u32) -> Option<u32> {
+    let f = forms::form(e, id)?;
+    is_ref_type(e.mem.u8(f.wrapping_add(addr::FORM_TYPE_OFFSET))).then_some(f)
+}
+
+/// Whether reference `id` is disabled; `None` when it is not in this game now.
+pub fn disabled(e: &mut Engine, id: u32) -> Option<bool> {
+    let r = reference(e, id)?;
+    Some(e.mem.u32(r.wrapping_add(addr::FORM_FLAGS_OFFSET)) & addr::FORM_FLAG_DISABLED != 0)
+}
+
+/// Enables or disables reference `id` through the game's own `Enable` and `Disable`. False when
+/// it is not in this game now.
+pub fn set_disabled(e: &mut Engine, id: u32, off: bool) -> bool {
+    let Some(r) = reference(e, id) else {
+        return false;
+    };
+    let f = if off {
+        addr::REF_DISABLE
+    } else {
+        addr::REF_ENABLE
+    };
+    e.call(f, &args![r]);
+    true
+}

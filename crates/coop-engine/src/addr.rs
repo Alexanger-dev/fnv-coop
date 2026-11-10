@@ -193,6 +193,14 @@ pub const ACTOR_SET_GHOST: u32 = 0x008a_cf10;
 
 /// `TESObjectREFR::Disable(this)` (`00574400`).
 pub const REF_DISABLE: u32 = 0x0057_4400;
+/// `TESObjectREFR::Enable(this)` (`00573f40`; `tesobjectrefr_p4.rs`, `fn_00573f40`). Both end in
+/// `TESForm::SetDisabled` (`00484af0`), which flags the form's change with [`CHANGE_FORM_FLAGS`]:
+/// a reference a script enables or disables is in the change journal.
+pub const REF_ENABLE: u32 = 0x0057_3f40;
+/// See [`REF_ENABLE`].
+pub const CHANGE_FORM_FLAGS: u32 = 1;
+/// The form type of a placed object (`REFR`).
+pub const FORM_TYPE_REFR: u8 = 0x3a;
 
 /// The form types of a placed NPC (`ACHR`) and a placed creature (`ACRE`); `REFR` is 0x3a, after
 /// [`FORM_TYPE_CELL`].

@@ -454,6 +454,22 @@ impl Story {
                 flags | addr::FORM_FLAG_DISABLED,
             );
             bump(e, DISABLES);
+            e.call(
+                addr::SAVE_LOAD_ADD_CHANGE,
+                &args![SAVE_LOAD, a[0], addr::CHANGE_FORM_FLAGS, 0u32],
+            );
+            Ret::default()
+        });
+        e.register(addr::REF_ENABLE, |e, a| {
+            let flags = e.mem.u32(a[0] + addr::FORM_FLAGS_OFFSET);
+            e.mem.set_u32(
+                a[0] + addr::FORM_FLAGS_OFFSET,
+                flags & !addr::FORM_FLAG_DISABLED,
+            );
+            e.call(
+                addr::SAVE_LOAD_ADD_CHANGE,
+                &args![SAVE_LOAD, a[0], addr::CHANGE_FORM_FLAGS, 0u32],
+            );
             Ret::default()
         });
         e.register(addr::ACTOR_END_MOVEMENT, |e, _| {
@@ -626,6 +642,16 @@ impl Story {
     /// Whether a placed actor is dead (`None`: not in this game now).
     pub fn dead(&mut self, actor: u32) -> Option<bool> {
         crate::actors::dead(&mut self.e, actor)
+    }
+
+    /// Enables or disables a placed reference as a script's `Enable` and `Disable` do.
+    pub fn set_disabled(&mut self, reference: u32, off: bool) {
+        assert!(crate::actors::set_disabled(&mut self.e, reference, off));
+    }
+
+    /// Whether a placed reference is disabled (`None`: not in this game now).
+    pub fn disabled(&mut self, reference: u32) -> Option<bool> {
+        crate::actors::disabled(&mut self.e, reference)
     }
 
     /// Takes a form out of the game (its cell is not loaded) or puts it back.

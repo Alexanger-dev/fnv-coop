@@ -102,7 +102,7 @@ fn clock_value(field: &Field) -> Option<f32> {
 pub fn hello(plugins: Vec<String>) -> Hello {
     let build = format!("coop-engine-session {}", env!("CARGO_PKG_VERSION"));
     let rules = format!(
-        "quest-record {:04x} v{} {} clock {:04x} life {:04x}",
+        "quest-record {:04x} v{} {} clock {:04x} life {:04x} refs",
         record::QUEST_RECORD_TAG,
         record::VERSION,
         record::LEN,
@@ -334,6 +334,19 @@ impl HostDriver {
             .collect();
         for id in quests {
             self.write_quest(e, id);
+        }
+        // A placed reference a script enabled or disabled (its form flags changed): its state as
+        // it is now. Kept in the story from then on, so a later change back is sent too.
+        for c in &changes {
+            if actors::is_ref_type(c.kind)
+                && c.flags & addr::CHANGE_FORM_FLAGS != 0
+                && actors::shareable(c.form)
+            {
+                if let Some(disabled) = actors::disabled(e, c.form) {
+                    self.sync
+                        .write(FormId(c.form), Field::RefDisabled { disabled });
+                }
+            }
         }
         // A placed actor that died (or, once it has an entry, lives again).
         for id in life_changes(&changes) {
@@ -677,6 +690,14 @@ fn apply_field(e: &mut Engine, form: u32, field: &Field) -> bool {
             Some(false) => true,
             None => false,
         },
+        // A reference the host's scripts enabled or disabled: the same here, through the game. One
+        // that is not in this game now is set when it is (the heal).
+        Field::RefDisabled { disabled } => {
+            if actors::disabled(e, form).is_some_and(|d| d != *disabled) {
+                gate::applying(e, |e| actors::set_disabled(e, form, *disabled));
+            }
+            true
+        }
         Field::Global { bits } => gate::applying(e, |e| {
             forms::set_global_value(e, form, f32::from_bits(*bits))
         }),
@@ -719,6 +740,11 @@ pub fn echo(e: &mut Engine, store: &StateStore) -> Vec<Mismatch> {
             Field::Global { .. } => {
                 forms::global_value(e, form).map(|v| Field::Global { bits: v.to_bits() })
             }
+            Field::RefDisabled { .. } => match actors::disabled(e, form) {
+                Some(disabled) => Some(Field::RefDisabled { disabled }),
+                // Not in this game now: it waits.
+                None => continue,
+            },
             // Only a death this game does not have yet is a difference: an actor that is not
             // here now waits, and one alive again on the host is left.
             Field::Custom { tag, .. } if *tag == LIFE_TAG => {

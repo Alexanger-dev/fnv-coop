@@ -881,3 +881,61 @@ fn an_actor_a_guest_kills_dies_in_the_hosts_game() {
         hd.claim_notes
     );
 }
+
+/// PC run 5, 2026-11-10: Trudy was not in her bar on the guest. She and Joe Cobb start disabled
+/// and a trigger's script enables them, which happened in the host's game only.
+#[test]
+fn a_reference_the_hosts_scripts_enable_or_disable_is_the_same_on_the_guest() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    // Both games start with Chet disabled, as the plugin has some references.
+    coop_engine::arm(&mut host.e, false);
+    host.set_disabled(CHET, true);
+    coop_engine::arm(&mut host.e, true);
+    guest.set_disabled(CHET, true);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(true));
+    // Sunny is not in the guest's game now.
+    guest.set_present(SUNNY, false);
+    host.set_disabled(CHET, false);
+    host.set_disabled(SUNNY, true);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(false));
+    assert_eq!((gd.refused, gd.healed), (0, 0));
+    guest.set_present(SUNNY, true);
+    // A script of the guest's own game disables him again: the host's state comes back.
+    guest.set_disabled(CHET, true);
+    frames(
+        25,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(false));
+    assert_eq!(guest.disabled(SUNNY), Some(true));
+    assert!(echo(&mut guest.e, &gd.sync.store).is_empty());
+    assert_eq!((gd.refused, gd.sync.desyncs_detected), (0, 0));
+    assert_eq!(guest.scripts_run(), 0);
+}

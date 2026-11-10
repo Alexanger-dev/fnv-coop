@@ -279,4 +279,7 @@ DLCs. **Not verified here:** that the guest's opening then plays through in the 
   death inside the apply scope, and its heal kills an actor that was not in the game when the death came.
   `echo` reports only a death the guest's game lacks.
 - Rules: `VPreorder*` and `VGenericTimer` are per-player rows (491 rows).
+- References (PC run 5): a placed reference whose form flags changed in the host's game (`Enable`,
+  `Disable`; change flag 1) is written as `Field::RefDisabled`; the guest sets its own through the game's
+  `Enable` (`00573f40`) and `Disable` (`00574400`) inside the apply scope, and its heal keeps it there.
 
