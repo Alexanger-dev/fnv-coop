@@ -304,6 +304,7 @@ mod tests {
             .set_u32(RESULT + addr::SCRIPT_OWNER_QUEST_OFFSET, 0x0300_0000);
         e.register(addr::SCRIPT_RUNNER_RUN, base);
         e.register(addr::SAVE_LOAD_ADD_CHANGE, |_, _| Ret::default());
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         crate::install(&mut e);
         e
     }

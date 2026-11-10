@@ -193,6 +193,7 @@ mod tests {
     #[test]
     fn an_armed_journal_records_each_form_once_with_all_its_flags() {
         let mut e = engine();
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         crate::install(&mut e);
         arm(&mut e, true);
         add(&mut e, form(0), addr::CHANGE_QUEST_STAGES, 0);
@@ -226,6 +227,7 @@ mod tests {
     #[test]
     fn the_game_call_runs_and_answers_as_without_the_wrap() {
         let mut e = engine();
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         crate::install(&mut e);
         for on in [false, true] {
             arm(&mut e, on);
@@ -238,6 +240,7 @@ mod tests {
     #[test]
     fn nothing_is_recorded_while_disarmed_or_for_a_null_form() {
         let mut e = engine();
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         crate::install(&mut e);
         assert!(!armed(&mut e));
         add(&mut e, form(0), 1, 0);
@@ -250,6 +253,7 @@ mod tests {
     #[test]
     fn a_change_the_game_does_not_record_is_not_recorded() {
         let mut e = engine();
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         crate::install(&mut e);
         arm(&mut e, true);
         e.mem.set_u8(form(2) + 8, 1);
@@ -265,6 +269,7 @@ mod tests {
     #[test]
     fn disarming_keeps_what_was_recorded_until_the_drain() {
         let mut e = engine();
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         crate::install(&mut e);
         arm(&mut e, true);
         add(&mut e, form(1), 8, 0);

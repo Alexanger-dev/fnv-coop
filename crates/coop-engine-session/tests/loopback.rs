@@ -996,3 +996,84 @@ fn a_drift_is_put_back_and_its_cause_named() {
     assert_eq!((gd.drift_named, gd.drift_unnamed), (1, 1));
     assert_eq!(hd.claims_enacted + hd.claims_dropped, 0);
 }
+
+/// PC run 6, 2026-11-10: after her dialogue Sunny stood still. The stage's result script tells
+/// her `evp` so she acts on the new stage at once; it runs on the host only. The host sends each
+/// evaluation a script asks for, and the guest's copy is told too. The AI's own evaluations are
+/// not sent.
+#[test]
+fn an_actor_a_hosts_script_tells_to_evaluate_its_package_is_told_on_the_guest() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    host.ai_evp(CHET);
+    host.ai_evp(CHET);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.evaluations(CHET), 0);
+    host.set_stage(MQ, 10);
+    host.script_evp(CHET);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!((guest.evaluations(CHET), guest.evaluations(SUNNY)), (1, 0));
+    // A second command is a second evaluation; the heal and the checks do not repeat one.
+    host.script_evp(CHET);
+    frames(
+        60,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.evaluations(CHET), 2);
+    assert_eq!((gd.refused, gd.healed, gd.sync.desyncs_detected), (0, 0, 0));
+    // The guest's own scripts' evaluations stay in its game.
+    guest.script_evp(SUNNY);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(host.evaluations(SUNNY), 0);
+    // The host's log names the stage change.
+    assert!(
+        hd.stage_notes
+            .iter()
+            .any(|l| l.contains(&format!("quest {MQ:08x}: stage 10"))),
+        "{:?}",
+        hd.stage_notes
+    );
+}

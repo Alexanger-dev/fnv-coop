@@ -366,6 +366,9 @@ impl Coop {
                 for note in h.claim_notes.drain(..) {
                     lines.push(format!("co-op host: {note}"));
                 }
+                for note in h.stage_notes.drain(..) {
+                    lines.push(format!("co-op host: {note}"));
+                }
             }
             Role::Guest(Some(g)) => {
                 g.step(e, &mut self.ep, now_ms);

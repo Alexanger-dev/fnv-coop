@@ -37,6 +37,10 @@ const AWAY: u32 = 0x4000_0000;
 /// An object script whose body sets a quest's stage (the quest and stage at [`SETTER`]).
 const SETTER_SCRIPT: u32 = 0x0150_0300;
 const SETTER: u32 = RAN + 0x40;
+/// An object script whose body is `evp` on the reference it runs on.
+const EVP_SCRIPT: u32 = 0x0150_0400;
+/// Where an actor's count of package evaluations is kept, in its own block.
+const EVALUATIONS_OFFSET: u32 = 0x300;
 /// The player, and the arena placed references come from (0x100 bytes each; the count of placed
 /// references is the word at `PLACED`).
 const PLAYER: u32 = 0x0140_0000;
@@ -264,6 +268,9 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
     let n = e.mem.u32(RAN);
     e.mem.set_u32(RAN, n + 1);
     e.mem.set_u32(RAN + 4, a[1]);
+    if a[1] == EVP_SCRIPT {
+        e.call(addr::ACTOR_EVALUATE_PACKAGE, &args![a[2], 0u32, 1u32]);
+    }
     if a[1] == SETTER_SCRIPT {
         let (quest, stage) = (e.mem.u32(SETTER + 4), e.mem.u32(SETTER + 8) as u8);
         forms::set_quest_stage(e, quest, stage);
@@ -401,6 +408,12 @@ impl Story {
         e.register(addr::QUEST_SET_STAGE_DONE, set_stage_done);
         e.register(addr::OBJECTIVE_SET_STATE, objective_set_state);
         e.register(addr::ACTOR_KILL, actor_kill);
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |e, a| {
+            let at = a[0] + EVALUATIONS_OFFSET;
+            let n = e.mem.u32(at);
+            e.mem.set_u32(at, n + 1);
+            Ret::default()
+        });
         e.register(addr::PLAYER_UPDATE_OBJECTIVE, player_update_objective);
         e.register(addr::QUEST_GET_CURRENT_STAGE, |e, a| {
             eax(u32::from(e.mem.u8(a[0] + addr::QUEST_CURRENT_STAGE_OFFSET)))
@@ -649,6 +662,28 @@ impl Story {
             addr::SCRIPT_RUNNER_RUN,
             &args![0u32, SETTER_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
         );
+    }
+
+    /// A script tells an actor to evaluate its package (`evp`), as a stage's result script does.
+    pub fn script_evp(&mut self, actor: u32) {
+        let a = crate::actors::actor(&mut self.e, actor).expect("an actor of the story");
+        self.e.call(
+            addr::SCRIPT_RUNNER_RUN,
+            &args![0u32, EVP_SCRIPT, a, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
+    }
+
+    /// The game's AI evaluates an actor's package by itself (no script).
+    pub fn ai_evp(&mut self, actor: u32) {
+        let a = crate::actors::actor(&mut self.e, actor).expect("an actor of the story");
+        self.e
+            .call(addr::ACTOR_EVALUATE_PACKAGE, &args![a, 0u32, 0u32]);
+    }
+
+    /// How many times an actor was told to evaluate its package.
+    pub fn evaluations(&mut self, actor: u32) -> u32 {
+        let a = crate::actors::actor(&mut self.e, actor).expect("an actor of the story");
+        self.e.mem.u32(a + EVALUATIONS_OFFSET)
     }
 
     /// Kills a placed actor as a lethal hit by this game's player does.

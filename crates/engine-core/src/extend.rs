@@ -162,6 +162,13 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-1",
     },
+    // Actor::EvaluatePackage (this, now, reset AI): co-op's host notes the evaluations a story
+    // script asks for, so a guest's actor follows the story's change too (docs/coop/SPECS.md S13).
+    Entry {
+        addr: 0x008a_6ce0,
+        owners: COOP,
+        step: "C-2",
+    },
     // DINPUT8 DirectInput8Create, its import slot: the keyboard and mouse devices put behind
     // xNVSE's (`Hook_DirectInput8Create_Init` writes this slot).
     Entry {

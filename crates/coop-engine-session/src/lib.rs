@@ -33,7 +33,7 @@ use coop_core::sync::{GuestLive, HostConfig, HostSync};
 use coop_core::sync::{GuestPhase, GuestSync};
 use coop_core::transport::Transport;
 use coop_engine::forms::{self, GlobalWatch};
-use coop_engine::{actors, addr, gate, quest, vars};
+use coop_engine::{actors, addr, commands, gate, quest, vars};
 use engine_core::Engine;
 
 /// The tag of a clock global's `Field::Custom` (its value's bits, little-endian). The game's clock
@@ -49,6 +49,12 @@ pub const CLOCK_EVERY_MS: u64 = 1000;
 /// copy through the game. A guest whose own copy died sends the same field as a claim, and the
 /// host's game does the kill (so the death's scripts and the story's reactions run there, once).
 pub const LIFE_TAG: u16 = 0x4c46;
+
+/// The tag of a host command to an actor, "evaluate your package again" (`Field::Custom`, one
+/// byte: a count, so each new command is a change). A stage's result script says `evp` to make an
+/// actor act on the new stage at once; it runs on the host only. Not state: [`echo`] and the heal
+/// leave it alone.
+pub const EVALUATE_TAG: u16 = 0x4556;
 
 fn life_field(dead: bool) -> Field {
     Field::Custom {
@@ -102,7 +108,7 @@ fn clock_value(field: &Field) -> Option<f32> {
 pub fn hello(plugins: Vec<String>) -> Hello {
     let build = format!("coop-engine-session {}", env!("CARGO_PKG_VERSION"));
     let rules = format!(
-        "quest-record {:04x} v{} {} clock {:04x} life {:04x} refs",
+        "quest-record {:04x} v{} {} clock {:04x} life {:04x} refs evp",
         record::QUEST_RECORD_TAG,
         record::VERSION,
         record::LEN,
@@ -156,6 +162,10 @@ pub struct HostDriver {
     /// story globals.
     clock: Vec<u32>,
     clock_sent_ms: Option<u64>,
+    /// How many times each actor was told by a script to evaluate its package.
+    evaluations: std::collections::BTreeMap<u32, u8>,
+    /// Stage changes of shared quests, for the log (taken by the caller).
+    pub stage_notes: Vec<String>,
     /// Guests' death claims the host's game enacted.
     pub claims_enacted: u32,
     /// Guests' claims left alone: the actor is not in the host's game now, or is dead already.
@@ -202,6 +212,8 @@ impl HostDriver {
             globals: GlobalWatch::new(global_ids),
             clock: Vec::new(),
             clock_sent_ms: None,
+            evaluations: std::collections::BTreeMap::new(),
+            stage_notes: Vec::new(),
             claims_enacted: 0,
             claims_dropped: 0,
             claim_notes: Vec::new(),
@@ -287,6 +299,25 @@ impl HostDriver {
         if let Some(r) = quest::record(e, id) {
             match record::encode(&r) {
                 Some(f) => {
+                    let before = self
+                        .sync
+                        .store
+                        .get(FormId(id), &f)
+                        .and_then(|en| record::decode(id, &en.field));
+                    if before.as_ref().map(|b| (b.stage, b.flags, &b.done))
+                        != Some((r.stage, r.flags, &r.done))
+                    {
+                        self.stage_notes.push(format!(
+                            "quest {id:08x}: stage {} flags {:02x} done {:?} (was {})",
+                            r.stage,
+                            r.flags,
+                            r.done,
+                            before.map_or("not in the story".to_string(), |b| format!(
+                                "stage {} flags {:02x}",
+                                b.stage, b.flags
+                            ))
+                        ));
+                    }
                     self.sync.write(FormId(id), f);
                 }
                 None => {
@@ -347,6 +378,19 @@ impl HostDriver {
                         .write(FormId(c.form), Field::RefDisabled { disabled });
                 }
             }
+        }
+        // An actor a script told to evaluate its package: the guests' copies are told too.
+        for id in commands::drain_evaluations(e) {
+            let n = self.evaluations.entry(id).or_insert(0);
+            *n = n.wrapping_add(1);
+            let data = vec![*n];
+            self.sync.write(
+                FormId(id),
+                Field::Custom {
+                    tag: EVALUATE_TAG,
+                    data,
+                },
+            );
         }
         // A placed actor that died (or, once it has an entry, lives again).
         for id in life_changes(&changes) {
@@ -703,6 +747,12 @@ fn apply_field(e: &mut Engine, form: u32, field: &Field) -> bool {
             Some(v) => gate::applying(e, |e| forms::set_global_value(e, form, v)),
             None => false,
         },
+        // A host command: the actor evaluates its package again, as the host's script told its
+        // own copy. One that is not in this game now picks its package when it loads anyway.
+        Field::Custom { tag, .. } if *tag == EVALUATE_TAG => {
+            gate::applying(e, |e| commands::evaluate_package(e, form));
+            true
+        }
         // A death: this game's copy is killed through the game, its scripts held back (they ran on
         // the host). An actor that is not here now is killed when it is (the heal). An actor alive
         // again on the host is left as it is here: nothing here can raise it yet.

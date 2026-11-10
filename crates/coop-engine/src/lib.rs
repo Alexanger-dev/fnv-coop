@@ -17,6 +17,7 @@
 
 pub mod actors;
 pub mod addr;
+pub mod commands;
 pub mod diag;
 pub mod forms;
 pub mod gate;
@@ -53,6 +54,8 @@ pub fn install(e: &mut Engine) {
     }
     e.wrap(journal::ADD_CHANGE, journal::add_change);
     e.wrap(gate::RUN, gate::run);
+    e.wrap(commands::EVALUATE, commands::evaluate);
+    let _ = e.ext_free::<commands::Commands>();
     // The gate's slot too, before the threads start.
     let _ = e.ext_free::<gate::Gate>();
 }
@@ -71,6 +74,7 @@ mod tests {
         let mut e = Engine::new();
         e.register(addr::SAVE_LOAD_ADD_CHANGE, |_, _| Ret::default());
         e.register(addr::SCRIPT_RUNNER_RUN, |_, _| Ret::default());
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         install(&mut e);
         install(&mut e);
         assert_eq!(
@@ -78,6 +82,7 @@ mod tests {
             [
                 (addr::SCRIPT_RUNNER_RUN, vec![Owner::Coop]),
                 (addr::SAVE_LOAD_ADD_CHANGE, vec![Owner::Coop]),
+                (addr::ACTOR_EVALUATE_PACKAGE, vec![Owner::Coop]),
             ]
         );
     }

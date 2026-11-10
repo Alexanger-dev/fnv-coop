@@ -217,3 +217,8 @@ pub const CHANGE_ACTOR_LIFESTATE: u32 = 0x400;
 /// what the `KillActor` script command and a lethal hit call. An essential or protected actor
 /// stays alive; with the task queue in use the kill is queued and done within the frame.
 pub const ACTOR_KILL: u32 = 0x0089_d900;
+
+/// `Actor::EvaluatePackage` (`thiscall`, actor, now, reset AI; `actor_p4.rs`): what a script's
+/// `evp` ends in (`run_005c8a50.rs`, with `(0, reset)`). With `now` zero the evaluation is
+/// buffered and done by the actor's next AI update.
+pub const ACTOR_EVALUATE_PACKAGE: u32 = 0x008a_6ce0;

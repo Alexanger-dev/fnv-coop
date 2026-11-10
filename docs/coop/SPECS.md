@@ -291,3 +291,17 @@ DLCs. **Not verified here:** that the guest's opening then plays through in the 
 - The guest keeps the last cause per form; the heal writes one `COOP-DRIFT` line per distinct (form, kind)
   it puts back, with that cause or "cause unknown" (`drift_named`, `drift_unnamed` in the status line).
 
+## S13: host commands, the first: evaluate your package (implemented; D5's host commands)
+
+- PC run 6: after her dialogue Sunny stood still. Stage 10 of VCG02 says `SunnyREF.evp` in its result
+  script, which runs on the host only; the guest's copy was never told.
+- `coop_engine::commands`: a wrap of `Actor::EvaluatePackage` (`008a6ce0`, WRAPS step C-2) notes, on a host
+  whose journal is armed, each evaluation asked for while a script runs (`gate::cause`) of an actor both
+  games know. The AI's own evaluations are not noted.
+- Session: `EVALUATE_TAG` (`Field::Custom`, a count). The guest tells its copy the same, inside the apply
+  scope; `echo` and the heal leave the tag alone.
+- The host logs each shared quest's stage change (`stage_notes`), so a run shows whether the story moved.
+- The census of run 6 (D5 condition 1): VCG02's drift was named (the guest's own generic timer, event 3)
+  and VMQ01's (a result script of quest 00104c1c on the player). Script variables had no cause: the journal
+  does not see them, as B's planner expected, so the heal's diff stays their capture.
+
