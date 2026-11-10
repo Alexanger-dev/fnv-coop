@@ -120,6 +120,18 @@ fn own_quest_ids(plugins: &[String]) -> Vec<u32> {
         .collect()
 }
 
+/// The quest each player plays as its own opening, and the stage that ends it: VCG01, "Ain't
+/// That a Kick in the Head", stage 200 (set by the generic timer after Doc Mitchell's last line).
+/// Until a guest's own game has done it, that guest holds none of the host's actors.
+fn opening_quest(plugins: &[String]) -> Option<(u32, u8)> {
+    let table = coop_policy::PolicyTable::bundled().ok()?;
+    let row = table.rows().iter().find(|r| r.edid == "VCG01")?;
+    let index = plugins
+        .iter()
+        .position(|p| p.eq_ignore_ascii_case(&row.plugin))?;
+    Some((((index as u32) << 24) | (row.local & 0x00ff_ffff), 200))
+}
+
 /// The form ids, in the load order `plugins`, of the scripts the rules let a guest run itself
 /// (`guest_local`, written `plugin:hex id`). An entry whose plugin is not loaded is skipped.
 fn own_script_ids(plugins: &[String]) -> Vec<u32> {
@@ -431,7 +443,10 @@ impl Coop {
                         Role::Guest(slot @ None) => {
                             let mut g =
                                 GuestDriver::new(local, session::hello(self.plugins.clone()));
-                            let (ladder, line) = Self::ladder(true);
+                            let (mut ladder, line) = Self::ladder(true);
+                            if let Some(l) = ladder.as_mut() {
+                                l.follow_after = opening_quest(&self.plugins);
+                            }
                             g.ladder = ladder;
                             lines.push(line);
                             // world
@@ -439,7 +454,10 @@ impl Coop {
                             lines.push(share.line().into());
                             g.world = share.guest();
                             // fights
-                            let (fight, line) = Self::fight(true, g.ladder.is_some());
+                            let (mut fight, line) = Self::fight(true, g.ladder.is_some());
+                            if let Some(f) = fight.as_mut() {
+                                f.hold_after = opening_quest(&self.plugins);
+                            }
                             g.fight = fight;
                             lines.push(line);
                             let (on, line) = Self::social_on();
@@ -718,6 +736,15 @@ mod tests {
             assert!(scripts.contains(&id), "{id:08x}");
         }
         assert!(scripts.iter().all(|id| id >> 24 <= 1));
+    }
+
+    #[test]
+    fn the_opening_quest_is_vcg01_to_its_last_stage() {
+        assert_eq!(
+            opening_quest(&["FalloutNV.esm".into()]),
+            Some((0x0010_4c1c, 200))
+        );
+        assert_eq!(opening_quest(&["Other.esm".into()]), None);
     }
 
     #[test]

@@ -13,6 +13,8 @@ use coop_engine_session::{echo, gate_guest, GuestDriver, HostDriver};
 engine_core::assemble!();
 
 const MQ: u32 = 0x0010_4c0c;
+/// A quest each player plays in its own game (not shared), and its last stage.
+const OPENING: u32 = 0x0010_4c1c;
 const HOUSE: u32 = 0x0010_5a00;
 const TOWN: u32 = 0x0010_5a01;
 const RAIDER: u32 = 0x0010_4f25;
@@ -21,7 +23,7 @@ const PLAYER: u32 = 0x14;
 
 fn spec() -> StorySpec {
     StorySpec {
-        quests: vec![(MQ, vec![10, 20])],
+        quests: vec![(MQ, vec![10, 20]), (OPENING, vec![200])],
         globals: vec![(0x39, 0.0)],
         cells: vec![HOUSE, TOWN],
         actors: vec![RAIDER, GECKO],
@@ -507,4 +509,52 @@ fn the_sessions_end_gives_a_downed_player_its_controls_and_its_death_back() {
     // No session: the guest's game applies hits and kills its player itself again.
     p.guest.hit(PLAYER, RAIDER, 500.0);
     assert!(p.guest.player_dead());
+}
+
+/// PC run 8, 2026-11-10: the guest lay looking at the ceiling. Each player plays the opening in
+/// its own game, and the guest's Doc Mitchell, held at the host's place with his AI off, never
+/// started it. Until a guest's own opening is done it holds none of the host's actors.
+#[test]
+fn a_guest_holds_no_actor_until_its_own_opening_is_done() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().hold_after = Some((OPENING, 200));
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.frames(40);
+    let g = p.guest.actor_view(RAIDER);
+    assert!(close(g.pos, [900.0, 900.0, 0.0]) && g.ai, "{g:?}");
+    assert!(p.guest_fight().held().is_empty());
+    assert_eq!(p.guest_fight().moves, 0);
+    // The guest's own game ends its opening: from then on the actor is the host's.
+    assert!(p.guest.set_stage(OPENING, 200));
+    p.frames(5);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos) && !g.ai, "{g:?} {h:?}");
+    assert!(p.guest_fight().held().contains(&RAIDER));
+    let lines = p.guest_fight().lines.join("\n");
+    assert!(
+        lines.contains("no actor is held while") && lines.contains("opening is done"),
+        "{lines}"
+    );
+}
+
+/// The same for the move to the host: a host that leaves first does not pull a guest out of its
+/// own opening.
+#[test]
+fn a_guest_is_not_moved_to_the_host_until_its_own_opening_is_done() {
+    let mut p = Pair::new();
+    p.gd.ladder.as_mut().unwrap().follow_after = Some((OPENING, 200));
+    p.frames(40);
+    assert_eq!(p.guest.warps(), 0);
+    assert!(p
+        .gd
+        .ladder
+        .as_ref()
+        .unwrap()
+        .lines
+        .iter()
+        .any(|l| l.contains("follows once its own opening is done")));
+    assert!(p.guest.set_stage(OPENING, 200));
+    p.frames(40);
+    assert_eq!(p.guest.warps(), 1);
 }

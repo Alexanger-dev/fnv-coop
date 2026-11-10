@@ -124,6 +124,13 @@ pub struct Fight {
     threat_ms: Option<u64>,
     /// Guest: the actors held this frame.
     held: BTreeSet<u32>,
+    /// Guest: a quest of this player's own and one of its stages; until that stage is done in
+    /// this game no actor is held. A player plays the opening in its own game, with its own Doc
+    /// Mitchell acting (PC run 8, 2026-11-10: held at the host's place with his AI off, he never
+    /// started it, and the guest lay looking at the ceiling).
+    pub hold_after: Option<(u32, u8)>,
+    /// Guest: whether the last frame held nothing for that reason.
+    waiting: bool,
     /// Host: states published.
     pub published: u64,
     /// Host: guests' hits its game applied.
@@ -201,6 +208,8 @@ impl Fight {
             published_ms: None,
             threat_ms: None,
             held: BTreeSet::new(),
+            hold_after: None,
+            waiting: false,
             published: 0,
             hits_applied: 0,
             kills: 0,
@@ -581,7 +590,19 @@ impl Fight {
         }
         self.start(e);
         self.know_avatars(e, avatars);
-        let me = live::local(e).filter(|l| l.loaded);
+        let waiting = self.hold_after.is_some_and(|(quest, stage)| {
+            coop_engine::quest::record(e, quest).is_some_and(|r| !r.done.contains(&stage))
+        });
+        if waiting != self.waiting {
+            self.waiting = waiting;
+            self.say(if waiting {
+                "co-op fights: no actor is held while this player's own opening runs".into()
+            } else {
+                "co-op fights: this player's opening is done; the host's actors are held from now"
+                    .into()
+            });
+        }
+        let me = live::local(e).filter(|l| l.loaded && !waiting);
         let mut holding = BTreeSet::new();
         if let Some(me) = me {
             let known: Vec<(u32, coop_core::actors::RemoteActor)> =

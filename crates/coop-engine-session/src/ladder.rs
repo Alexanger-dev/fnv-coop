@@ -97,6 +97,11 @@ pub struct Ladder {
     started: bool,
     entered: [bool; 6],
     reported: [bool; 6],
+    /// Guest: a quest of this player's own and one of its stages; until that stage is done in
+    /// this game the player is not moved to the host. A player plays the opening in its own game,
+    /// and a host that leaves the house first would otherwise pull the guest out of it.
+    pub follow_after: Option<(u32, u8)>,
+    stay_said: bool,
     warp: Warp,
     last_warp_ms: Option<u64>,
     warps: u32,
@@ -128,6 +133,8 @@ impl Ladder {
             started: false,
             entered: [false; 6],
             reported: [false; 6],
+            follow_after: None,
+            stay_said: false,
             warp: Warp::Idle,
             last_warp_ms: None,
             warps: 0,
@@ -233,6 +240,21 @@ impl Ladder {
             return;
         };
         self.waiting_since = None;
+        if matches!(self.warp, Warp::Idle)
+            && me.cell != host_cell
+            && self.follow_after.is_some_and(|(quest, stage)| {
+                coop_engine::quest::record(e, quest).is_some_and(|r| !r.done.contains(&stage))
+            })
+        {
+            if !self.stay_said {
+                self.stay_said = true;
+                self.say(
+                    "co-op live: the host is elsewhere; this player follows once its own opening is done"
+                        .into(),
+                );
+            }
+            return;
+        }
         match self.warp {
             Warp::Waiting { cell, frames } => {
                 if me.cell == cell {
