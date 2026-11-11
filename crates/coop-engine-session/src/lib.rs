@@ -440,6 +440,12 @@ impl HostDriver {
             };
             let field = life_field(dead);
             if dead || self.sync.store.get(FormId(id), &field).is_some() {
+                if self.sync.store.get(FormId(id), &field).map(|en| &en.field) != Some(&field) {
+                    self.stage_notes.push(format!(
+                        "actor {id:08x}: {} in this game",
+                        if dead { "died" } else { "alive again" }
+                    ));
+                }
                 self.sync.write(FormId(id), field);
             }
         }

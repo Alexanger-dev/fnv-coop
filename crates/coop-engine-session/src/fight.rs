@@ -131,6 +131,8 @@ pub struct Fight {
     pub hold_after: Option<(u32, u8)>,
     /// Guest: whether the last frame held nothing for that reason.
     waiting: bool,
+    /// Guest: first holds written to the log so far.
+    first_holds: u32,
     /// Host: states published.
     pub published: u64,
     /// Host: guests' hits its game applied.
@@ -210,6 +212,7 @@ impl Fight {
             held: BTreeSet::new(),
             hold_after: None,
             waiting: false,
+            first_holds: 0,
             published: 0,
             hits_applied: 0,
             kills: 0,
@@ -362,6 +365,10 @@ impl Fight {
                 rec.state.health = state.health;
             }
             if s.dead() && !sync.live.actors.is_dead(id) {
+                self.say(format!(
+                    "co-op fights: actor {:08x} is dead in the host's game (life state {}, health {:.0}) at ({:.0}, {:.0}, {:.0}) in {:08x}",
+                    s.id, s.life, s.health, s.pos[0], s.pos[1], s.pos[2], s.space
+                ));
                 sync.live.combat.threat.forget(id);
                 for o in sync.live.actors.kill_story(id, None) {
                     out.extend(sync.live.route_extern(o.aud, Msg::Actor(o.msg)));
@@ -620,9 +627,19 @@ impl Fight {
                     if actors::dead(e, id) == Some(false) {
                         gate::applying(e, |e| actors::kill(e, id));
                         self.deaths += 1;
+                        self.say(format!(
+                            "co-op fights: actor {id:08x} is dead on the host (alive in its ledger: {}, flags {:04x}): killed here",
+                            a.alive, s.flags
+                        ));
                     }
                     continue;
                 }
+                let first = !self.held.contains(&id) && self.first_holds < 60;
+                let before = if first {
+                    fight::snap_of(e, id).map(|b| b.pos)
+                } else {
+                    None
+                };
                 if let Some(h) = fight::hold(
                     e,
                     id,
@@ -630,6 +647,14 @@ impl Fight {
                     dequant_heading(s.heading),
                     f32::from(s.health),
                 ) {
+                    if let Some(b) = before {
+                        self.first_holds += 1;
+                        let to = s.pos.map(dequant_pos);
+                        self.say(format!(
+                            "co-op fights: holding actor {id:08x}: here it was at ({:.0}, {:.0}, {:.0}), the host has it at ({:.0}, {:.0}, {:.0}), after the move it is at ({:.0}, {:.0}, {:.0})",
+                            b[0], b[1], b[2], to[0], to[1], to[2], h.pos[0], h.pos[1], h.pos[2]
+                        ));
+                    }
                     self.moves += 1;
                     self.woke += u64::from(h.woke && self.held.contains(&id));
                     holding.insert(id);

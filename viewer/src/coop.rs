@@ -322,11 +322,12 @@ impl Coop {
     /// fights: the shared fights `NV_COOP_FIGHT` asks for; `None` for `off` or without the ladder.
     /// Returns the line that says so.
     fn fight(guest: bool, ladder: bool) -> (Option<session::fight::Fight>, String) {
-        // Unset is `state` for now (the host's actors shown on the guests, nothing else): the
-        // further parts follow one PC run at a time.
+        // Unset is off: in PC run 9 `state` held the host's actors on the guest as meant, but
+        // the host's own story stopped (its dog was dead to its dialogue) and actors stood in
+        // floors and ceilings. Until that is understood it runs only when asked for.
         let ask = match std::env::var("NV_COOP_FIGHT") {
             Ok(v) if !v.trim().is_empty() => v,
-            _ => "state".into(),
+            _ => "off".into(),
         };
         if ask.trim() == "off" || !ladder {
             return (None, "co-op fights: off".into());
