@@ -558,3 +558,28 @@ fn a_guest_is_not_moved_to_the_host_until_its_own_opening_is_done() {
     p.frames(40);
     assert_eq!(p.guest.warps(), 1);
 }
+
+/// PC run 10, 2026-11-11: Sunny had walked outdoors on the host; the guest's copy of her was
+/// still in the saloon and was moved to the outdoor coordinates inside it. A move changes a
+/// reference's place, not its cell: a copy in another space than the host's actor is not held.
+#[test]
+fn a_copy_in_another_space_than_the_hosts_actor_is_not_held() {
+    let mut p = Pair::new();
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    // The guest's copy is in the other space.
+    p.guest.place_actor(RAIDER, TOWN, [900.0, 900.0, 0.0], 2.0);
+    p.frames(40);
+    let g = p.guest.actor_view(RAIDER);
+    assert!(close(g.pos, [900.0, 900.0, 0.0]) && g.ai, "{g:?}");
+    assert!(p.guest_fight().held().is_empty());
+    assert!(p
+        .guest_fight()
+        .lines
+        .iter()
+        .any(|l| l.contains("not held") && l.contains(&format!("{RAIDER:08x}"))));
+    // Its own game brings it into the host's space: held from then on.
+    p.guest.place_actor(RAIDER, HOUSE, [700.0, 700.0, 0.0], 2.0);
+    p.frames(5);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos) && !g.ai, "{g:?} {h:?}");
+}

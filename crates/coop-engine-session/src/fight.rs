@@ -133,6 +133,8 @@ pub struct Fight {
     waiting: bool,
     /// Guest: first holds written to the log so far.
     first_holds: u32,
+    /// Guest: actors not held because this game's copy is in another space than the host's.
+    elsewhere: BTreeSet<u32>,
     /// Host: states published.
     pub published: u64,
     /// Host: guests' hits its game applied.
@@ -213,6 +215,7 @@ impl Fight {
             hold_after: None,
             waiting: false,
             first_holds: 0,
+            elsewhere: BTreeSet::new(),
             published: 0,
             hits_applied: 0,
             kills: 0,
@@ -622,6 +625,23 @@ impl Fight {
                 {
                     continue;
                 }
+                // This game's copy is in another space than the host's actor (the host's walked
+                // out of a door, this one has not): moving it would change its place and not its
+                // cell, and it would stand at the other space's coordinates in this one (PC run
+                // 10, 2026-11-11: Sunny, outdoors on the host, was moved to outdoor coordinates
+                // inside the saloon). It is left to this game until it is in that space too.
+                let here = actors::actor(e, id).map(|copy| fight::space_of(e, copy));
+                if here.is_some_and(|space| space != s.cell.0) {
+                    if self.elsewhere.insert(id) {
+                        self.say(format!(
+                            "co-op fights: actor {id:08x} is in {:08x} on the host and in {:08x} here: not held",
+                            s.cell.0,
+                            here.unwrap_or(0)
+                        ));
+                    }
+                    continue;
+                }
+                self.elsewhere.remove(&id);
                 if !a.alive || s.flags & FLAG_DEAD != 0 {
                     // The death's scripts ran on the host.
                     if actors::dead(e, id) == Some(false) {
