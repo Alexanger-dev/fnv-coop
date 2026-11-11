@@ -425,6 +425,22 @@ pub fn nudge(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f3
     place_of(e, id)
 }
 
+/// Moves an actor this game runs itself to the host's place and heading (radians) and nothing
+/// else: its AI stays as it is and it is not told to think again. For an actor led frame by frame
+/// because its own game keeps taking it elsewhere. `None` as [`place_of`].
+pub fn lead(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32; 3]> {
+    place_of(e, id)?;
+    let a = actors::actor(e, id)?;
+    for (axis, v) in (*b"XYZ").into_iter().zip(pos) {
+        e.call(addr::SET_POS_BASE, &args![a, u32::from(axis), v.to_bits()]);
+    }
+    e.call(
+        addr::SET_ANGLE_BASE,
+        &args![a, u32::from(b'Z'), heading.to_degrees().to_bits()],
+    );
+    place_of(e, id)
+}
+
 /// Gives a held actor back to this game: its AI on again. False when it is not in this game now.
 pub fn release(e: &mut Engine, id: u32) -> bool {
     match actors::actor(e, id) {

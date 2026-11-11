@@ -676,3 +676,42 @@ fn a_followed_actor_keeps_its_ai_and_is_put_at_the_hosts_place_when_it_strays() 
     p.frames(60);
     assert_eq!(p.guest_fight().nudges, 1);
 }
+
+/// PC run 11, 2026-11-11: Victor was put back every two seconds, and Sunny walked back to the
+/// guest's own player each time. An actor its own game keeps taking elsewhere is led with the
+/// host's every frame for a while, its AI on, then followed again.
+#[test]
+fn an_actor_that_keeps_straying_is_led_every_frame_for_a_while() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    // Its own game takes it away again each time it is put back: two nudges.
+    for _ in 0..2 {
+        p.frames(40);
+        assert!(close(
+            p.guest.actor_view(RAIDER).pos,
+            p.host.actor_view(RAIDER).pos
+        ));
+        p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
+    }
+    assert_eq!((p.guest_fight().nudges, p.guest_fight().leads), (2, 1));
+    // Led: back at the host's place within a frame, and it goes where the host's goes.
+    p.frames(1);
+    assert!(close(
+        p.guest.actor_view(RAIDER).pos,
+        p.host.actor_view(RAIDER).pos
+    ));
+    p.host.move_actor(RAIDER, [300.0, 20.0, 0.0], 0.5);
+    p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
+    p.frames(6);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos) && g.ai, "{g:?} {h:?}");
+    assert_eq!(p.guest_fight().nudges, 2);
+    // After the while it is followed again: left where its own game has it, near the host's.
+    p.frames(700);
+    p.guest.move_actor(RAIDER, [350.0, 20.0, 0.0], 2.0);
+    p.frames(60);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [350.0, 20.0, 0.0]));
+}

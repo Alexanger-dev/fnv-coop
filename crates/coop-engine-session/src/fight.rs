@@ -58,6 +58,14 @@ pub const FOLLOW_DISTANCE: f32 = 200.0;
 /// See [`FOLLOW_DISTANCE`].
 pub const FOLLOW_MS: u64 = 1500;
 
+/// An actor put at the host's place this many times within [`LEAD_WINDOW_MS`] is led every frame
+/// for [`LEAD_MS`], then followed again.
+pub const LEAD_AFTER: u32 = 2;
+/// See [`LEAD_AFTER`].
+pub const LEAD_WINDOW_MS: u64 = 20_000;
+/// See [`LEAD_AFTER`].
+pub const LEAD_MS: u64 = 30_000;
+
 /// How much of the fights a run shares (`NV_COOP_FIGHT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Cap {
@@ -148,6 +156,14 @@ pub struct Fight {
     far_since: BTreeMap<u32, u64>,
     /// Guest: how many times an actor was put at the host's place.
     pub nudges: u32,
+    /// Guest: each actor's recent nudges (how many, and when the first of them was).
+    nudged: BTreeMap<u32, (u32, u64)>,
+    /// Guest: actors led frame by frame, and until when. One this game keeps taking elsewhere
+    /// (PC run 11: Victor, put back every two seconds; Sunny, walking back to this game's own
+    /// player each time) is moved with the host's every frame for a while, its AI left on.
+    led_until: BTreeMap<u32, u64>,
+    /// Guest: how many times an actor began to be led.
+    pub leads: u32,
     /// Guest: actors not held because this game's copy is in another space than the host's.
     elsewhere: BTreeSet<u32>,
     /// Host: states published.
@@ -233,6 +249,9 @@ impl Fight {
             follow: false,
             far_since: BTreeMap::new(),
             nudges: 0,
+            nudged: BTreeMap::new(),
+            led_until: BTreeMap::new(),
+            leads: 0,
             elsewhere: BTreeSet::new(),
             published: 0,
             hits_applied: 0,
@@ -674,6 +693,12 @@ impl Fight {
                 }
                 if self.follow {
                     let to = s.pos.map(dequant_pos);
+                    if self.led_until.get(&id).is_some_and(|until| now_ms < *until) {
+                        fight::lead(e, id, to, dequant_heading(s.heading));
+                        self.far_since.remove(&id);
+                        continue;
+                    }
+                    self.led_until.remove(&id);
                     let off = fight::place_of(e, id).map(|here| {
                         (0..3)
                             .map(|i| (here[i] - to[i]).powi(2))
@@ -687,6 +712,26 @@ impl Fight {
                                 self.far_since.remove(&id);
                                 if fight::nudge(e, id, to, dequant_heading(s.heading)).is_some() {
                                     self.nudges += 1;
+                                    let (n, first) =
+                                        self.nudged.get(&id).copied().unwrap_or((0, now_ms));
+                                    let (n, first) =
+                                        if now_ms.saturating_sub(first) > LEAD_WINDOW_MS {
+                                            (1, now_ms)
+                                        } else {
+                                            (n + 1, first)
+                                        };
+                                    self.nudged.insert(id, (n, first));
+                                    if n >= LEAD_AFTER {
+                                        self.nudged.remove(&id);
+                                        self.led_until.insert(id, now_ms + LEAD_MS);
+                                        self.leads += 1;
+                                        if self.leads <= 60 {
+                                            self.say(format!(
+                                                "co-op fights: actor {id:08x} keeps straying from the host's place: led there every frame for {} s",
+                                                LEAD_MS / 1000
+                                            ));
+                                        }
+                                    }
                                     if self.nudges <= 60 {
                                         self.say(format!(
                                             "co-op fights: actor {id:08x} was {off:.0} units from the host's place: put at ({:.0}, {:.0}, {:.0})",
