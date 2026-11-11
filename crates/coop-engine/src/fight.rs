@@ -395,6 +395,36 @@ pub fn hold(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32, health: f32) -
     })
 }
 
+/// Where actor `id` is in this game now; `None` when it is not here, has no 3D, or is dead.
+pub fn place_of(e: &mut Engine, id: u32) -> Option<[f32; 3]> {
+    let a = actors::actor(e, id)?;
+    if e.mem.u32(a.wrapping_add(addr::REF_LOADED_OFFSET)) == 0 || actors::dead(e, id)? {
+        return None;
+    }
+    Some([0, 4, 8].map(|o| e.mem.f32(a.wrapping_add(addr::REF_POS_OFFSET + o))))
+}
+
+/// Puts an actor this game runs itself at the host's place and heading (radians), its AI left
+/// on (switched on again if a hold had it off), and has it pick its package again from there, so
+/// it goes on in its own way, animated by its own game. `None` as [`place_of`].
+pub fn nudge(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32; 3]> {
+    place_of(e, id)?;
+    let a = actors::actor(e, id)?;
+    e.mem
+        .set_u8(a.wrapping_add(addr::ACTOR_PROCESS_ME_OFFSET), 1);
+    for (axis, v) in (*b"XYZ").into_iter().zip(pos) {
+        e.call(addr::SET_POS_BASE, &args![a, u32::from(axis), v.to_bits()]);
+    }
+    e.call(
+        addr::SET_ANGLE_BASE,
+        &args![a, u32::from(b'Z'), heading.to_degrees().to_bits()],
+    );
+    if e.is_registered(addr::ACTOR_EVALUATE_PACKAGE) {
+        e.call(addr::ACTOR_EVALUATE_PACKAGE, &args![a, 0u32, 0u32]);
+    }
+    place_of(e, id)
+}
+
 /// Gives a held actor back to this game: its AI on again. False when it is not in this game now.
 pub fn release(e: &mut Engine, id: u32) -> bool {
     match actors::actor(e, id) {

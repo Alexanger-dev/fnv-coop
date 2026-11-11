@@ -66,6 +66,48 @@ pub const LIFE_TAG: u16 = 0x4c46;
 /// leave it alone.
 pub const EVALUATE_TAG: u16 = 0x4556;
 
+/// The tag of a host command to an actor, "start this conversation" (`Field::Custom` on the
+/// actor's id: a count, then the scene). A script's `StartConversation` between two actors runs
+/// in the host's game only; a guest's game drops its own and plays the host's. Not state:
+/// [`echo`] and the heal leave it alone, and one that comes with a join or a repair is not
+/// played (it is over).
+pub const SCENE_TAG: u16 = 0x5343;
+
+fn scene_field(count: u8, s: &commands::Scene) -> Field {
+    let mut data = vec![count, u8::from(s.flags[0]) | (u8::from(s.flags[1]) << 1)];
+    for w in [s.target, s.topic, s.locations[0], s.locations[1], s.space] {
+        data.extend_from_slice(&w.to_le_bytes());
+    }
+    for v in s.actor_pos.iter().chain(&s.target_pos) {
+        data.extend_from_slice(&v.to_bits().to_le_bytes());
+    }
+    Field::Custom {
+        tag: SCENE_TAG,
+        data,
+    }
+}
+
+fn scene_of(actor: u32, field: &Field) -> Option<commands::Scene> {
+    let Field::Custom { tag, data } = field else {
+        return None;
+    };
+    if *tag != SCENE_TAG || data.len() != 2 + 4 * 11 {
+        return None;
+    }
+    let word = |i: usize| u32::from_le_bytes(data[2 + 4 * i..6 + 4 * i].try_into().unwrap());
+    let real = |i: usize| f32::from_bits(word(i));
+    Some(commands::Scene {
+        actor,
+        target: word(0),
+        topic: word(1),
+        locations: [word(2), word(3)],
+        flags: [data[1] & 1 != 0, data[1] & 2 != 0],
+        space: word(4),
+        actor_pos: [real(5), real(6), real(7)],
+        target_pos: [real(8), real(9), real(10)],
+    })
+}
+
 fn life_field(dead: bool) -> Field {
     Field::Custom {
         tag: LIFE_TAG,
@@ -118,7 +160,7 @@ fn clock_value(field: &Field) -> Option<f32> {
 pub fn hello(plugins: Vec<String>) -> Hello {
     let build = format!("coop-engine-session {}", env!("CARGO_PKG_VERSION"));
     let rules = format!(
-        "quest-record {:04x} v{} {} clock {:04x} life {:04x} refs evp",
+        "quest-record {:04x} v{} {} clock {:04x} life {:04x} refs evp scene",
         record::QUEST_RECORD_TAG,
         record::VERSION,
         record::LEN,
@@ -176,6 +218,8 @@ pub struct HostDriver {
     clock_sent_ms: Option<u64>,
     /// How many times each actor was told by a script to evaluate its package.
     evaluations: std::collections::BTreeMap<u32, u8>,
+    /// How many conversations with another actor a script started for each actor.
+    scenes: std::collections::BTreeMap<u32, u8>,
     /// Stage changes of shared quests, for the log (taken by the caller).
     pub stage_notes: Vec<String>,
     /// Guests' death claims the host's game enacted.
@@ -245,6 +289,7 @@ impl HostDriver {
             clock: Vec::new(),
             clock_sent_ms: None,
             evaluations: std::collections::BTreeMap::new(),
+            scenes: std::collections::BTreeMap::new(),
             stage_notes: Vec::new(),
             claims_enacted: 0,
             claims_dropped: 0,
@@ -433,6 +478,17 @@ impl HostDriver {
                 },
             );
         }
+        // A conversation a script started between two actors: the guests' games play it too.
+        for scene in commands::drain_scenes(e) {
+            let n = self.scenes.entry(scene.actor).or_insert(0);
+            *n = n.wrapping_add(1);
+            self.stage_notes.push(format!(
+                "scene: actor {:08x} starts a conversation with {:08x} (topic {:08x})",
+                scene.actor, scene.target, scene.topic
+            ));
+            let field = scene_field(*n, &scene);
+            self.sync.write(FormId(scene.actor), field);
+        }
         // A placed actor that died (or, once it has an entry, lives again).
         for id in life_changes(&changes) {
             let Some(dead) = actors::dead(e, id) else {
@@ -569,6 +625,10 @@ pub struct GuestDriver {
     /// The script last seen changing each form in this game (the guest's own journal): what a
     /// drift of that form is put down to.
     causes: std::collections::BTreeMap<u32, gate::Cause>,
+    /// The host's conversations between actors played in this game, and those that could not be.
+    pub scenes_played: u32,
+    /// See [`GuestDriver::scenes_played`].
+    pub scenes_missed: u32,
     /// Distinct drifts whose cause the journal named, and those it did not (docs/coop/DECISIONS.md
     /// D5, rung 1: the census of what a guest's own scripts write to the shared story).
     pub drift_named: u32,
@@ -627,6 +687,8 @@ impl GuestDriver {
             claimed: BTreeSet::new(),
             life_pending: BTreeSet::new(),
             causes: std::collections::BTreeMap::new(),
+            scenes_played: 0,
+            scenes_missed: 0,
             drift_named: 0,
             drift_unnamed: 0,
             claims_sent: 0,
@@ -839,6 +901,29 @@ impl GuestDriver {
             .map(|(k, en)| (k.form.0, en.field.clone()))
             .collect();
         for (form, field) in due {
+            if let Some(scene) = scene_of(form, &field) {
+                // One that comes with a join or a repair happened before: it is over.
+                if all {
+                    continue;
+                }
+                match gate::applying(e, |e| commands::play_scene(e, &scene)) {
+                    Ok(()) => {
+                        self.scenes_played += 1;
+                        self.healed_notes.push(format!(
+                            "co-op guest: the host's scene: actor {:08x} talks to {:08x} (topic {:08x})",
+                            scene.actor, scene.target, scene.topic
+                        ));
+                    }
+                    Err(why) => {
+                        self.scenes_missed += 1;
+                        self.healed_notes.push(format!(
+                            "co-op guest: the host's scene of actor {:08x} with {:08x} was not played here: {why:?}",
+                            scene.actor, scene.target
+                        ));
+                    }
+                }
+                continue;
+            }
             if !apply_field(e, form, &field) {
                 self.refused += 1;
             }
@@ -863,6 +948,8 @@ fn apply_field(e: &mut Engine, form: u32, field: &Field) -> bool {
             Some(v) => gate::applying(e, |e| forms::set_global_value(e, form, v)),
             None => false,
         },
+        // A host's scene: played by the driver when it comes, never from here.
+        Field::Custom { tag, .. } if *tag == SCENE_TAG => true,
         // A host command: the actor evaluates its package again, as the host's script told its
         // own copy. One that is not in this game now picks its package when it loads anyway.
         Field::Custom { tag, .. } if *tag == EVALUATE_TAG => {

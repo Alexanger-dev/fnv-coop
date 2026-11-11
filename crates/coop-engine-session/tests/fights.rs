@@ -583,3 +583,96 @@ fn a_copy_in_another_space_than_the_hosts_actor_is_not_held() {
     let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
     assert!(close(g.pos, h.pos) && !g.ai, "{g:?} {h:?}");
 }
+
+/// PC run 7, 2026-11-10: Joe Cobb's confrontation with Trudy (a trigger's script says
+/// `GSJoeCobbRef.StartConversation TrudyRef ...`) played in the host's game only. A conversation a
+/// script starts between two actors is the host's: the host's game runs it and tells the guests,
+/// whose games play it once, with both where the host had them. A guest's own script asking for
+/// one is not obeyed (docs/coop/DECISIONS.md D5, condition 5: no double scenes), and its script
+/// still reads past the command's parameters.
+#[test]
+fn a_conversation_between_actors_is_the_hosts_and_plays_once_on_the_guest() {
+    let mut p = Pair::new();
+    // Shared fights are not needed for scenes.
+    p.hd.fight = None;
+    p.gd.fight = None;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.host.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.guest.place_actor(GECKO, HOUSE, [-300.0, 40.0, 0.0], 2.0);
+    p.frames(30);
+    // The guest's own trigger fires first: nothing plays there, and its script goes on.
+    assert_eq!(p.guest.script_start_conversation(RAIDER, GECKO, MQ), 6);
+    assert_eq!(p.guest.conversations(RAIDER).0, 0);
+    assert_eq!(coop_engine::commands::dropped_scenes(&mut p.guest.e), 1);
+    // The host's script starts it: once there, once on the guest, both moved to the host's places.
+    assert_eq!(p.host.script_start_conversation(RAIDER, GECKO, MQ), 6);
+    assert_eq!(p.host.conversations(RAIDER), (1, GECKO, MQ));
+    p.frames(60);
+    assert_eq!(p.guest.conversations(RAIDER), (1, GECKO, MQ));
+    assert_eq!((p.gd.scenes_played, p.gd.scenes_missed), (1, 0));
+    assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
+    assert!(close(p.guest.actor_view(GECKO).pos, [60.0, 20.0, 0.0]));
+    assert_eq!(
+        (p.gd.refused, p.gd.healed, p.gd.sync.desyncs_detected),
+        (0, 0, 0)
+    );
+    assert!(p
+        .hd
+        .stage_notes
+        .iter()
+        .any(|l| l.contains("scene:") && l.contains(&format!("{RAIDER:08x}"))));
+    // A conversation with the player is that player's own: a guest's runs in its own game and
+    // the host's is not sent.
+    assert_eq!(p.guest.script_start_conversation(RAIDER, PLAYER, MQ), 6);
+    assert_eq!(p.guest.conversations(RAIDER), (2, PLAYER, MQ));
+    assert_eq!(p.host.script_start_conversation(GECKO, PLAYER, MQ), 6);
+    p.frames(60);
+    assert_eq!(p.guest.conversations(GECKO).0, 0);
+    assert_eq!(p.gd.scenes_played, 1);
+}
+
+/// A scene that happened before a guest joined is over: it comes with the join and is not played.
+#[test]
+fn a_scene_from_before_the_join_is_not_played() {
+    let mut p = Pair::new();
+    p.hd.fight = None;
+    p.gd.fight = None;
+    for s in [&mut p.host, &mut p.guest] {
+        s.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+        s.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    }
+    p.host.script_start_conversation(RAIDER, GECKO, MQ);
+    p.frames(60);
+    assert_eq!(p.guest.conversations(RAIDER).0, 0);
+    assert_eq!((p.gd.scenes_played, p.gd.scenes_missed), (0, 0));
+}
+
+/// PC run 10, 2026-11-11: an actor held with its AI off kept the pose it had and stood in a
+/// floor. Followed instead, it keeps its own AI: near the host's place it is left alone; further
+/// off for a while it is put there once and goes on by itself.
+#[test]
+fn a_followed_actor_keeps_its_ai_and_is_put_at_the_hosts_place_when_it_strays() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    // Near the host's place: untouched.
+    p.guest.place_actor(RAIDER, HOUSE, [60.0, 20.0, 0.0], 2.0);
+    p.frames(60);
+    let g = p.guest.actor_view(RAIDER);
+    assert!(close(g.pos, [60.0, 20.0, 0.0]) && g.ai, "{g:?}");
+    assert_eq!(p.guest_fight().nudges, 0);
+    // Strayed, but not for long enough yet.
+    p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
+    p.frames(10);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [900.0, 900.0, 0.0]));
+    // Long enough: put at the host's place, its AI still on, and not again while it is there.
+    p.frames(40);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos) && g.ai, "{g:?} {h:?}");
+    assert_eq!(p.guest_fight().nudges, 1);
+    assert!(p.guest_fight().held().is_empty());
+    p.frames(60);
+    assert_eq!(p.guest_fight().nudges, 1);
+}

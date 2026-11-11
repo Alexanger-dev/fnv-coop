@@ -130,6 +130,11 @@ pub(super) fn register(e: &mut Engine) {
         (addr::ACTOR_APPLY_DAMAGE_SLOT, APPLY_DAMAGE_FN),
         (addr::ACTOR_COMBAT_TARGET_SLOT, COMBAT_TARGET_FN),
         (addr::ACTOR_ALARMED_SLOT, ALARMED_FN),
+        (addr::REF_IS_MOBILE_SLOT, super::IS_MOBILE_FN),
+        (
+            addr::ACTOR_START_CONVERSATION_SLOT,
+            super::START_CONVERSATION_FN,
+        ),
     ] {
         e.mem.set_u32(PLAYER_VTABLE + slot, f);
     }

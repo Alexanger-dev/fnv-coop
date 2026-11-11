@@ -529,3 +529,21 @@ hour step.
 ## Not done: followers
 
 A companion that follows the player who hired it, as the host's actor, was not started.
+
+## S18: scenes and followed actors (implemented; docs/coop/DECISIONS.md D5, rung 3; not yet run on a PC)
+
+- **Scenes.** A wrap of the `StartConversation` command's body (`005c8740`, WRAPS step C-5) parses the
+  command's parameters itself (the offset into the script data put back for the body's own parse). A
+  conversation with the player on either side is that player's own and runs as it is. One between two
+  placed actors is the host's: the host's game runs it and notes it (`commands::Scene`: both ids, the topic,
+  the two locations, the flags, both places); a guest's game does not run its own (the parameters are still
+  read past, so the script goes on) and counts it. The host writes a `Field::Custom` (`SCENE_TAG`) on the
+  actor; the guest puts both where the host had them, when they are in that space, and starts the
+  conversation through the actor's virtual slot 0x280 as the body does. One that comes with a join or a
+  repair is not played.
+- **Followed actors** (`NV_COOP_FIGHT=follow`, the viewer's default). PC run 10 showed that a held actor
+  (AI off, moved every frame) keeps the pose it had. Followed, the host's actors keep their own AI on a
+  guest; one further than `FOLLOW_DISTANCE` (200 units) from the host's place for `FOLLOW_MS` (1.5 s) is put
+  there (`fight::nudge`) and picks its package again. A copy in another space than the host's actor is left
+  alone. Holding (`state` and up) remains for the shared fights that need it.
+

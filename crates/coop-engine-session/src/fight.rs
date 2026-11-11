@@ -52,6 +52,12 @@ use coop_engine::fight::{self, Role, Snap};
 use coop_engine::{actors, gate, live};
 use engine_core::Engine;
 
+/// Following (see [`Fight::follow`]): how far from the host's place an actor may be, in the
+/// game's units (about three metres), and for how long, before it is put there.
+pub const FOLLOW_DISTANCE: f32 = 200.0;
+/// See [`FOLLOW_DISTANCE`].
+pub const FOLLOW_MS: u64 = 1500;
+
 /// How much of the fights a run shares (`NV_COOP_FIGHT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Cap {
@@ -133,6 +139,15 @@ pub struct Fight {
     waiting: bool,
     /// Guest: first holds written to the log so far.
     first_holds: u32,
+    /// Guest: follow instead of hold. The host's actors keep their own AI in this game (so they
+    /// walk, sit and talk animated, as PC run 10 showed a held actor does not) and one that has
+    /// been further than [`FOLLOW_DISTANCE`] from the host's place for [`FOLLOW_MS`] is put
+    /// there and picks its package again.
+    pub follow: bool,
+    /// Guest: since when each actor has been that far off.
+    far_since: BTreeMap<u32, u64>,
+    /// Guest: how many times an actor was put at the host's place.
+    pub nudges: u32,
     /// Guest: actors not held because this game's copy is in another space than the host's.
     elsewhere: BTreeSet<u32>,
     /// Host: states published.
@@ -215,6 +230,9 @@ impl Fight {
             hold_after: None,
             waiting: false,
             first_holds: 0,
+            follow: false,
+            far_since: BTreeMap::new(),
+            nudges: 0,
             elsewhere: BTreeSet::new(),
             published: 0,
             hits_applied: 0,
@@ -651,6 +669,36 @@ impl Fight {
                             "co-op fights: actor {id:08x} is dead on the host (alive in its ledger: {}, flags {:04x}): killed here",
                             a.alive, s.flags
                         ));
+                    }
+                    continue;
+                }
+                if self.follow {
+                    let to = s.pos.map(dequant_pos);
+                    let off = fight::place_of(e, id).map(|here| {
+                        (0..3)
+                            .map(|i| (here[i] - to[i]).powi(2))
+                            .sum::<f32>()
+                            .sqrt()
+                    });
+                    match off {
+                        Some(off) if off > FOLLOW_DISTANCE => {
+                            let since = *self.far_since.entry(id).or_insert(now_ms);
+                            if now_ms.saturating_sub(since) >= FOLLOW_MS {
+                                self.far_since.remove(&id);
+                                if fight::nudge(e, id, to, dequant_heading(s.heading)).is_some() {
+                                    self.nudges += 1;
+                                    if self.nudges <= 60 {
+                                        self.say(format!(
+                                            "co-op fights: actor {id:08x} was {off:.0} units from the host's place: put at ({:.0}, {:.0}, {:.0})",
+                                            to[0], to[1], to[2]
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            self.far_since.remove(&id);
+                        }
                     }
                     continue;
                 }

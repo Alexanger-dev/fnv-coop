@@ -570,3 +570,27 @@ pub const PLAYER_WAIT_HOUR: u32 = 0x0094_df80;
 pub const TES_SINGLETON: u32 = 0x011d_ea10;
 /// See [`TES_SINGLETON`].
 pub const TES_RUN_SCRIPTS: u32 = 0x0045_5490;
+
+// Scenes (docs/coop/SPECS.md S18), from `run_005c8740.rs`.
+
+/// The `StartConversation` script command's body (`cdecl`, the eight script-command words: the
+/// parameter info, the script data, the reference the command runs on, the containing reference,
+/// the script, the event list, the result, and a pointer to the offset into the script data).
+pub const CMD_START_CONVERSATION: u32 = 0x005c_8740;
+/// `Script::ParseParameters` (`cdecl`, varargs: the parameter info, the script data, the offset
+/// pointer, the reference, the container, the script, the event list, then one pointer per
+/// parameter). It moves the offset on past the parameters it read.
+pub const SCRIPT_PARSE_PARAMETERS: u32 = 0x005a_ccb0;
+/// `PackageLocation`: its constructor, `SetLocReference` (one word) and destructor; 12 bytes.
+pub const PACKAGE_LOCATION_CONSTRUCT: u32 = 0x0067_f030;
+/// See [`PACKAGE_LOCATION_CONSTRUCT`].
+pub const PACKAGE_LOCATION_SET_REFERENCE: u32 = 0x0067_f3c0;
+/// See [`PACKAGE_LOCATION_CONSTRUCT`].
+pub const PACKAGE_LOCATION_DESTRUCT: u32 = 0x0067_f110;
+/// See [`PACKAGE_LOCATION_CONSTRUCT`].
+pub const PACKAGE_LOCATION_SIZE: u32 = 12;
+/// A reference's virtual slot that says whether it is a mobile object (an actor).
+pub const REF_IS_MOBILE_SLOT: u32 = 0x100;
+/// An actor's virtual slot that starts a conversation with another (nine words: the other, two
+/// locations or 0, two flags, 0, the topic, 0, 0), as the command's body calls it.
+pub const ACTOR_START_CONVERSATION_SLOT: u32 = 0x280;

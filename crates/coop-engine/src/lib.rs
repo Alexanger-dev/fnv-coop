@@ -80,6 +80,9 @@ pub fn install(e: &mut Engine) {
     if e.is_registered(addr::ACTOR_EVALUATE_PACKAGE) {
         e.wrap(commands::EVALUATE, commands::evaluate);
     }
+    if e.is_registered(addr::CMD_START_CONVERSATION) {
+        e.wrap(commands::CONVERSE, commands::converse);
+    }
     let _ = e.ext_free::<commands::Commands>();
     // The gate's slot too, before the threads start.
     let _ = e.ext_free::<gate::Gate>();

@@ -45,6 +45,16 @@ const SETTER: u32 = RAN + 0x40;
 const EVP_SCRIPT: u32 = 0x0150_0400;
 /// Where an actor's count of package evaluations is kept, in its own block.
 const EVALUATIONS_OFFSET: u32 = 0xe80;
+/// Where an actor's conversations are kept, in its own block: how many it started, then the
+/// other's and the topic's addresses of the last.
+const CONVERSATIONS_OFFSET: u32 = 0xe90;
+/// A `StartConversation` command's parameters as the script data would hold them (target, topic,
+/// two locations, two flags), and the offset into the script data.
+const SCENE_ARGS: u32 = RAN + 0x60;
+const SCENE_OFFSET: u32 = RAN + 0x80;
+/// The stand-ins behind two of an actor's virtual slots.
+const IS_MOBILE_FN: u32 = 0x0170_0100;
+const START_CONVERSATION_FN: u32 = 0x0170_0280;
 /// The player, and the arena placed references come from (0x100 bytes each; the count of placed
 /// references is the word at `PLACED`).
 const PLAYER: u32 = 0x0140_0000;
@@ -426,6 +436,47 @@ impl Story {
         e.register(addr::QUEST_SET_STAGE_DONE, set_stage_done);
         e.register(addr::OBJECTIVE_SET_STATE, objective_set_state);
         e.register(addr::ACTOR_KILL, actor_kill);
+        // Scenes: the command's body as the game has it (parse, then the actor's slot), the
+        // parse (six values, the offset moved on by six), and the two virtual slots.
+        e.register(addr::SCRIPT_PARSE_PARAMETERS, |e, a| {
+            for i in 0..6 {
+                let v = e.mem.u32(SCENE_ARGS + 4 * i);
+                e.mem.set_u32(a[7 + i as usize], v);
+            }
+            let at = e.mem.u32(a[2]);
+            e.mem.set_u32(a[2], at + 6);
+            eax(1)
+        });
+        e.register(addr::CMD_START_CONVERSATION, |e, a| {
+            let outs = SCENE_ARGS + 0x40;
+            let mut words = args![a[0], a[1], a[7], a[2], a[3], a[4], a[5]];
+            words.extend((0..6).map(|i| outs + 4 * i));
+            e.call(addr::SCRIPT_PARSE_PARAMETERS, &words);
+            let (target, topic) = (e.mem.u32(outs), e.mem.u32(outs + 4));
+            if a[2] != 0 && target != 0 {
+                e.vcall(
+                    a[2],
+                    addr::ACTOR_START_CONVERSATION_SLOT,
+                    &args![target, 0u32, 0u32, 1u32, 0u32, 0u32, topic, 0u32, 0u32],
+                );
+            }
+            eax(1)
+        });
+        e.register(IS_MOBILE_FN, |_, _| eax(1));
+        e.register(START_CONVERSATION_FN, |e, a| {
+            let at = a[0] + CONVERSATIONS_OFFSET;
+            bump(e, at);
+            e.mem.set_u32(at + 4, a[1]);
+            e.mem.set_u32(at + 8, a[7]);
+            Ret::default()
+        });
+        for f in [
+            addr::PACKAGE_LOCATION_CONSTRUCT,
+            addr::PACKAGE_LOCATION_SET_REFERENCE,
+            addr::PACKAGE_LOCATION_DESTRUCT,
+        ] {
+            e.register(f, |_, _| Ret::default());
+        }
         e.register(addr::ACTOR_EVALUATE_PACKAGE, |e, a| {
             let at = a[0] + EVALUATIONS_OFFSET;
             let n = e.mem.u32(at);
@@ -719,6 +770,39 @@ impl Story {
     pub fn evaluations(&mut self, actor: u32) -> u32 {
         let a = crate::actors::actor(&mut self.e, actor).expect("an actor of the story");
         self.e.mem.u32(a + EVALUATIONS_OFFSET)
+    }
+
+    /// A script on `actor` says `StartConversation target topic`. Returns how far the script's
+    /// offset moved (6 when the command's parameters were read).
+    pub fn script_start_conversation(&mut self, actor: u32, target: u32, topic: u32) -> u32 {
+        let form = |s: &mut Story, id: u32| forms::form(&mut s.e, id).expect("a form of the story");
+        let (a, t, about) = (form(self, actor), form(self, target), form(self, topic));
+        for (i, v) in [t, about, 0, 0, 1, 0].into_iter().enumerate() {
+            self.e.mem.set_u32(SCENE_ARGS + 4 * i as u32, v);
+        }
+        self.e.mem.set_u32(SCENE_OFFSET, 0);
+        self.e.call(
+            addr::CMD_START_CONVERSATION,
+            &args![0u32, 0u32, a, 0u32, 0u32, 0u32, 0u32, SCENE_OFFSET],
+        );
+        self.e.mem.u32(SCENE_OFFSET)
+    }
+
+    /// The conversations `actor` started: how many, and the ids of the other and the topic of
+    /// the last.
+    pub fn conversations(&mut self, actor: u32) -> (u32, u32, u32) {
+        let a = forms::form(&mut self.e, actor).expect("an actor of the story");
+        let at = a + CONVERSATIONS_OFFSET;
+        let id = |s: &mut Story, form: u32| match form {
+            0 => 0,
+            f => s.e.mem.u32(f + addr::FORM_ID_OFFSET),
+        };
+        let (n, other, topic) = (
+            self.e.mem.u32(at),
+            self.e.mem.u32(at + 4),
+            self.e.mem.u32(at + 8),
+        );
+        (n, id(self, other), id(self, topic))
     }
 
     /// Kills a placed actor as a lethal hit by this game's player does.

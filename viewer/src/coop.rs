@@ -322,15 +322,24 @@ impl Coop {
     /// fights: the shared fights `NV_COOP_FIGHT` asks for; `None` for `off` or without the ladder.
     /// Returns the line that says so.
     fn fight(guest: bool, ladder: bool) -> (Option<session::fight::Fight>, String) {
-        // Unset is off: in PC run 9 `state` held the host's actors on the guest as meant, but
-        // the host's own story stopped (its dog was dead to its dialogue) and actors stood in
-        // floors and ceilings. Until that is understood it runs only when asked for.
+        // Unset is `follow`: the host's actors keep their own AI on a guest and are put at the
+        // host's place when they have strayed (PC run 10: held with their AI off they kept the
+        // pose they had, in floors and ceilings). `state` and up hold them as before; `off`.
         let ask = match std::env::var("NV_COOP_FIGHT") {
             Ok(v) if !v.trim().is_empty() => v,
-            _ => "off".into(),
+            _ => "follow".into(),
         };
         if ask.trim() == "off" || !ladder {
             return (None, "co-op fights: off".into());
+        }
+        if ask.trim() == "follow" {
+            let mut fight = session::fight::Fight::new(guest, session::fight::Cap::State);
+            fight.follow = true;
+            return (
+                Some(fight),
+                "co-op fights: the host's actors are followed (NV_COOP_FIGHT=off turns it off)"
+                    .into(),
+            );
         }
         let cap = session::fight::Cap::parse(&ask);
         (
@@ -660,12 +669,15 @@ impl Coop {
                     g.refused,
                     g.heal_refused,
                 ) + &format!(
-                    ", own quest scripts run {}, objectives put back in the Pip-Boy {}, deaths told to the host {}, drifts with a named cause {} (unknown {})",
+                    ", own quest scripts run {}, objectives put back in the Pip-Boy {}, deaths told to the host {}, drifts with a named cause {} (unknown {}), the host's scenes played {} (not played {}), own scenes between actors dropped {}",
                     coop_engine::gate::ran_own(e),
                     g.relisted,
                     g.claims_sent,
                     g.drift_named,
-                    g.drift_unnamed
+                    g.drift_unnamed,
+                    g.scenes_played,
+                    g.scenes_missed,
+                    coop_engine::commands::dropped_scenes(e)
                 )
                     + "; "
                     + &g.ladder.as_ref().map_or("live: off".into(), Ladder::status)

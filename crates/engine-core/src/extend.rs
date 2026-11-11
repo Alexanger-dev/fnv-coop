@@ -129,6 +129,14 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-4",
     },
+    // The StartConversation script command's body: co-op's host notes a conversation a script
+    // starts between two actors, a guest drops its own and plays the host's
+    // (docs/coop/SPECS.md S18).
+    Entry {
+        addr: 0x005c_8740,
+        owners: COOP,
+        step: "C-5",
+    },
     // ScriptRunner::Run: the script context pushed and popped; co-op's guest gate (the story's
     // scripts run on the host only, docs/coop/SPECS.md S5).
     Entry {
