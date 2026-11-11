@@ -514,6 +514,12 @@ impl Coop {
                             }
                             g.fight = fight;
                             lines.push(line);
+                            g.proposals_on = std::env::var("NV_COOP_PROPOSE")
+                                .map_or(true, |v| v.trim() != "off");
+                            lines.push(format!(
+                                "co-op proposals: what this game's own object scripts do to the story is {} (NV_COOP_PROPOSE=off puts it back as before)",
+                                if g.proposals_on { "proposed to the host" } else { "put back" }
+                            ));
                             let (on, line) = Self::social_on();
                             g.social_on = on;
                             lines.push(line);

@@ -43,6 +43,9 @@ const SETTER_SCRIPT: u32 = 0x0150_0300;
 const SETTER: u32 = RAN + 0x40;
 /// An object script whose body is `evp` on the reference it runs on.
 const EVP_SCRIPT: u32 = 0x0150_0400;
+/// An object script with a form id of its own (`VCG02TargetSCRIPT`'s) that sets a stage, counts
+/// in a quest's variable and switches its reference off.
+const BOTTLE_SCRIPT: u32 = 0x0150_0600;
 /// An object script whose body is `Disable` on the reference it runs on (a trigger that spends
 /// itself).
 const SPEND_SCRIPT: u32 = 0x0150_0500;
@@ -317,6 +320,18 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
         e.call(addr::ACTOR_EVALUATE_PACKAGE, &args![a[2], 0u32, 1u32]);
     }
     if a[1] == SPEND_SCRIPT {
+        e.call(addr::REF_DISABLE, &args![a[2]]);
+    }
+    if a[1] == BOTTLE_SCRIPT {
+        // A target's script: the stage, the quest's first variable up by one, itself off.
+        let (quest, stage) = (e.mem.u32(SETTER + 4), e.mem.u32(SETTER + 8) as u8);
+        forms::set_quest_stage(e, quest, stage);
+        if let Some((index, bits)) =
+            crate::vars::quest_vars(e, quest).and_then(|v| v.first().copied())
+        {
+            let up = (f64::from_bits(bits) + 1.0).to_bits();
+            crate::vars::set_quest_var(e, quest, index, up);
+        }
         e.call(addr::REF_DISABLE, &args![a[2]]);
     }
     if a[1] == SETTER_SCRIPT {
@@ -933,6 +948,21 @@ impl Story {
     /// Enables or disables a placed reference as a script's `Enable` and `Disable` do.
     pub fn set_disabled(&mut self, reference: u32, off: bool) {
         assert!(crate::actors::set_disabled(&mut self.e, reference, off));
+    }
+
+    /// Runs a target's own script on `reference` (a bottle shot): `quest`'s `stage` set, its
+    /// first variable up by one, the reference switched off.
+    pub fn shoot_target(&mut self, reference: u32, quest: u32, stage: u8) {
+        let r = forms::form(&mut self.e, reference).expect("a reference of the story");
+        self.e.mem.set_u32(SETTER + 4, quest);
+        self.e.mem.set_u32(SETTER + 8, u32::from(stage));
+        self.e
+            .mem
+            .set_u32(BOTTLE_SCRIPT + addr::FORM_ID_OFFSET, 0x0010_a1ef);
+        self.e.call(
+            addr::SCRIPT_RUNNER_RUN,
+            &args![0u32, BOTTLE_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
     }
 
     /// Makes a placed reference a trigger volume (it has a primitive).

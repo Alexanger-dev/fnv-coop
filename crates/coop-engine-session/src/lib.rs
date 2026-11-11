@@ -251,6 +251,10 @@ pub struct HostDriver {
     pub claims_dropped: u32,
     /// Triggers this game's player spent that were not put into the story (each player's own).
     pub triggers_kept: u32,
+    /// Guests' proposals this game did for everyone, and those it did not.
+    pub proposals_enacted: u32,
+    /// (see `proposals_enacted`)
+    pub proposals_dropped: u32,
     /// What happened to each claim, for the log (taken by the caller).
     pub claim_notes: Vec<String>,
     /// Quest records or variables that could not be carried exactly (see [`record::encode`]; a
@@ -307,6 +311,7 @@ impl HostDriver {
     ) -> HostDriver {
         let mut sync = HostSync::new(cfg);
         sync.claim_tags.insert(LIFE_TAG);
+        sync.claim_tags.insert(PROPOSE_TAG);
         HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
@@ -319,6 +324,8 @@ impl HostDriver {
             claims_enacted: 0,
             claims_dropped: 0,
             triggers_kept: 0,
+            proposals_enacted: 0,
+            proposals_dropped: 0,
             claim_notes: Vec::new(),
             unencodable: 0,
             ladder: None,
@@ -350,6 +357,10 @@ impl HostDriver {
     fn enact_claims(&mut self, e: &mut Engine) {
         for (from, form, field) in std::mem::take(&mut self.sync.claims) {
             let id = form.0;
+            if let Some(p) = Proposal::read(&field) {
+                self.enact_proposal(e, from, id, p);
+                continue;
+            }
             if life_value(&field) != Some(true) || !actors::shareable(id) {
                 self.claims_dropped += 1;
                 continue;
@@ -372,6 +383,91 @@ impl HostDriver {
                     ));
                 }
             }
+        }
+    }
+
+    /// Does in this game what a guest's script did in that guest's (D5, rung 2), if it still fits:
+    /// a variable only from the value the guest's script saw (a count that has moved on since
+    /// takes the guest's step instead), a reference only from the state it saw, a stage or an
+    /// objective only when this game has not got there. This game's own scripts run for it (a
+    /// stage's result), and the story carries the outcome to every guest.
+    fn enact_proposal(&mut self, e: &mut Engine, from: PlayerId, id: u32, p: Proposal) {
+        let done = match p {
+            Proposal::Var {
+                index,
+                before,
+                after,
+            } => {
+                let now = vars::quest_vars(e, id)
+                    .and_then(|vs| vs.into_iter().find(|(i, _)| *i == u32::from(index)))
+                    .map(|(_, bits)| bits);
+                let to = match now {
+                    Some(now) if now == before => Some(after),
+                    Some(now) if now == after => None,
+                    Some(now) => {
+                        // Both moved it (two bottles shot at once): the guest's step on top.
+                        let v =
+                            f64::from_bits(now) + f64::from_bits(after) - f64::from_bits(before);
+                        v.is_finite().then_some(v.to_bits())
+                    }
+                    None => None,
+                };
+                match to {
+                    Some(bits) if vars::set_quest_var(e, id, u32::from(index), bits) => {
+                        self.sync
+                            .write(FormId(id), Field::ScriptVar { index, bits });
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            Proposal::Disabled { before, after } => {
+                actors::shareable(id)
+                    && !actors::trigger_volume(e, id)
+                    && actors::disabled(e, id) == Some(before)
+                    && before != after
+                    && actors::set_disabled(e, id, after)
+                    && {
+                        self.sync
+                            .write(FormId(id), Field::RefDisabled { disabled: after });
+                        true
+                    }
+            }
+            Proposal::Stage(n) => match quest::record(e, id) {
+                Some(r) if !r.done.contains(&n) => {
+                    let ran = forms::set_quest_stage(e, id, n);
+                    self.write_quest(e, id);
+                    ran
+                }
+                _ => false,
+            },
+            Proposal::Objective { number, state } => match quest::record(e, id) {
+                Some(mut r) if r.objectives.iter().any(|o| o.0 == number && o.1 != state) => {
+                    for o in r.objectives.iter_mut().filter(|o| o.0 == number) {
+                        o.1 = state;
+                    }
+                    let ok = quest::apply(e, &r);
+                    self.write_quest(e, id);
+                    ok
+                }
+                _ => false,
+            },
+        };
+        if done {
+            self.proposals_enacted += 1;
+        } else {
+            self.proposals_dropped += 1;
+        }
+        if self.proposals_enacted + self.proposals_dropped <= 80 {
+            self.claim_notes.push(format!(
+                "player {}'s game did {p:?} to {id:08x}: {}",
+                from.0,
+                if done {
+                    "done here for everyone"
+                } else {
+                    "not done here (it no longer fits)"
+                }
+            ));
         }
     }
 
@@ -666,6 +762,19 @@ pub struct GuestDriver {
     /// Triggers this player spent (their own script switched them when the player walked in),
     /// with what the host's story said of each then: left as this game has them.
     own_triggers: std::collections::BTreeMap<u32, Option<bool>>,
+    /// The time of the last heal.
+    now_ms: u64,
+    /// Proposals made and not yet answered: what this game held then, and until when it is left.
+    proposed: std::collections::BTreeMap<(u32, u8, u32), (Field, u64)>,
+    /// Proposals to send.
+    proposals_out: Vec<(FormId, Field)>,
+    /// Whether this game's own object scripts' changes are proposed to the host
+    /// (`NV_COOP_PROPOSE=off` turns it off: they are put back as before).
+    pub proposals_on: bool,
+    /// Proposals sent to the host, and those the host let lapse (put back here).
+    pub proposals_sent: u32,
+    /// (see `proposals_sent`)
+    pub proposals_lapsed: u32,
     /// The count of the last scene seen for each actor, and whether the join's state is in.
     scene_seen: std::collections::BTreeMap<u32, u8>,
     joined: bool,
@@ -732,6 +841,12 @@ impl GuestDriver {
             life_pending: BTreeSet::new(),
             causes: std::collections::BTreeMap::new(),
             own_triggers: std::collections::BTreeMap::new(),
+            now_ms: 0,
+            proposed: std::collections::BTreeMap::new(),
+            proposals_out: Vec::new(),
+            proposals_on: true,
+            proposals_sent: 0,
+            proposals_lapsed: 0,
             scene_seen: std::collections::BTreeMap::new(),
             joined: false,
             scenes_played: 0,
@@ -810,8 +925,15 @@ impl GuestDriver {
             w.apply(e, &self.sync.store);
         }
         self.keep_clock(e, now_ms);
+        let claims = std::mem::take(&mut self.proposals_out);
+        if !claims.is_empty() {
+            for msg in self.sync.send_intent(Epoch(0), claims) {
+                send(net, PlayerId::HOST, &msg, &mut self.send_failures);
+            }
+        }
         self.steps += 1;
         if self.steps % self.heal_every.max(1) == 0 {
+            self.now_ms = now_ms;
             self.heal(e);
             // world
             if let Some(w) = self.world.as_mut() {
@@ -830,6 +952,28 @@ impl GuestDriver {
             }
             // A trigger this player walked into and its own script spent: this player's own from
             // now, whatever the host's story says of it today.
+            // A reference the story says nothing of yet, switched by one of this game's own
+            // object scripts (a target shot, a thing used up): proposed straight from the
+            // journal, since there is nothing in the story to compare it with.
+            if actors::is_ref_type(c.kind)
+                && c.flags & addr::CHANGE_FORM_FLAGS != 0
+                && actors::shareable(c.form)
+                && c.cause
+                    .is_some_and(|k| k.script != 0 && !k.quest_script && k.owner_quest == 0)
+                && self.proposals_on
+                && self.story_disabled(c.form).is_none()
+                && !actors::trigger_volume(e, c.form)
+                && self.sync.phase() == GuestPhase::Active
+            {
+                if let Some(now) = actors::disabled(e, c.form) {
+                    let p = Proposal::Disabled {
+                        before: !now,
+                        after: now,
+                    };
+                    self.proposals_out.push((FormId(c.form), p.field()));
+                    self.proposals_sent += 1;
+                }
+            }
             if actors::own_trigger_change(e, c) {
                 let story = self.story_disabled(c.form);
                 if self.own_triggers.insert(c.form, story).is_none() {
@@ -932,6 +1076,58 @@ impl GuestDriver {
         }
     }
 
+    /// Whether a difference from the story is left alone for now: it is what one of this game's
+    /// own object scripts did (not a quest's script, which the gate holds; not a line of dialogue,
+    /// which the conversations carry), it has been proposed to the host, and the host has had
+    /// less than [`PROPOSE_HOLD_MS`] to answer. The first time, the proposal is queued. When the
+    /// time is up the difference is put back like any other.
+    fn proposes(&mut self, m: &Mismatch) -> bool {
+        let Some(found) = &m.found else {
+            return false;
+        };
+        let key = (m.form, m.want.kind(), sub_of(&m.want));
+        if let Some((held, until)) = self.proposed.get(&key) {
+            if held == found && self.now_ms < *until {
+                return true;
+            }
+            if held == found {
+                // The host did not take it: put back, and not proposed again from this cause.
+                self.proposed.remove(&key);
+                self.causes.remove(&m.form);
+                self.proposals_lapsed += 1;
+                return false;
+            }
+            self.proposed.remove(&key);
+        }
+        let own_script = self
+            .causes
+            .get(&m.form)
+            .is_some_and(|c| c.script != 0 && !c.quest_script && c.owner_quest == 0);
+        if !own_script || !self.proposals_on || self.sync.phase() != GuestPhase::Active {
+            return false;
+        }
+        let ps = Proposal::between(m.form, &m.want, found);
+        if ps.is_empty() {
+            return false;
+        }
+        for p in &ps {
+            self.proposals_out.push((FormId(m.form), p.field()));
+        }
+        self.proposals_sent += ps.len() as u32;
+        if self.proposals_sent <= 80 {
+            self.healed_notes.push(format!(
+                "co-op guest: this game's script {:08x} did {ps:?} to {:08x}: proposed to the host",
+                self.causes.get(&m.form).map_or(0, |c| c.script),
+                m.form
+            ));
+        }
+        // The cause has been used: a later difference on this form needs a cause of its own.
+        self.causes.remove(&m.form);
+        self.proposed
+            .insert(key, (found.clone(), self.now_ms + PROPOSE_HOLD_MS));
+        true
+    }
+
     /// Applies again every replica entry the guest's game does not hold ([`echo`]), and puts back
     /// into the player's objective list any shown objective of a shared quest that is not in it.
     pub fn heal(&mut self, e: &mut Engine) {
@@ -949,6 +1145,9 @@ impl GuestDriver {
         }
         for m in echo(e, &self.sync.store) {
             if self.own_trigger_keeps(m.form, &m.want) {
+                continue;
+            }
+            if self.proposes(&m) {
                 continue;
             }
             if apply_field(e, m.form, &m.want) {
@@ -1108,6 +1307,145 @@ pub struct Mismatch {
     pub want: Field,
     /// What the game holds, as the same kind of field (`None`: no such form, or not of that kind).
     pub found: Option<Field>,
+}
+
+/// The tag of a proposal (D5, rung 2): what one of a guest's own object scripts did to the shared
+/// story in that guest's game (a bottle shot, a trap sprung), sent to the host as a claim. The
+/// host's game does it for everyone if it still fits; the guest's game is not put back meanwhile.
+pub const PROPOSE_TAG: u16 = 0x5052;
+/// How long a guest leaves its own change alone while the host decides.
+pub const PROPOSE_HOLD_MS: u64 = 3000;
+
+/// One thing a guest's script did, as the host can do it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Proposal {
+    /// A quest script's variable went from `before` to `after`.
+    Var { index: u16, before: u64, after: u64 },
+    /// A reference was switched off or on.
+    Disabled { before: bool, after: bool },
+    /// A quest's stage was set.
+    Stage(u8),
+    /// A quest's objective was given a state.
+    Objective { number: u32, state: u32 },
+}
+
+impl Proposal {
+    /// As a claim's field.
+    pub fn field(&self) -> Field {
+        let mut data = Vec::new();
+        match *self {
+            Proposal::Var {
+                index,
+                before,
+                after,
+            } => {
+                data.push(1);
+                data.extend(index.to_le_bytes());
+                data.extend(before.to_le_bytes());
+                data.extend(after.to_le_bytes());
+            }
+            Proposal::Disabled { before, after } => data.extend([2, before as u8, after as u8]),
+            Proposal::Stage(n) => data.extend([3, n]),
+            Proposal::Objective { number, state } => {
+                data.push(4);
+                data.extend(number.to_le_bytes());
+                data.extend(state.to_le_bytes());
+            }
+        }
+        Field::Custom {
+            tag: PROPOSE_TAG,
+            data,
+        }
+    }
+
+    /// Reads a claim's field; `None` for anything else or a malformed one.
+    pub fn read(f: &Field) -> Option<Proposal> {
+        let Field::Custom { tag, data } = f else {
+            return None;
+        };
+        if *tag != PROPOSE_TAG {
+            return None;
+        }
+        let u64_at = |i: usize| {
+            data.get(i..i + 8)
+                .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+        };
+        let u32_at = |i: usize| {
+            data.get(i..i + 4)
+                .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        };
+        match (data.first()?, data.len()) {
+            (1, 19) => Some(Proposal::Var {
+                index: u16::from_le_bytes([data[1], data[2]]),
+                before: u64_at(3)?,
+                after: u64_at(11)?,
+            }),
+            (2, 3) => Some(Proposal::Disabled {
+                before: data[1] != 0,
+                after: data[2] != 0,
+            }),
+            (3, 2) => Some(Proposal::Stage(data[1])),
+            (4, 9) => Some(Proposal::Objective {
+                number: u32_at(1)?,
+                state: u32_at(5)?,
+            }),
+            _ => None,
+        }
+    }
+
+    /// What a guest's game holding `found` where the story has `want` proposes.
+    pub fn between(form: u32, want: &Field, found: &Field) -> Vec<Proposal> {
+        match (want, found) {
+            (
+                Field::ScriptVar {
+                    index,
+                    bits: before,
+                },
+                Field::ScriptVar { bits: after, .. },
+            ) => {
+                vec![Proposal::Var {
+                    index: *index,
+                    before: *before,
+                    after: *after,
+                }]
+            }
+            (Field::RefDisabled { disabled: before }, Field::RefDisabled { disabled: after }) => {
+                vec![Proposal::Disabled {
+                    before: *before,
+                    after: *after,
+                }]
+            }
+            _ => {
+                let (Some(w), Some(f)) = (record::decode(form, want), record::decode(form, found))
+                else {
+                    return Vec::new();
+                };
+                let mut out: Vec<Proposal> = f
+                    .done
+                    .iter()
+                    .filter(|n| !w.done.contains(n))
+                    .map(|n| Proposal::Stage(*n))
+                    .collect();
+                for (n, state) in &f.objectives {
+                    if w.objectives.iter().find(|o| o.0 == *n).map(|o| o.1) != Some(*state) {
+                        out.push(Proposal::Objective {
+                            number: *n,
+                            state: *state,
+                        });
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+/// What tells two fields of one kind on one form apart (a variable's index).
+fn sub_of(f: &Field) -> u32 {
+    match f {
+        Field::ScriptVar { index, .. } => u32::from(*index),
+        _ => 0,
+    }
 }
 
 /// Reads the guest's game back for every quest record, quest variable and global in `store` and

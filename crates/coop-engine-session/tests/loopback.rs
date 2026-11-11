@@ -1117,6 +1117,81 @@ fn a_reference_that_is_no_trigger_and_spends_itself_is_still_shared() {
     assert_eq!(guest.disabled(CHET), Some(false));
 }
 
+/// PC run 16, 2026-11-11: the guest shot Sunny's bottles and the count stayed the host's; only
+/// the host's shots counted. What a guest's own object script does to the story (D5, rung 2) is
+/// proposed to the host, whose game does it for everyone: the stage (with its result script, on
+/// the host only), the variable, the reference switched off. The guest's game is not put back
+/// meanwhile.
+#[test]
+fn what_a_guests_own_object_script_does_is_done_by_the_host_for_everyone() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    let ran = host.scripts_run();
+    let var = |s: &mut Story| coop_engine::vars::quest_vars(&mut s.e, MQ).unwrap()[0].1;
+    let before = f64::from_bits(var(&mut host));
+    guest.shoot_target(CHET, MQ, 20);
+    frames(
+        60,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(f64::from_bits(var(&mut host)), before + 1.0);
+    assert_eq!(host.disabled(CHET), Some(true));
+    assert!(coop_engine::quest::record(&mut host.e, MQ)
+        .unwrap()
+        .done
+        .contains(&20));
+    assert!(
+        host.scripts_run() > ran,
+        "the stage's result script ran on the host"
+    );
+    assert_same_game(&mut host, &mut guest);
+    assert_eq!(gd.healed, 0, "{:?}", gd.healed_notes);
+    assert!(hd.proposals_enacted >= 3 && gd.proposals_sent >= 3);
+    // The host's player shoots one, then the guest's another: both count.
+    host.set_disabled(CHET, false);
+    host.shoot_target(SUNNY, MQ, 20);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    guest.shoot_target(CHET, MQ, 20);
+    frames(
+        80,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(f64::from_bits(var(&mut host)), before + 3.0);
+    assert_same_game(&mut host, &mut guest);
+    assert_eq!((gd.refused, gd.sync.desyncs_detected), (0, 0));
+}
+
 /// D5, rung 1 (the census): a shared quest a guest's own script advanced is put back, as before,
 /// and the log names the script that did it. Nothing else changes.
 #[test]

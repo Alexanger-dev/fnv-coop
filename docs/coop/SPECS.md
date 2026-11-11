@@ -603,3 +603,34 @@ PC run 13 (2026-11-11), from the two logs and the game's data.
   have (fleeing) stays where this game has it. A body lies where each game dropped it. A led actor has no
   walk animation.
 
+## S21: proposals (D5, rung 2; implemented; not yet run on a PC)
+
+PC run 16: the guest shot Sunny's bottles (`VCG02TargetSCRIPT`, `0010a1ef`: `set VCG02.nTargetCount to
+VCG02.nTargetCount + 1`, `SetObjectiveCompleted`, a stage) and the heal put each change back.
+
+- **What is proposed.** A difference between a guest's game and the story whose cause, by the guest's
+  journal, is one of its own object scripts: a script with a form id that is not a quest's (the gate holds
+  those) and not a dialogue result (id 0; the conversations carry those). A script variable of a quest
+  (`before`, `after`), a reference switched off or on, a quest's stage newly done, an objective's new state.
+  A reference the story has no entry for is proposed straight from the journal.
+- **The claim.** `PROPOSE_TAG` (`0x5052`), sent with the guest's other claims. The guest leaves its own
+  change alone for `PROPOSE_HOLD_MS` (3 s); if the story has not come to agree by then it is put back.
+- **The host.** A variable is set to `after` when the host's is still `before`; left when it is already
+  `after`; otherwise the guest's step is added on top. A reference is switched only from the state the
+  guest saw, never a trigger volume. A stage is set through the game's `SetStage` (its result script runs,
+  on the host) when not yet done; an objective's state through the quest's own setter. The outcome goes
+  into the story for every guest.
+- **Switch.** `NV_COOP_PROPOSE=off` on a guest: put back as before.
+- **Known limits, recorded.** Two players changing one counter inside one round trip to the same value
+  count once (the host cannot tell "both set it to 1" from "both added 1"). What the script said or gave
+  to "the player" happens in the game it ran in only. A conversation between two actors that a guest's
+  script asked for is still dropped, not proposed. Sunny's own lines and packages aimed at "the player"
+  are the host's player's.
+
+## S13 addendum: following with the fights shared
+
+`NV_COOP_FIGHT=follow-damage`, `follow-threat`, `follow-full`: a followed actor keeps its AI, is in the set
+the hit wrap reads (a guest's hit on it is a claim for the host; its own blows on the guest's player are
+dropped, the host's game says what hits), and has the host's health. PC run 16 at `follow-threat`: geckos
+died to the guest's shots on both games and turned on the guest.
+
