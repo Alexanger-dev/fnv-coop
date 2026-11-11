@@ -50,6 +50,9 @@ const EVALUATIONS_OFFSET: u32 = 0xe80;
 const CONVERSATIONS_OFFSET: u32 = 0xe90;
 /// A `StartConversation` command's parameters as the script data would hold them (target, topic,
 /// two locations, two flags), and the offset into the script data.
+/// Where an actor's packages are kept, in its own block: the one it runs, then the one this
+/// game's own schedule and conditions would pick for it.
+const PACKAGE_OFFSET: u32 = 0xea0;
 const SCENE_ARGS: u32 = RAN + 0x60;
 const SCENE_OFFSET: u32 = RAN + 0x80;
 /// The stand-ins behind two of an actor's virtual slots.
@@ -110,6 +113,8 @@ pub struct StorySpec {
     pub exteriors: Vec<(u32, u32)>,
     /// Placed NPCs' reference ids: alive, each with a script that runs when it dies.
     pub actors: Vec<u32>,
+    /// Packages' form ids.
+    pub packages: Vec<u32>,
 }
 
 /// One machine's engine holding a [`StorySpec`].
@@ -390,6 +395,13 @@ impl Story {
             entries.push((*id, a));
             slot += SLOT;
         }
+        for id in &spec.packages {
+            e.mem
+                .set_u8(slot + addr::FORM_TYPE_OFFSET, addr::FORM_TYPE_PACKAGE);
+            e.mem.set_u32(slot + addr::FORM_ID_OFFSET, *id);
+            entries.push((*id, slot));
+            slot += SLOT;
+        }
         for id in &spec.cells {
             let c = slot;
             e.mem.set_u8(c + addr::FORM_TYPE_OFFSET, FORM_TYPE_CELL);
@@ -489,12 +501,24 @@ impl Story {
         ] {
             e.register(f, |_, _| Ret::default());
         }
+        // An evaluation picks the actor's package through the list's function, as the game's.
         e.register(addr::ACTOR_EVALUATE_PACKAGE, |e, a| {
             let at = a[0] + EVALUATIONS_OFFSET;
             let n = e.mem.u32(at);
             e.mem.set_u32(at, n + 1);
+            let picked = e
+                .call(addr::PACKAGE_LIST_FIND_CURRENT, &args![0u32, a[0]])
+                .u32();
+            e.mem.set_u32(a[0] + PACKAGE_OFFSET, picked);
             Ret::default()
         });
+        e.register(addr::PACKAGE_LIST_FIND_CURRENT, |e, a| {
+            eax(e.mem.u32(a[1] + PACKAGE_OFFSET + 4))
+        });
+        e.register(addr::ACTOR_GET_CURRENT_EDITOR_PACKAGE, |e, a| {
+            eax(e.mem.u32(a[0] + PACKAGE_OFFSET))
+        });
+        e.register(addr::PACKAGE_PROCEDURE_TYPE, |_, _| eax(0));
         e.register(addr::PLAYER_UPDATE_OBJECTIVE, player_update_objective);
         e.register(addr::QUEST_GET_CURRENT_STAGE, |e, a| {
             eax(u32::from(e.mem.u8(a[0] + addr::QUEST_CURRENT_STAGE_OFFSET)))
@@ -817,6 +841,21 @@ impl Story {
         (n, id(self, other), id(self, topic))
     }
 
+    /// This game's own schedule and conditions now pick `package` for `actor`, and the actor
+    /// evaluates (as the game's AI does by itself).
+    pub fn set_own_package(&mut self, actor: u32, package: u32) {
+        let a = crate::actors::actor(&mut self.e, actor).expect("an actor of the story");
+        let p = forms::form(&mut self.e, package).expect("a package of the story");
+        self.e.mem.set_u32(a + PACKAGE_OFFSET + 4, p);
+        self.e
+            .call(addr::ACTOR_EVALUATE_PACKAGE, &args![a, 1u32, 1u32]);
+    }
+
+    /// The form id of the package `actor` runs (0 for none).
+    pub fn package(&mut self, actor: u32) -> u32 {
+        crate::commands::current_package(&mut self.e, actor).expect("an actor of the story")
+    }
+
     /// Kills a placed actor as a lethal hit by this game's player does.
     pub fn kill(&mut self, actor: u32) {
         let a = crate::actors::actor(&mut self.e, actor).expect("an actor of the story");
@@ -873,6 +912,7 @@ mod tests {
             cells: vec![0x0010_5a00, 0x0010_5a01],
             exteriors: vec![(0x0010_5b00, 0x0000_da7e)],
             actors: vec![0x0010_4f25],
+            packages: vec![],
         }
     }
 

@@ -171,6 +171,14 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-6",
     },
+    // PackageList::FindCurrentPackage (list, reference): on a co-op guest an actor of the host's
+    // runs the package the host's copy runs, whatever this game's own conditions would pick
+    // (docs/coop/SPECS.md S19).
+    Entry {
+        addr: 0x0067_e780,
+        owners: COOP,
+        step: "C-7",
+    },
     Entry {
         addr: 0x0076_1a20,
         owners: COOP,

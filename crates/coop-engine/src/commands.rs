@@ -3,7 +3,8 @@
 //! package again. A stage's result script says `SunnyREF.evp` so she acts on the new stage at
 //! once; that script runs on the host only, and the guest's copy of her would stand still.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use engine_core::extend::{Owner, WrapSlot};
@@ -22,6 +23,98 @@ pub struct Commands {
     scenes: Mutex<Vec<Scene>>,
     /// A guest's own conversations between two actors, dropped.
     dropped: AtomicU32,
+    /// Guest: the package the host's copy of each actor runs (reference id to package id).
+    wanted: Mutex<BTreeMap<u32, u32>>,
+    /// Guest: whether those packages are given to this game's copies.
+    packages_on: AtomicBool,
+    /// Guest: how many evaluations were answered with the host's package.
+    given: AtomicU32,
+}
+
+pub(crate) const FIND_PACKAGE: WrapSlot =
+    WrapSlot::new(Owner::Coop, addr::PACKAGE_LIST_FIND_CURRENT);
+
+/// The form id of the package actor `id` runs in this game now (0: none, or one made while
+/// playing, which the other game does not have); `None` when the actor is not here.
+pub fn current_package(e: &mut Engine, id: u32) -> Option<u32> {
+    let a = actors::actor(e, id)?;
+    if !e.is_registered(addr::ACTOR_GET_CURRENT_EDITOR_PACKAGE) {
+        return Some(0);
+    }
+    let package = e
+        .call(addr::ACTOR_GET_CURRENT_EDITOR_PACKAGE, &args![a])
+        .u32();
+    if package == 0 {
+        return Some(0);
+    }
+    let pid = e.mem.u32(package.wrapping_add(addr::FORM_ID_OFFSET));
+    Some(if pid < actors::FIRST_DYNAMIC_ID {
+        pid
+    } else {
+        0
+    })
+}
+
+/// Guest: the host's copy of actor `actor` runs package `package` (0: none this game has; this
+/// game's own choice stands).
+pub fn set_wanted_package(e: &mut Engine, actor: u32, package: u32) {
+    let c = e.ext_free::<Commands>();
+    let mut wanted = c.wanted.lock().unwrap_or_else(PoisonError::into_inner);
+    if package == 0 {
+        wanted.remove(&actor);
+    } else {
+        wanted.insert(actor, package);
+    }
+}
+
+/// Guest: the package the host's copy of `actor` runs, if known.
+pub fn wanted_package(e: &mut Engine, actor: u32) -> Option<u32> {
+    let c = e.ext_free::<Commands>();
+    let wanted = c.wanted.lock().unwrap_or_else(PoisonError::into_inner);
+    wanted.get(&actor).copied()
+}
+
+/// Guest: whether the host's packages are given to this game's copies (off while this player's
+/// own opening runs, whose actors act for this player).
+pub fn set_packages_on(e: &mut Engine, on: bool) {
+    e.ext_free::<Commands>()
+        .packages_on
+        .store(on, Ordering::SeqCst);
+}
+
+/// Guest: how many evaluations were answered with the host's package.
+pub fn packages_given(e: &mut Engine) -> u32 {
+    e.ext_free::<Commands>().given.load(Ordering::SeqCst)
+}
+
+/// The wrap at `0067e780`. On a guest, for an actor whose host's package is known and is a
+/// package of this game, the answer is that package (its procedure type computed first, as the
+/// game does for the one it picks); this game's own schedule and conditions are not asked. They
+/// are each game's own: a condition on "the player" means this game's player, and the two
+/// players' copies of an actor would do different things (PC run 12: Sunny led the host outdoors
+/// and stayed with the guest indoors). Everything else is the game's own answer.
+pub(crate) fn find_package(e: &mut Engine, a: &[u32]) -> Ret {
+    let reference = a.get(1).copied().unwrap_or(0);
+    if reference != 0 && gate::is_guest(e) {
+        let c = e.ext_free::<Commands>();
+        if c.packages_on.load(Ordering::SeqCst) {
+            let id = e.mem.u32(reference.wrapping_add(addr::FORM_ID_OFFSET));
+            if let Some(package) = wanted_package(e, id).and_then(|w| forms::form(e, w)) {
+                if e.mem.u8(package.wrapping_add(addr::FORM_TYPE_OFFSET)) == addr::FORM_TYPE_PACKAGE
+                {
+                    if e.call(addr::PACKAGE_PROCEDURE_TYPE, &args![package]).u32() as i32 == -1 {
+                        let value = e.call(addr::REF_PROCEDURE_VALUE, &args![reference]).u32();
+                        e.call(addr::PACKAGE_CALCULATE_PROCEDURE, &args![package, value]);
+                    }
+                    e.ext_free::<Commands>()
+                        .given
+                        .fetch_add(1, Ordering::SeqCst);
+                    return package.into_ret();
+                }
+            }
+        }
+    }
+    e.call_next(addr::PACKAGE_LIST_FIND_CURRENT, a)
 }
 
 pub(crate) const CONVERSE: WrapSlot = WrapSlot::new(Owner::Coop, addr::CMD_START_CONVERSATION);

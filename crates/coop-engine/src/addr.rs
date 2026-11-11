@@ -600,3 +600,23 @@ pub const ACTOR_START_CONVERSATION_SLOT: u32 = 0x280;
 /// reference to the target's cell or world space, at the target's place plus the offsets: the one
 /// function of the game that moves a reference from one space to another.
 pub const MOVE_TO_FUNCTION_BASE: u32 = 0x005c_cb20;
+
+// Packages (docs/coop/SPECS.md S19).
+
+/// `Actor::GetCurrentEditorPackage` (`thiscall`, actor; `actor.rs`): the package the actor runs,
+/// the one of its extra data when an interrupt package (a conversation) is on top; 0 for none.
+pub const ACTOR_GET_CURRENT_EDITOR_PACKAGE: u32 = 0x0088_14b0;
+/// `PackageList::FindCurrentPackage` (`thiscall`, list, reference; `RET 4`; `packagelist.rs`): the
+/// first package of the list whose schedule and conditions hold for the reference now, else its
+/// current one. What an evaluation of an actor's package ends in.
+pub const PACKAGE_LIST_FIND_CURRENT: u32 = 0x0067_e780;
+/// What `FindCurrentPackage` does for the package it picked before returning it: when
+/// `009611e0(package)` is -1 the procedure type is computed, `006777b0(package,
+/// 00569b80(reference))`.
+pub const PACKAGE_PROCEDURE_TYPE: u32 = 0x0096_11e0;
+/// See [`PACKAGE_PROCEDURE_TYPE`].
+pub const PACKAGE_CALCULATE_PROCEDURE: u32 = 0x0067_77b0;
+/// See [`PACKAGE_PROCEDURE_TYPE`].
+pub const REF_PROCEDURE_VALUE: u32 = 0x0056_9b80;
+/// The form type of a package (`PACK`).
+pub const FORM_TYPE_PACKAGE: u8 = 0x49;

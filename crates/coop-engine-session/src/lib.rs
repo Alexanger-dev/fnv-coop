@@ -73,6 +73,29 @@ pub const EVALUATE_TAG: u16 = 0x4556;
 /// played (it is over).
 pub const SCENE_TAG: u16 = 0x5343;
 
+/// The tag of the package the host's copy of an actor runs (`Field::Custom` on the actor's id:
+/// the package's form id, 0 for none both games have). A guest's copy is given the same package
+/// in place of what its own game's conditions would pick. [`echo`] and the heal leave it alone
+/// (the fights' follow step keeps it).
+pub const PACKAGE_TAG: u16 = 0x504b;
+
+/// The field for an actor's package.
+pub fn package_field(package: u32) -> Field {
+    Field::Custom {
+        tag: PACKAGE_TAG,
+        data: package.to_le_bytes().to_vec(),
+    }
+}
+
+fn package_of(field: &Field) -> Option<u32> {
+    match field {
+        Field::Custom { tag, data } if *tag == PACKAGE_TAG => {
+            Some(u32::from_le_bytes(data[..].try_into().ok()?))
+        }
+        _ => None,
+    }
+}
+
 fn scene_field(count: u8, s: &commands::Scene) -> Field {
     let mut data = vec![count, u8::from(s.flags[0]) | (u8::from(s.flags[1]) << 1)];
     for w in [s.target, s.topic, s.locations[0], s.locations[1], s.space] {
@@ -160,7 +183,7 @@ fn clock_value(field: &Field) -> Option<f32> {
 pub fn hello(plugins: Vec<String>) -> Hello {
     let build = format!("coop-engine-session {}", env!("CARGO_PKG_VERSION"));
     let rules = format!(
-        "quest-record {:04x} v{} {} clock {:04x} life {:04x} refs evp scene",
+        "quest-record {:04x} v{} {} clock {:04x} life {:04x} refs evp scene package",
         record::QUEST_RECORD_TAG,
         record::VERSION,
         record::LEN,
@@ -946,6 +969,16 @@ fn apply_field(e: &mut Engine, form: u32, field: &Field) -> bool {
         }
         Field::Custom { tag, .. } if *tag == CLOCK_TAG => match clock_value(field) {
             Some(v) => gate::applying(e, |e| forms::set_global_value(e, form, v)),
+            None => false,
+        },
+        // The package the host's copy runs: remembered for the game's own evaluation to be
+        // answered with, and the actor told to evaluate.
+        Field::Custom { tag, .. } if *tag == PACKAGE_TAG => match package_of(field) {
+            Some(package) => {
+                commands::set_wanted_package(e, form, package);
+                gate::applying(e, |e| commands::evaluate_package(e, form));
+                true
+            }
             None => false,
         },
         // A host's scene: played by the driver when it comes, never from here.

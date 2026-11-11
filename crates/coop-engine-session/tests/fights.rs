@@ -20,6 +20,9 @@ const TOWN: u32 = 0x0010_5a01;
 const RAIDER: u32 = 0x0010_4f25;
 const GECKO: u32 = 0x0010_4f26;
 const PLAYER: u32 = 0x14;
+/// Two packages: what the host's game picks for an actor, and what a guest's own would.
+const LEAD_OUT: u32 = 0x0010_6a01;
+const STAY_IN: u32 = 0x0010_6a02;
 
 fn spec() -> StorySpec {
     StorySpec {
@@ -27,6 +30,7 @@ fn spec() -> StorySpec {
         globals: vec![(0x39, 0.0)],
         cells: vec![HOUSE, TOWN],
         actors: vec![RAIDER, GECKO],
+        packages: vec![LEAD_OUT, STAY_IN],
         ..StorySpec::default()
     }
 }
@@ -739,4 +743,45 @@ fn a_followed_copy_is_brought_through_the_door_after_the_hosts_actor() {
     // In the same space from then on: followed as any other, not brought again.
     p.frames(200);
     assert_eq!(p.guest_fight().brings, 1);
+}
+
+/// PC run 12, 2026-11-11: Sunny led the host outdoors and, on the guest, walked back to where she
+/// had been; Chet sat down on the host and walked on the spot on the guest. A package's
+/// conditions are each game's own ("the player" is that game's player), so the two copies of an
+/// actor picked different packages. A followed actor's copy is given the package the host's runs.
+#[test]
+fn a_followed_actor_runs_the_package_the_hosts_copy_runs() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.gd.fight.as_mut().unwrap().hold_after = Some((OPENING, 200));
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    // While the guest's own opening runs, its actors act for it.
+    p.frames(40);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    // The opening done: the copy is asked again and runs the host's package, and keeps it
+    // when its own game evaluates.
+    assert!(p.guest.set_stage(OPENING, 200));
+    p.frames(80);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    assert!(coop_engine::commands::packages_given(&mut p.guest.e) >= 2);
+    // The host's changes: the guest's follows.
+    p.host.set_own_package(RAIDER, STAY_IN);
+    p.frames(20);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    // The other actor, of which the host has said nothing, is this game's own.
+    p.guest.place_actor(GECKO, HOUSE, [0.0; 3], 0.0);
+    p.guest.set_own_package(GECKO, LEAD_OUT);
+    assert_eq!(p.guest.package(GECKO), LEAD_OUT);
+    assert_eq!(
+        (p.gd.refused, p.gd.healed, p.gd.sync.desyncs_detected),
+        (0, 0, 0)
+    );
 }

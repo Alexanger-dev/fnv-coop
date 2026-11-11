@@ -61,6 +61,9 @@ pub const FOLLOW_MS: u64 = 1500;
 /// A copy in another space than the host's actor is brought through at most this often.
 pub const BRING_EVERY_MS: u64 = 3000;
 
+/// A followed actor that does not run the host's package is told to evaluate this often at most.
+pub const PACKAGE_ASK_MS: u64 = 3000;
+
 /// An actor put at the host's place this many times within [`LEAD_WINDOW_MS`] is led every frame
 /// for [`LEAD_MS`], then followed again.
 pub const LEAD_AFTER: u32 = 2;
@@ -167,6 +170,13 @@ pub struct Fight {
     led_until: BTreeMap<u32, u64>,
     /// Guest: how many times an actor began to be led.
     pub leads: u32,
+    /// Host: the package each tracked actor was last seen running.
+    packages: BTreeMap<u32, u32>,
+    /// Guest: when each actor was last told to evaluate because it did not run the host's
+    /// package, and how many times that was done.
+    package_asked: BTreeMap<u32, u64>,
+    /// See [`Fight::package_asked`].
+    pub package_asks: u32,
     /// Guest: when each actor was last brought from another space, and how many times one was.
     brought: BTreeMap<u32, u64>,
     /// See [`Fight::brought`].
@@ -259,6 +269,9 @@ impl Fight {
             nudged: BTreeMap::new(),
             led_until: BTreeMap::new(),
             leads: 0,
+            packages: BTreeMap::new(),
+            package_asked: BTreeMap::new(),
+            package_asks: 0,
             brought: BTreeMap::new(),
             brings: 0,
             elsewhere: BTreeSet::new(),
@@ -421,6 +434,12 @@ impl Fight {
                 sync.live.combat.threat.forget(id);
                 for o in sync.live.actors.kill_story(id, None) {
                     out.extend(sync.live.route_extern(o.aud, Msg::Actor(o.msg)));
+                }
+            }
+            // The package it runs, sent when it changes: a guest's copy is given the same.
+            if let Some(package) = coop_engine::commands::current_package(e, s.id) {
+                if self.packages.insert(s.id, package) != Some(package) {
+                    sync.write(FormId(s.id), crate::package_field(package));
                 }
             }
             let t = self.tracked.entry(s.id).or_default();
@@ -658,6 +677,8 @@ impl Fight {
                     .into()
             });
         }
+        // The host's packages are this game's copies' too, once this player's opening is done.
+        coop_engine::commands::set_packages_on(e, self.follow && !waiting);
         let me = live::local(e).filter(|l| l.loaded && !waiting);
         let mut holding = BTreeSet::new();
         if let Some(me) = me {
@@ -722,6 +743,19 @@ impl Fight {
                     continue;
                 }
                 if self.follow {
+                    // Not running the host's package (an interrupt ended, a cell loaded): told
+                    // to evaluate, at most every few seconds.
+                    if let Some(wanted) = coop_engine::commands::wanted_package(e, id) {
+                        let due = self
+                            .package_asked
+                            .get(&id)
+                            .map_or(true, |t| now_ms.saturating_sub(*t) >= PACKAGE_ASK_MS);
+                        if due && coop_engine::commands::current_package(e, id) != Some(wanted) {
+                            self.package_asked.insert(id, now_ms);
+                            self.package_asks += 1;
+                            gate::applying(e, |e| coop_engine::commands::evaluate_package(e, id));
+                        }
+                    }
                     let to = s.pos.map(dequant_pos);
                     if self.led_until.get(&id).is_some_and(|until| now_ms < *until) {
                         fight::lead(e, id, to, dequant_heading(s.heading));
