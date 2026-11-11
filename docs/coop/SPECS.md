@@ -573,3 +573,33 @@ A companion that follows the player who hired it, as the host's actor, was not s
   following; the stand-ins move and pick at once where the game takes frames, so timing faults show only on
   a PC.
 
+## S20: spent triggers, actors that leave a space (implemented; not yet run on a PC)
+
+PC run 13 (2026-11-11), from the two logs and the game's data.
+
+- **A spent trigger is its player's own.** The guest could draw no weapon. `VCG01RemoveDocCarebearModeTriggerSCRIPT`
+  (`0011e65e`, on `DocHouseTriggerREF` `0011e660`) gives the player who walks out of Doc Mitchell's house
+  their controls back and then deletes itself. The host's player spent it; the journal put its
+  `RefDisabled` into the story; the guest's was switched off before the guest's player reached it. A
+  trigger volume (a reference with a primitive: `ExtraDataList::GetPrimitive`, `0041fbe0`) switched by its
+  own object script (`actors::own_trigger_change`: the journal's cause is an object script running on that
+  same reference) is not written by the host. A guest remembers the triggers its own player spent, with
+  what the story said of each then, and neither heals nor applies the story over them until the story says
+  something new (a quest's script switching the trigger is still the story's).
+- **The space an actor leaves is told.** Actor states go to the players in the actor's space
+  (`Audience::Cell`). A guest never learned that the host's actor had gone through a door, and kept putting
+  its copy at the last place it knew there (Chet, Joe Cobb: "stands at the door"). The host sends the first
+  state in the new space to the players of the old one too. A guest whose copy is still in its player's
+  space then only asks it to take the host's package (which walks it out as it did the host's); it is not
+  moved.
+- **The host's package wherever the copy is.** The pin held only for copies in the guest's player's space:
+  Sunny's copy walked out after the host's and, out of sight, picked this game's own package and came back.
+  It now holds for every actor the host has said a package of (the host takes its word back when it stops
+  running the actor).
+- **Not in this step, recorded.** A trigger that starts a scene or sets the story counts only when the
+  host's player walks into it (`GSJoeCobbTriggerScript` `0010521f`: the guest's ran, its conversation was
+  dropped and its effects put back; nothing told the host). What a host-run script gives "the player"
+  reaches the host's player only (Sunny's Varmint Rifle). An actor that leaves without a package both games
+  have (fleeing) stays where this game has it. A body lies where each game dropped it. A led actor has no
+  walk animation.
+
