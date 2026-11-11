@@ -294,6 +294,38 @@ fn a_guests_hit_is_applied_by_the_hosts_game_and_comes_back() {
     p.story_is_whole();
 }
 
+/// The same with the host's actors followed (their AI on here, as the PC runs since run 10 have
+/// them): the hit goes through the host, the copy's health is the host's, and the copy is not
+/// moved or frozen for it.
+#[test]
+fn a_guests_hit_on_a_followed_actor_goes_through_the_host() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(40);
+    assert!(
+        p.guest.actor_view(RAIDER).ai,
+        "a followed actor keeps its AI"
+    );
+    let avatar = p.guest_avatar();
+    p.guest.hit(RAIDER, PLAYER, 30.0);
+    assert_eq!(p.guest.hits_run(), 0);
+    p.frames(3);
+    let h = p.host.actor_view(RAIDER);
+    assert_eq!((h.health, h.attacker), (70.0, avatar));
+    let g = p.guest.actor_view(RAIDER);
+    assert_eq!((g.health, g.ai), (70.0, true));
+    // What the copy's own AI does to this player is the host's to say.
+    p.guest.hit(PLAYER, RAIDER, 20.0);
+    assert_eq!(p.guest.hits_run(), 0);
+    p.guest.hit(RAIDER, PLAYER, 500.0);
+    p.frames(5);
+    assert_eq!(p.host.dead(RAIDER), Some(true));
+    assert_eq!(p.guest.dead(RAIDER), Some(true));
+    p.story_is_whole();
+}
+
 #[test]
 fn an_essential_actor_survives_a_guests_lethal_hit() {
     let mut p = in_a_fight("");
@@ -657,7 +689,7 @@ fn a_scene_from_before_the_join_is_not_played() {
 /// off for a while it is put there once and goes on by itself.
 #[test]
 fn a_followed_actor_keeps_its_ai_and_is_put_at_the_hosts_place_when_it_strays() {
-    let mut p = Pair::new();
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
     p.gd.fight.as_mut().unwrap().follow = true;
     p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
     p.guest.move_player(HOUSE, [0.0; 3], 0.0);

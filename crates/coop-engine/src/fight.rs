@@ -462,6 +462,18 @@ pub fn bring(e: &mut Engine, id: u32, pos: [f32; 3]) -> bool {
     true
 }
 
+/// Sets a followed actor's health to the host's (never below 1 here: a death comes as a death).
+/// Its place and its AI are left alone. False when it is not in this game now or is dead here.
+pub fn mend(e: &mut Engine, id: u32, health: f32) -> bool {
+    match actors::actor(e, id) {
+        Some(a) if actors::dead(e, id) == Some(false) => {
+            set_health(e, a, health.max(1.0));
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Gives a held actor back to this game: its AI on again. False when it is not in this game now.
 pub fn release(e: &mut Engine, id: u32) -> bool {
     match actors::actor(e, id) {

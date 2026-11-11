@@ -348,11 +348,21 @@ impl Coop {
         // `follow`: all of following. `follow-plain`: only putting a strayed actor back (no
         // leading, no bringing through doors, no packages). `NV_COOP_PACKAGES=off` turns the
         // packages alone off. Each part has its switch so a fault can be traced to one.
-        if ask.trim() == "follow" || ask.trim() == "follow-plain" {
+        // `follow-damage`, `follow-threat`, `follow-full`: following, with the fights shared up
+        // to that level (hits through the host; the host's actors turning on a guest; downed and
+        // revive). Not yet run on a PC, so not the default.
+        let shared = match ask.trim() {
+            "follow-damage" => Some(session::fight::Cap::Damage),
+            "follow-threat" => Some(session::fight::Cap::Threat),
+            "follow-full" => Some(session::fight::Cap::Revive),
+            _ => None,
+        };
+        if ask.trim() == "follow" || ask.trim() == "follow-plain" || shared.is_some() {
             let plain = ask.trim() == "follow-plain";
             let packages =
                 !plain && std::env::var("NV_COOP_PACKAGES").map_or(true, |v| v.trim() != "off");
-            let mut fight = session::fight::Fight::new(guest, session::fight::Cap::State);
+            let cap = shared.unwrap_or(session::fight::Cap::State);
+            let mut fight = session::fight::Fight::new(guest, cap);
             fight.follow = true;
             fight.lead_on = !plain;
             fight.bring_on = !plain;
@@ -360,7 +370,7 @@ impl Coop {
             return (
                 Some(fight),
                 format!(
-                    "co-op fights: the host's actors are followed (leading {}, through doors {}, the host's packages {}; NV_COOP_FIGHT=off turns it all off)",
+                    "co-op fights: the host's actors are followed, fights shared up to {cap:?} (leading {}, through doors {}, the host's packages {}; NV_COOP_FIGHT=off turns it all off)",
                     if plain { "off" } else { "on" },
                     if plain { "off" } else { "on" },
                     if packages { "on" } else { "off" }

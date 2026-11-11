@@ -854,6 +854,13 @@ impl Fight {
                     continue;
                 }
                 if self.follow {
+                    // With the damage shared, a followed actor's hits go through the host as a
+                    // held one's do (it is in the set the hit wrap reads), and its health is the
+                    // host's. It keeps its own AI: it fights here as this game has it, and what
+                    // its blows do is the host's to say.
+                    if self.cap >= Cap::Damage && fight::mend(e, id, f32::from(s.health)) {
+                        holding.insert(id);
+                    }
                     self.ask_package(e, id, now_ms);
                     let to = s.pos.map(dequant_pos);
                     if self.led_until.get(&id).is_some_and(|until| now_ms < *until) {
@@ -963,7 +970,10 @@ impl Fight {
         }
         coop_engine::commands::set_followed(e, followed);
         for id in self.held.difference(&holding) {
-            fight::release(e, *id);
+            // (a followed actor's AI was never off)
+            if !self.follow {
+                fight::release(e, *id);
+            }
             self.released += 1;
         }
         if holding != self.held {
