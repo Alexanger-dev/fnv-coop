@@ -684,7 +684,7 @@ impl Fight {
                     let due = self
                         .brought
                         .get(&id)
-                        .is_none_or(|t| now_ms.saturating_sub(*t) >= BRING_EVERY_MS);
+                        .map_or(true, |t| now_ms.saturating_sub(*t) >= BRING_EVERY_MS);
                     if self.follow && due && a.alive && s.flags & FLAG_DEAD == 0 {
                         self.brought.insert(id, now_ms);
                         let to = s.pos.map(dequant_pos);
