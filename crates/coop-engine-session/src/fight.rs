@@ -177,6 +177,8 @@ pub struct Fight {
     pub leads: u32,
     /// Host: the package each tracked actor was last seen running.
     packages: BTreeMap<u32, u32>,
+    /// Host: actors it ran near its player and no longer does, whose package it still says.
+    watched: BTreeSet<u32>,
     /// Guest: when each actor was last told to evaluate because it did not run the host's
     /// package, and how many times that was done.
     package_asked: BTreeMap<u32, u64>,
@@ -291,6 +293,7 @@ impl Fight {
             led_until: BTreeMap::new(),
             leads: 0,
             packages: BTreeMap::new(),
+            watched: BTreeSet::new(),
             package_asked: BTreeMap::new(),
             package_asks: 0,
             package_tries: BTreeMap::new(),
@@ -521,9 +524,12 @@ impl Fight {
             .collect();
         for id in gone {
             self.tracked.remove(&id);
-            // Its package is no longer the host's to say: a guest's copy is its own game's again.
-            if self.packages.remove(&id).is_some_and(|p| p != 0) {
-                sync.write(FormId(id), crate::package_field(0));
+            // Its package is still the host's to say: the host's game runs the actor on, out of
+            // its player's sight, and a guest's copy that picked its own would part from it (PC
+            // run 14: Sunny went outdoors on the host while its player stayed in; the guest's
+            // copy walked out after her, was given back to its own game, and came back in).
+            if self.packages.contains_key(&id) {
+                self.watched.insert(id);
             }
             sync.live.combat.threat.forget(FormId(id));
             let rec = sync.live.actors.own.get(FormId(id)).copied();
@@ -538,6 +544,31 @@ impl Fight {
                         seed: Some(rec.state),
                     }),
                 ));
+            }
+        }
+        // The actors the host ran near its player and still runs out of sight: the package of
+        // each is read on, and said when it changes. One that is gone, dead or switched off is
+        // this game's no longer to say.
+        self.watched.retain(|id| !seen.contains(id));
+        let watched: Vec<u32> = self.watched.iter().copied().collect();
+        for id in watched {
+            let runs = actors::actor(e, id)
+                .filter(|a| e.mem.u32(a + coop_engine::addr::ACTOR_PROCESS_OFFSET) != 0)
+                .filter(|_| actors::dead(e, id) == Some(false))
+                .filter(|_| actors::disabled(e, id) == Some(false))
+                .and_then(|_| coop_engine::commands::current_package(e, id));
+            match runs {
+                Some(package) => {
+                    if self.packages.insert(id, package) != Some(package) {
+                        sync.write(FormId(id), crate::package_field(package));
+                    }
+                }
+                None => {
+                    self.watched.remove(&id);
+                    if self.packages.remove(&id).is_some_and(|p| p != 0) {
+                        sync.write(FormId(id), crate::package_field(0));
+                    }
+                }
             }
         }
         if self.cap >= Cap::Threat {
@@ -917,6 +948,19 @@ impl Fight {
             Some(_) => coop_engine::commands::wanted_ids(e),
             None => BTreeSet::new(),
         };
+        // A copy near this player of an actor the host runs out of its own player's sight (no
+        // place is told of it then, only its package): asked to take that package too.
+        if let Some(me) = me.filter(|_| self.follow) {
+            for id in &followed {
+                if near_me.contains(id) || self.left_behind.contains(id) {
+                    continue;
+                }
+                let here = actors::actor(e, *id).map(|copy| fight::space_of(e, copy));
+                if here == Some(me.cell) {
+                    self.ask_package(e, *id, now_ms);
+                }
+            }
+        }
         coop_engine::commands::set_followed(e, followed);
         for id in self.held.difference(&holding) {
             fight::release(e, *id);

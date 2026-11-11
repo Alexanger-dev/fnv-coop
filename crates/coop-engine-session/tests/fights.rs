@@ -784,14 +784,33 @@ fn a_followed_actor_runs_the_package_the_hosts_copy_runs() {
     assert!(coop_engine::commands::drain_notes(&mut p.guest.e)
         .iter()
         .any(|l| l.contains(&format!("{RAIDER:08x}")) && l.contains(&format!("{LEAD_OUT:08x}"))));
-    // The host goes away from the actor: its copy here is this game's own again.
+    // The host's player goes away from the actor: the host's game runs it on, and its copy here
+    // keeps the host's package (PC run 14: Sunny's copy came back indoors).
     p.host.set_near(RAIDER, false);
     p.frames(20);
     p.guest.set_own_package(RAIDER, LEAD_OUT);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    // Out of the host's player's sight it takes another package: the copy is given that.
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.frames(80);
     assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    p.host.set_own_package(RAIDER, STAY_IN);
     p.host.set_near(RAIDER, true);
     p.frames(80);
     assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    // It dies out of sight: the host has no more to say of it.
+    p.host.set_near(RAIDER, false);
+    p.frames(20);
+    let a = coop_engine::actors::actor(&mut p.host.e, RAIDER).unwrap();
+    p.host
+        .e
+        .mem
+        .set_u32(a + coop_engine::addr::ACTOR_LIFE_STATE_OFFSET, 1);
+    p.frames(40);
+    assert_eq!(
+        coop_engine::commands::wanted_package(&mut p.guest.e, RAIDER),
+        None
+    );
     // The other actor, of which the host has said nothing, is this game's own.
     p.guest.place_actor(GECKO, HOUSE, [0.0; 3], 0.0);
     p.guest.set_own_package(GECKO, LEAD_OUT);
