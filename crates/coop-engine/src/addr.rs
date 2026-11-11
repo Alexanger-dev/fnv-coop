@@ -638,6 +638,9 @@ pub const PACKAGE_TYPE: u32 = 0x0041_ca90;
 pub const PLAYER_SET_CONVERSATION_PACKAGE: u32 = 0x005c_8a30;
 /// `thiscall`, a reference: its extra-data list.
 pub const REF_EXTRA_LIST: u32 = 0x005d_43c0;
+/// `ExtraDataList::GetPrimitive` (`thiscall`, list; `tesobjectrefr_p4.rs`): the reference's
+/// primitive, the shape of a trigger volume; 0 for a reference without one.
+pub const EXTRA_GET_PRIMITIVE: u32 = 0x0041_fbe0;
 /// `ExtraDataList::RemoveFollower` (`thiscall`, list, follower).
 pub const EXTRA_REMOVE_FOLLOWER: u32 = 0x0042_2690;
 /// `ScriptEventList::SetActionFlag`-style call for a package (`cdecl`: package, list, flag): 0x800

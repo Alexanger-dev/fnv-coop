@@ -249,6 +249,8 @@ pub struct HostDriver {
     pub claims_enacted: u32,
     /// Guests' claims left alone: the actor is not in the host's game now, or is dead already.
     pub claims_dropped: u32,
+    /// Triggers this game's player spent that were not put into the story (each player's own).
+    pub triggers_kept: u32,
     /// What happened to each claim, for the log (taken by the caller).
     pub claim_notes: Vec<String>,
     /// Quest records or variables that could not be carried exactly (see [`record::encode`]; a
@@ -316,6 +318,7 @@ impl HostDriver {
             stage_notes: Vec::new(),
             claims_enacted: 0,
             claims_dropped: 0,
+            triggers_kept: 0,
             claim_notes: Vec::new(),
             unencodable: 0,
             ladder: None,
@@ -482,6 +485,18 @@ impl HostDriver {
                 && c.flags & addr::CHANGE_FORM_FLAGS != 0
                 && actors::shareable(c.form)
             {
+                // A trigger spent by its own script is spent for the host's player only: each
+                // guest's is its own player's to walk into.
+                if actors::own_trigger_change(e, c) {
+                    self.triggers_kept += 1;
+                    if self.triggers_kept <= 40 {
+                        self.stage_notes.push(format!(
+                            "trigger {:08x} was spent by this game's player: not shared (each player has their own)",
+                            c.form
+                        ));
+                    }
+                    continue;
+                }
                 if let Some(disabled) = actors::disabled(e, c.form) {
                     self.sync
                         .write(FormId(c.form), Field::RefDisabled { disabled });
@@ -648,6 +663,9 @@ pub struct GuestDriver {
     /// The script last seen changing each form in this game (the guest's own journal): what a
     /// drift of that form is put down to.
     causes: std::collections::BTreeMap<u32, gate::Cause>,
+    /// Triggers this player spent (their own script switched them when the player walked in),
+    /// with what the host's story said of each then: left as this game has them.
+    own_triggers: std::collections::BTreeMap<u32, Option<bool>>,
     /// The count of the last scene seen for each actor, and whether the join's state is in.
     scene_seen: std::collections::BTreeMap<u32, u8>,
     joined: bool,
@@ -713,6 +731,7 @@ impl GuestDriver {
             claimed: BTreeSet::new(),
             life_pending: BTreeSet::new(),
             causes: std::collections::BTreeMap::new(),
+            own_triggers: std::collections::BTreeMap::new(),
             scene_seen: std::collections::BTreeMap::new(),
             joined: false,
             scenes_played: 0,
@@ -809,6 +828,17 @@ impl GuestDriver {
             if let Some(cause) = c.cause {
                 self.causes.insert(c.form, cause);
             }
+            // A trigger this player walked into and its own script spent: this player's own from
+            // now, whatever the host's story says of it today.
+            if actors::own_trigger_change(e, c) {
+                let story = self.story_disabled(c.form);
+                if self.own_triggers.insert(c.form, story).is_none() {
+                    self.healed_notes.push(format!(
+                        "co-op guest: trigger {:08x} was spent by this player: kept as this game has it",
+                        c.form
+                    ));
+                }
+            }
         }
         // world: this game's own doors and locks, told to the host.
         if let Some(w) = self.world.as_mut() {
@@ -838,6 +868,34 @@ impl GuestDriver {
         self.claims_sent += claims.len() as u32;
         for msg in self.sync.send_intent(Epoch(0), claims) {
             send(net, PlayerId::HOST, &msg, &mut self.send_failures);
+        }
+    }
+
+    /// What the host's story says of reference `form` being disabled, if it says anything.
+    fn story_disabled(&self, form: u32) -> Option<bool> {
+        self.sync
+            .store
+            .get(FormId(form), &Field::RefDisabled { disabled: false })
+            .and_then(|en| match en.field {
+                Field::RefDisabled { disabled } => Some(disabled),
+                _ => None,
+            })
+    }
+
+    /// Whether `field` of `form` is left as this game has it: the state of a trigger this player
+    /// spent, for as long as the host's story says of it what it said then. A story that says
+    /// something new (a quest of the host's switched the trigger) is the story's again.
+    fn own_trigger_keeps(&mut self, form: u32, field: &Field) -> bool {
+        let Field::RefDisabled { disabled } = field else {
+            return false;
+        };
+        match self.own_triggers.get(&form) {
+            Some(then) if *then == Some(*disabled) => true,
+            Some(_) => {
+                self.own_triggers.remove(&form);
+                false
+            }
+            None => false,
         }
     }
 
@@ -890,6 +948,9 @@ impl GuestDriver {
             self.relisted += quest::relist(e, id);
         }
         for m in echo(e, &self.sync.store) {
+            if self.own_trigger_keeps(m.form, &m.want) {
+                continue;
+            }
             if apply_field(e, m.form, &m.want) {
                 self.healed += 1;
                 let key = (m.form, m.want.kind());
@@ -956,6 +1017,9 @@ impl GuestDriver {
                         ));
                     }
                 }
+                continue;
+            }
+            if self.own_trigger_keeps(form, &field) {
                 continue;
             }
             if !apply_field(e, form, &field) {

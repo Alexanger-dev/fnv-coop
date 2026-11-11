@@ -132,6 +132,13 @@ pub fn wanted_package(e: &mut Engine, actor: u32) -> Option<u32> {
     wanted.get(&actor).copied()
 }
 
+/// Guest: the actors the host has said a package of.
+pub fn wanted_ids(e: &mut Engine) -> std::collections::BTreeSet<u32> {
+    let c = e.ext_free::<Commands>();
+    let wanted = c.wanted.lock().unwrap_or_else(PoisonError::into_inner);
+    wanted.keys().copied().collect()
+}
+
 /// Guest: whether the host's packages are given to this game's copies (off while this player's
 /// own opening runs, whose actors act for this player).
 pub fn set_packages_on(e: &mut Engine, on: bool) {

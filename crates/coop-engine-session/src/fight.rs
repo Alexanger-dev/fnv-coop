@@ -200,6 +200,10 @@ pub struct Fight {
     pub brings: u32,
     /// Guest: actors not held because this game's copy is in another space than the host's.
     elsewhere: BTreeSet<u32>,
+    /// Guest: actors whose host's copy has left this player's space while this game's has not.
+    left_behind: BTreeSet<u32>,
+    /// Host: how often the players of a space were told an actor had left it.
+    pub left_told: u64,
     /// Host: states published.
     pub published: u64,
     /// Host: guests' hits its game applied.
@@ -297,6 +301,8 @@ impl Fight {
             brought: BTreeMap::new(),
             brings: 0,
             elsewhere: BTreeSet::new(),
+            left_behind: BTreeSet::new(),
+            left_told: 0,
             published: 0,
             hits_applied: 0,
             kills: 0,
@@ -473,20 +479,36 @@ impl Fight {
                 continue;
             }
             if t.last != Some(state) {
+                // States go to the players in the actor's space. One that has just left a space
+                // (through a door) is told once more to the players in the space it left: theirs
+                // would hold its last place there for ever, and their copies were kept at the
+                // door (PC run 13: Chet fled outdoors on the host and stood at the door on the
+                // guest; Joe Cobb likewise).
+                let left = t.last.map(|l| l.cell).filter(|c| *c != state.cell);
                 t.seq += 1;
                 t.last = Some(state);
                 self.published += 1;
+                let msg = ActorMsg::State {
+                    actor: id,
+                    epoch: rec.epoch,
+                    seq: Seq(t.seq),
+                    state,
+                };
                 out.extend(sync.live.on_msg(
                     PlayerId::HOST,
-                    Msg::Actor(ActorMsg::State {
-                        actor: id,
-                        epoch: rec.epoch,
-                        seq: Seq(t.seq),
-                        state,
-                    }),
+                    Msg::Actor(msg.clone()),
                     now_ms,
                     &mut sync.auth,
                 ));
+                if let Some(old) = left {
+                    self.left_told += 1;
+                    for (to, m) in sync.live.route_extern(Audience::Cell(old), Msg::Actor(msg)) {
+                        // A player who sees both spaces has it already.
+                        if !out.iter().any(|(p, o)| *p == to && *o == m) {
+                            out.push((to, m));
+                        }
+                    }
+                }
             }
         }
         // An actor the host's game no longer runs near its player: out of the ledger, and the
@@ -715,10 +737,26 @@ impl Fight {
                 let Some(s) = a.state else {
                     continue;
                 };
-                if a.owner != Some(PlayerId::HOST) || s.cell.0 != me.cell || !actors::shareable(id)
-                {
+                if a.owner != Some(PlayerId::HOST) || !actors::shareable(id) {
                     continue;
                 }
+                if s.cell.0 != me.cell {
+                    // The host's has left this player's space and this copy has not yet: it is
+                    // asked to take the host's package, which walks it out as it did the host's
+                    // (PC run 13: Joe Cobb's copy stood still when the host's left the saloon).
+                    let here = actors::actor(e, id).map(|copy| fight::space_of(e, copy));
+                    if self.follow && here == Some(me.cell) {
+                        self.ask_package(e, id, now_ms);
+                        if self.left_behind.insert(id) {
+                            self.say(format!(
+                                "co-op fights: actor {id:08x} is in {:08x} on the host and still in {:08x} here: asked to follow it out",
+                                s.cell.0, me.cell
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                self.left_behind.remove(&id);
                 near_me.insert(id);
                 // This game's copy is in another space than the host's actor (the host's walked
                 // out of a door, this one has not): moving it would change its place and not its
@@ -785,39 +823,7 @@ impl Fight {
                     continue;
                 }
                 if self.follow {
-                    // Not running the host's package (an interrupt ended, a cell loaded): told
-                    // to pick again, without a reset of its AI, at most every few seconds and a
-                    // few times for one package (it may be one this copy cannot run).
-                    if let Some(wanted) = coop_engine::commands::wanted_package(e, id) {
-                        let due = self
-                            .package_asked
-                            .get(&id)
-                            .map_or(true, |t| now_ms.saturating_sub(*t) >= PACKAGE_ASK_MS);
-                        // A package the host has just changed to is asked for at once.
-                        let tries = self.package_tries.get(&id).copied();
-                        let changed = tries.map(|(p, _)| p) != Some(wanted);
-                        if (due || changed) && self.packages_on {
-                            self.package_asked.insert(id, now_ms);
-                            let n = match tries {
-                                Some((p, n)) if p == wanted => n,
-                                _ => 0,
-                            };
-                            let runs = coop_engine::commands::current_package(e, id);
-                            if runs == Some(wanted) {
-                                self.package_tries.insert(id, (wanted, 0));
-                            } else if n < PACKAGE_ASKS_AT_MOST {
-                                self.package_tries.insert(id, (wanted, n + 1));
-                                self.package_asks += 1;
-                                gate::applying(e, |e| coop_engine::commands::repick_package(e, id));
-                                if n + 1 == PACKAGE_ASKS_AT_MOST {
-                                    self.say(format!(
-                                        "co-op packages: actor {id:08x} does not take the host's package {wanted:08x} (it runs {:08x}): no longer asked",
-                                        runs.unwrap_or(0)
-                                    ));
-                                }
-                            }
-                        }
-                    }
+                    self.ask_package(e, id, now_ms);
                     let to = s.pos.map(dequant_pos);
                     if self.led_until.get(&id).is_some_and(|until| now_ms < *until) {
                         fight::lead(e, id, to, dequant_heading(s.heading));
@@ -900,10 +906,18 @@ impl Fight {
                 }
             }
         }
-        // Only the actors the host runs near this player are given its packages, and only they
-        // keep a "far since" time: one that is seen again later starts afresh.
+        // Only the actors the host runs near this player keep a "far since" time: one that is
+        // seen again later starts afresh.
         self.far_since.retain(|id, _| near_me.contains(id));
-        coop_engine::commands::set_followed(e, near_me);
+        // Every actor the host says a package of keeps it here, wherever it and this player are
+        // (the host takes its word back when it no longer runs the actor): one that walked out
+        // after the host's must not turn round because this game would have it elsewhere (PC
+        // run 13: Sunny's copy went out and came back in).
+        let followed = match me {
+            Some(_) => coop_engine::commands::wanted_ids(e),
+            None => BTreeSet::new(),
+        };
+        coop_engine::commands::set_followed(e, followed);
         for id in self.held.difference(&holding) {
             fight::release(e, *id);
             self.released += 1;
@@ -923,6 +937,44 @@ impl Fight {
         }
         self.stamp(e, &mut sync.live.local);
         out
+    }
+
+    /// Asks this game's copy of actor `id` to pick its package again when it does not run the
+    /// one the host's runs.
+    fn ask_package(&mut self, e: &mut Engine, id: u32, now_ms: u64) {
+        // Not running the host's package (an interrupt ended, a cell loaded): told
+        // to pick again, without a reset of its AI, at most every few seconds and a
+        // few times for one package (it may be one this copy cannot run).
+        if let Some(wanted) = coop_engine::commands::wanted_package(e, id) {
+            let due = self
+                .package_asked
+                .get(&id)
+                .map_or(true, |t| now_ms.saturating_sub(*t) >= PACKAGE_ASK_MS);
+            // A package the host has just changed to is asked for at once.
+            let tries = self.package_tries.get(&id).copied();
+            let changed = tries.map(|(p, _)| p) != Some(wanted);
+            if (due || changed) && self.packages_on {
+                self.package_asked.insert(id, now_ms);
+                let n = match tries {
+                    Some((p, n)) if p == wanted => n,
+                    _ => 0,
+                };
+                let runs = coop_engine::commands::current_package(e, id);
+                if runs == Some(wanted) {
+                    self.package_tries.insert(id, (wanted, 0));
+                } else if n < PACKAGE_ASKS_AT_MOST {
+                    self.package_tries.insert(id, (wanted, n + 1));
+                    self.package_asks += 1;
+                    gate::applying(e, |e| coop_engine::commands::repick_package(e, id));
+                    if n + 1 == PACKAGE_ASKS_AT_MOST {
+                        self.say(format!(
+                            "co-op packages: actor {id:08x} does not take the host's package {wanted:08x} (it runs {:08x}): no longer asked",
+                            runs.unwrap_or(0)
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     /// The host's own player: what the other players' hits and the reviver decided for it.

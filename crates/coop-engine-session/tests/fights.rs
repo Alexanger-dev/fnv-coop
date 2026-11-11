@@ -802,6 +802,57 @@ fn a_followed_actor_runs_the_package_the_hosts_copy_runs() {
     );
 }
 
+/// PC run 13, 2026-11-11: Joe Cobb left the saloon on the host and stood still on the guest;
+/// Sunny's copy walked out after the host's and came straight back in. The host's package was
+/// only kept on copies in the guest's player's space with the host's actor in it too. It is kept
+/// on every actor the host runs: a copy the host's has left behind is asked to take it (and so
+/// walks out as the host's did), and one that is already where the host's is keeps it.
+#[test]
+fn a_copy_keeps_the_hosts_package_when_the_hosts_actor_is_in_another_space() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    // Both players and the actor are in the house.
+    p.host.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.host.set_own_package(RAIDER, STAY_IN);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    p.frames(40);
+    // The host's walks to the door and out into the town; the guest's copy is still where it
+    // was, 500 units from the last place the host's had in the house.
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.host.place_actor(RAIDER, HOUSE, [400.0, 900.0, 0.0], 2.0);
+    p.frames(4);
+    p.host.place_actor(RAIDER, TOWN, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    let before = p.guest_fight().nudges;
+    p.frames(120);
+    assert_eq!(p.hd.fight.as_ref().unwrap().left_told, 1);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    // It is not put back at the place the host's had in the house: its own legs take it out.
+    assert_eq!(p.guest.actor_view(RAIDER).pos, [900.0, 900.0, 0.0]);
+    assert_eq!(p.guest_fight().nudges, before);
+    assert!(p
+        .guest_fight()
+        .lines
+        .iter()
+        .any(|l| l.contains("asked to follow it out") && l.contains(&format!("{RAIDER:08x}"))));
+    // It has walked out, into the town where the host's is and the guest's player is not: its
+    // own game's choice there is still the host's.
+    p.guest.place_actor(RAIDER, TOWN, [10.0, 20.0, 0.0], 0.5);
+    p.frames(20);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    // With packages off, neither.
+    p.gd.fight.as_mut().unwrap().packages_on = false;
+    p.frames(20);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    assert_eq!(
+        (p.gd.refused, p.gd.healed, p.gd.sync.desyncs_detected),
+        (0, 0, 0)
+    );
+}
+
 /// Peer review, 2026-11-11: a scene was asked of actors the game's own command would refuse. An
 /// actor without its 3D here (its cell not loaded), or dead, is not made to talk; the log says so.
 #[test]

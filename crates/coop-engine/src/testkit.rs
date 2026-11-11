@@ -43,6 +43,11 @@ const SETTER_SCRIPT: u32 = 0x0150_0300;
 const SETTER: u32 = RAN + 0x40;
 /// An object script whose body is `evp` on the reference it runs on.
 const EVP_SCRIPT: u32 = 0x0150_0400;
+/// An object script whose body is `Disable` on the reference it runs on (a trigger that spends
+/// itself).
+const SPEND_SCRIPT: u32 = 0x0150_0500;
+/// Where a reference's primitive is kept, in its own block (a trigger volume has one).
+const PRIMITIVE_OFFSET: u32 = 0xeb0;
 /// Where an actor's count of package evaluations is kept, in its own block.
 const EVALUATIONS_OFFSET: u32 = 0xe80;
 /// Where an actor's conversations are kept, in its own block: how many it started, then the
@@ -311,6 +316,9 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
     if a[1] == EVP_SCRIPT {
         e.call(addr::ACTOR_EVALUATE_PACKAGE, &args![a[2], 0u32, 1u32]);
     }
+    if a[1] == SPEND_SCRIPT {
+        e.call(addr::REF_DISABLE, &args![a[2]]);
+    }
     if a[1] == SETTER_SCRIPT {
         let (quest, stage) = (e.mem.u32(SETTER + 4), e.mem.u32(SETTER + 8) as u8);
         forms::set_quest_stage(e, quest, stage);
@@ -545,6 +553,9 @@ impl Story {
         e.register(addr::PACKAGE_TYPE, |_, _| eax(0));
         e.register(addr::REF_EXTRA_LIST, |_, a| eax(a[0]));
         e.register(addr::EXTRA_REMOVE_FOLLOWER, |_, _| Ret::default());
+        e.register(addr::EXTRA_GET_PRIMITIVE, |e, a| {
+            eax(e.mem.u32(a[0] + PRIMITIVE_OFFSET))
+        });
         e.register(addr::PACKAGE_SET_ACTION_FLAG, |e, a| {
             bump(
                 e,
@@ -922,6 +933,21 @@ impl Story {
     /// Enables or disables a placed reference as a script's `Enable` and `Disable` do.
     pub fn set_disabled(&mut self, reference: u32, off: bool) {
         assert!(crate::actors::set_disabled(&mut self.e, reference, off));
+    }
+
+    /// Makes a placed reference a trigger volume (it has a primitive).
+    pub fn make_trigger(&mut self, reference: u32) {
+        let r = forms::form(&mut self.e, reference).expect("a reference of the story");
+        self.e.mem.set_u32(r + PRIMITIVE_OFFSET, 1);
+    }
+
+    /// The player walks into a trigger whose own script spends it (`Disable` on itself).
+    pub fn enter_trigger(&mut self, reference: u32) {
+        let r = forms::form(&mut self.e, reference).expect("a reference of the story");
+        self.e.call(
+            addr::SCRIPT_RUNNER_RUN,
+            &args![0u32, SPEND_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
     }
 
     /// Whether a placed reference is disabled (`None`: not in this game now).

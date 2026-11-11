@@ -940,6 +940,183 @@ fn a_reference_the_hosts_scripts_enable_or_disable_is_the_same_on_the_guest() {
     assert_eq!(guest.scripts_run(), 0);
 }
 
+/// PC run 13, 2026-11-11: the guest could draw no weapon. The trigger outside Doc Mitchell's
+/// house gives a player their weapons back and spends itself; the host's player spent it, the
+/// story carried that to the guest, and the guest's player walked through a dead trigger.
+#[test]
+fn a_trigger_a_player_spends_is_spent_for_that_player_only() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    host.make_trigger(CHET);
+    guest.make_trigger(CHET);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    // The host's player walks into it: the guest's is still there for the guest's player.
+    host.enter_trigger(CHET);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(host.disabled(CHET), Some(true));
+    assert_eq!(guest.disabled(CHET), Some(false));
+    assert_eq!(hd.triggers_kept, 1);
+    // The guest's player walks into theirs: it stays spent, and the host's story is not told.
+    guest.enter_trigger(CHET);
+    frames(
+        45,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(true));
+    assert_eq!(gd.healed, 0);
+    assert_eq!((gd.refused, gd.sync.desyncs_detected), (0, 0));
+}
+
+/// A trigger the host's story holds as enabled (a quest's script switched it on) and the guest's
+/// player then spends is not switched on again by the heal; a later word of the story is taken.
+#[test]
+fn a_spent_trigger_is_not_put_back_until_the_story_says_something_new() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    host.make_trigger(CHET);
+    guest.make_trigger(CHET);
+    // Both start with it off; the host's story switches it on (no script of its own).
+    coop_engine::arm(&mut host.e, false);
+    host.set_disabled(CHET, true);
+    coop_engine::arm(&mut host.e, true);
+    guest.set_disabled(CHET, true);
+    host.set_disabled(CHET, false);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(false));
+    guest.enter_trigger(CHET);
+    frames(
+        45,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(true), "the heal put it back");
+    assert_eq!(gd.healed, 0);
+    assert!(
+        gd.healed_notes
+            .iter()
+            .any(|n| n.contains("spent by this player")),
+        "{:?}",
+        gd.healed_notes
+    );
+    // The story switches it off and on again: the new word reaches the guest's.
+    host.set_disabled(CHET, true);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    host.set_disabled(CHET, false);
+    frames(
+        45,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(false));
+}
+
+/// Only a trigger volume is each player's own: a thing anyone can see that its own script
+/// switches off (an activator that is used up) is gone for everyone, as before.
+#[test]
+fn a_reference_that_is_no_trigger_and_spends_itself_is_still_shared() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    host.enter_trigger(CHET);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(true));
+    assert_eq!(hd.triggers_kept, 0);
+    // And the guest's own is put back.
+    host.set_disabled(CHET, false);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    guest.enter_trigger(CHET);
+    frames(
+        45,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(guest.disabled(CHET), Some(false));
+}
+
 /// D5, rung 1 (the census): a shared quest a guest's own script advanced is put back, as before,
 /// and the log names the script that did it. Nothing else changes.
 #[test]
