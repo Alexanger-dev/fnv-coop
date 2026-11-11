@@ -131,6 +131,7 @@ pub(super) fn register(e: &mut Engine) {
         (addr::ACTOR_COMBAT_TARGET_SLOT, COMBAT_TARGET_FN),
         (addr::ACTOR_ALARMED_SLOT, ALARMED_FN),
         (addr::REF_IS_MOBILE_SLOT, super::IS_MOBILE_FN),
+        (addr::ACTOR_SLOT_214, super::NOTHING_FN),
         (
             addr::ACTOR_START_CONVERSATION_SLOT,
             super::START_CONVERSATION_FN,
@@ -146,6 +147,13 @@ pub(super) fn register(e: &mut Engine) {
         PROCESS_VTABLE + addr::PROCESS_START_COMBAT_SLOT,
         START_COMBAT_FN,
     );
+    for slot in [
+        addr::PROCESS_PACKAGE_DONE_SLOT,
+        addr::PROCESS_SET_DONE_ONCE_SLOT,
+        addr::PROCESS_FOLLOWED_SLOT,
+    ] {
+        e.mem.set_u32(PROCESS_VTABLE + slot, super::NOTHING_FN);
+    }
     for i in 0..e.mem.u32(TABLE) {
         let f = e.mem.u32(TABLE + 8 + 8 * i);
         let kind = e.mem.u8(f + addr::FORM_TYPE_OFFSET);

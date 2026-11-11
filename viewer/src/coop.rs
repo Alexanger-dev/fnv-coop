@@ -231,6 +231,7 @@ pub struct Coop {
     plugins: Vec<String>,
     own_quests: Vec<u32>,
     own_scripts: Vec<u32>,
+    scenes_set: bool,
     started: Instant,
     last_status: Option<Instant>,
     /// The skipped story scripts already named in the log.
@@ -307,6 +308,18 @@ impl Coop {
         }
     }
 
+    /// Whether conversations between actors are the host's (`NV_COOP_SCENES=off` gives every
+    /// game its own again). Returns the line that says so.
+    fn scenes_on() -> (bool, String) {
+        let on = std::env::var("NV_COOP_SCENES").map_or(true, |v| v.trim() != "off");
+        let line = if on {
+            "co-op scenes: the host's conversations between actors play on the guests (NV_COOP_SCENES=off: each game its own)"
+        } else {
+            "co-op scenes: off (each game runs its own)"
+        };
+        (on, line.into())
+    }
+
     /// Whether conversations, party saves and the rest vote are shared: `NV_COOP_TALK=on`. Off
     /// unless asked for, for the same reason. Returns the line that says so.
     fn social_on() -> (bool, String) {
@@ -332,13 +345,26 @@ impl Coop {
         if ask.trim() == "off" || !ladder {
             return (None, "co-op fights: off".into());
         }
-        if ask.trim() == "follow" {
+        // `follow`: all of following. `follow-plain`: only putting a strayed actor back (no
+        // leading, no bringing through doors, no packages). `NV_COOP_PACKAGES=off` turns the
+        // packages alone off. Each part has its switch so a fault can be traced to one.
+        if ask.trim() == "follow" || ask.trim() == "follow-plain" {
+            let plain = ask.trim() == "follow-plain";
+            let packages =
+                !plain && std::env::var("NV_COOP_PACKAGES").map_or(true, |v| v.trim() != "off");
             let mut fight = session::fight::Fight::new(guest, session::fight::Cap::State);
             fight.follow = true;
+            fight.lead_on = !plain;
+            fight.bring_on = !plain;
+            fight.packages_on = packages;
             return (
                 Some(fight),
-                "co-op fights: the host's actors are followed (NV_COOP_FIGHT=off turns it off)"
-                    .into(),
+                format!(
+                    "co-op fights: the host's actors are followed (leading {}, through doors {}, the host's packages {}; NV_COOP_FIGHT=off turns it all off)",
+                    if plain { "off" } else { "on" },
+                    if plain { "off" } else { "on" },
+                    if packages { "on" } else { "off" }
+                ),
             );
         }
         let cap = session::fight::Cap::parse(&ask);
@@ -426,6 +452,7 @@ impl Coop {
                 plugins,
                 own_quests: own_quests.clone(),
                 own_scripts,
+                scenes_set: false,
                 started: Instant::now(),
                 last_status: None,
                 gate_named: Default::default(),
@@ -444,6 +471,13 @@ impl Coop {
     pub fn after_frame(&mut self, e: &mut Engine) -> Vec<String> {
         let now_ms = self.started.elapsed().as_millis() as u64;
         let mut lines = Vec::new();
+        if !self.scenes_set {
+            self.scenes_set = true;
+            let (on, line) = Self::scenes_on();
+            coop_engine::commands::set_scenes_on(e, on);
+            lines.push(line);
+        }
+        lines.extend(coop_engine::commands::drain_notes(e));
         self.ep.pump();
         for ev in self.ep.events() {
             match ev {

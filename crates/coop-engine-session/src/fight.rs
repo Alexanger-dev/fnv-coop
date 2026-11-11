@@ -61,8 +61,13 @@ pub const FOLLOW_MS: u64 = 1500;
 /// A copy in another space than the host's actor is brought through at most this often.
 pub const BRING_EVERY_MS: u64 = 3000;
 
-/// A followed actor that does not run the host's package is told to evaluate this often at most.
+/// A followed actor that does not run the host's package is told to pick again this often at
+/// most, and this many times for one package.
 pub const PACKAGE_ASK_MS: u64 = 3000;
+/// See [`PACKAGE_ASK_MS`].
+pub const PACKAGE_ASKS_AT_MOST: u32 = 5;
+/// A copy is brought from another space this many times at most.
+pub const BRING_AT_MOST: u32 = 3;
 
 /// An actor put at the host's place this many times within [`LEAD_WINDOW_MS`] is led every frame
 /// for [`LEAD_MS`], then followed again.
@@ -177,6 +182,18 @@ pub struct Fight {
     package_asked: BTreeMap<u32, u64>,
     /// See [`Fight::package_asked`].
     pub package_asks: u32,
+    /// Guest: for each actor, the package it was last asked to take and how many times.
+    package_tries: BTreeMap<u32, (u32, u32)>,
+    /// Guest: how many times each actor was brought from another space.
+    brought_times: BTreeMap<u32, u32>,
+    /// Guest: the parts of following, each with its own switch so that a fault can be traced to
+    /// one of them (docs/coop/DECISIONS.md D5, condition 6): leading an actor that keeps
+    /// straying, bringing one from another space, giving the host's packages.
+    pub lead_on: bool,
+    /// See [`Fight::lead_on`].
+    pub bring_on: bool,
+    /// See [`Fight::lead_on`].
+    pub packages_on: bool,
     /// Guest: when each actor was last brought from another space, and how many times one was.
     brought: BTreeMap<u32, u64>,
     /// See [`Fight::brought`].
@@ -272,6 +289,11 @@ impl Fight {
             packages: BTreeMap::new(),
             package_asked: BTreeMap::new(),
             package_asks: 0,
+            package_tries: BTreeMap::new(),
+            brought_times: BTreeMap::new(),
+            lead_on: true,
+            bring_on: true,
+            packages_on: true,
             brought: BTreeMap::new(),
             brings: 0,
             elsewhere: BTreeSet::new(),
@@ -477,6 +499,10 @@ impl Fight {
             .collect();
         for id in gone {
             self.tracked.remove(&id);
+            // Its package is no longer the host's to say: a guest's copy is its own game's again.
+            if self.packages.remove(&id).is_some_and(|p| p != 0) {
+                sync.write(FormId(id), crate::package_field(0));
+            }
             sync.live.combat.threat.forget(FormId(id));
             let rec = sync.live.actors.own.get(FormId(id)).copied();
             sync.live.actors.own.unregister(FormId(id), &mut sync.auth);
@@ -678,9 +704,10 @@ impl Fight {
             });
         }
         // The host's packages are this game's copies' too, once this player's opening is done.
-        coop_engine::commands::set_packages_on(e, self.follow && !waiting);
+        coop_engine::commands::set_packages_on(e, self.follow && self.packages_on && !waiting);
         let me = live::local(e).filter(|l| l.loaded && !waiting);
         let mut holding = BTreeSet::new();
+        let mut near_me = BTreeSet::new();
         if let Some(me) = me {
             let known: Vec<(u32, coop_core::actors::RemoteActor)> =
                 sync.live.actors.iter().map(|(f, a)| (f.0, *a)).collect();
@@ -692,6 +719,7 @@ impl Fight {
                 {
                     continue;
                 }
+                near_me.insert(id);
                 // This game's copy is in another space than the host's actor (the host's walked
                 // out of a door, this one has not): moving it would change its place and not its
                 // cell, and it would stand at the other space's coordinates in this one (PC run
@@ -706,8 +734,22 @@ impl Fight {
                         .brought
                         .get(&id)
                         .map_or(true, |t| now_ms.saturating_sub(*t) >= BRING_EVERY_MS);
-                    if self.follow && due && a.alive && s.flags & FLAG_DEAD == 0 {
+                    let times = self.brought_times.get(&id).copied().unwrap_or(0);
+                    if self.follow
+                        && self.bring_on
+                        && due
+                        && times < BRING_AT_MOST
+                        && a.alive
+                        && s.flags & FLAG_DEAD == 0
+                        && actors::dead(e, id) == Some(false)
+                    {
                         self.brought.insert(id, now_ms);
+                        self.brought_times.insert(id, times + 1);
+                        if times + 1 == BRING_AT_MOST {
+                            self.say(format!(
+                                "co-op fights: actor {id:08x} has been brought {BRING_AT_MOST} times and leaves again each time: left to this game from now"
+                            ));
+                        }
                         let to = s.pos.map(dequant_pos);
                         if fight::bring(e, id, to) {
                             self.brings += 1;
@@ -744,16 +786,36 @@ impl Fight {
                 }
                 if self.follow {
                     // Not running the host's package (an interrupt ended, a cell loaded): told
-                    // to evaluate, at most every few seconds.
+                    // to pick again, without a reset of its AI, at most every few seconds and a
+                    // few times for one package (it may be one this copy cannot run).
                     if let Some(wanted) = coop_engine::commands::wanted_package(e, id) {
                         let due = self
                             .package_asked
                             .get(&id)
                             .map_or(true, |t| now_ms.saturating_sub(*t) >= PACKAGE_ASK_MS);
-                        if due && coop_engine::commands::current_package(e, id) != Some(wanted) {
+                        // A package the host has just changed to is asked for at once.
+                        let tries = self.package_tries.get(&id).copied();
+                        let changed = tries.map(|(p, _)| p) != Some(wanted);
+                        if (due || changed) && self.packages_on {
                             self.package_asked.insert(id, now_ms);
-                            self.package_asks += 1;
-                            gate::applying(e, |e| coop_engine::commands::evaluate_package(e, id));
+                            let n = match tries {
+                                Some((p, n)) if p == wanted => n,
+                                _ => 0,
+                            };
+                            let runs = coop_engine::commands::current_package(e, id);
+                            if runs == Some(wanted) {
+                                self.package_tries.insert(id, (wanted, 0));
+                            } else if n < PACKAGE_ASKS_AT_MOST {
+                                self.package_tries.insert(id, (wanted, n + 1));
+                                self.package_asks += 1;
+                                gate::applying(e, |e| coop_engine::commands::repick_package(e, id));
+                                if n + 1 == PACKAGE_ASKS_AT_MOST {
+                                    self.say(format!(
+                                        "co-op packages: actor {id:08x} does not take the host's package {wanted:08x} (it runs {:08x}): no longer asked",
+                                        runs.unwrap_or(0)
+                                    ));
+                                }
+                            }
                         }
                     }
                     let to = s.pos.map(dequant_pos);
@@ -785,7 +847,7 @@ impl Fight {
                                             (n + 1, first)
                                         };
                                     self.nudged.insert(id, (n, first));
-                                    if n >= LEAD_AFTER {
+                                    if n >= LEAD_AFTER && self.lead_on {
                                         self.nudged.remove(&id);
                                         self.led_until.insert(id, now_ms + LEAD_MS);
                                         self.leads += 1;
@@ -838,6 +900,10 @@ impl Fight {
                 }
             }
         }
+        // Only the actors the host runs near this player are given its packages, and only they
+        // keep a "far since" time: one that is seen again later starts afresh.
+        self.far_since.retain(|id, _| near_me.contains(id));
+        coop_engine::commands::set_followed(e, near_me);
         for id in self.held.difference(&holding) {
             fight::release(e, *id);
             self.released += 1;
@@ -1090,7 +1156,11 @@ impl Fight {
     pub fn status(&self) -> String {
         if self.guest {
             format!(
-                "fights: holding {} actors, moves {}, AI woke {}, released {}, deaths {}, hits sent {}, hurts taken {}, down {} up {}",
+                "fights: put at the host's place {}, led {}, brought through a door {}, asked to take the host's package {}; holding {} actors, moves {}, AI woke {}, released {}, deaths {}, hits sent {}, hurts taken {}, down {} up {}",
+                self.nudges,
+                self.leads,
+                self.brings,
+                self.package_asks,
                 self.held.len(),
                 self.moves,
                 self.woke,

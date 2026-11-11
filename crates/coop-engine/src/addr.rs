@@ -620,3 +620,36 @@ pub const PACKAGE_CALCULATE_PROCEDURE: u32 = 0x0067_77b0;
 pub const REF_PROCEDURE_VALUE: u32 = 0x0056_9b80;
 /// The form type of a package (`PACK`).
 pub const FORM_TYPE_PACKAGE: u8 = 0x49;
+
+// The checks the `StartConversation` body makes before the actor's slot (`run_005c8740.rs`), and
+// what `PackageList::FindCurrentPackage` does for the package it picks (`packagelist.rs`,
+// `picked`): both are repeated where co-op stands in for them (peer review, 2026-11-11).
+
+/// An actor's virtual slot whose answer 9 refuses a conversation.
+pub const ACTOR_SLOT_214: u32 = 0x214;
+/// `cdecl`, a reference: whether it is fading out to be disabled.
+pub const REF_IS_PENDING_FADE_DISABLED: u32 = 0x005a_a6d0;
+/// `MobileObject::GetCurrentPackage` (`thiscall`, reference): the process's package, 0 for none.
+pub const REF_GET_CURRENT_PACKAGE: u32 = 0x0093_44a0;
+/// `cdecl`, a package: its type (1 follow, 2 escort, 7 accompany; 0x1c a dialogue made while
+/// playing).
+pub const PACKAGE_TYPE: u32 = 0x0041_ca90;
+/// `cdecl` (player, package): what the body does for a type-0x1c package after the slot.
+pub const PLAYER_SET_CONVERSATION_PACKAGE: u32 = 0x005c_8a30;
+/// `thiscall`, a reference: its extra-data list.
+pub const REF_EXTRA_LIST: u32 = 0x005d_43c0;
+/// `ExtraDataList::RemoveFollower` (`thiscall`, list, follower).
+pub const EXTRA_REMOVE_FOLLOWER: u32 = 0x0042_2690;
+/// `ScriptEventList::SetActionFlag`-style call for a package (`cdecl`: package, list, flag): 0x800
+/// the package ended, 0x200 it began.
+pub const PACKAGE_SET_ACTION_FLAG: u32 = 0x005a_c750;
+/// A process's virtual slots `PackageDone` (reference, package) and `SetPackageDoneOnce` (0), and
+/// the one answering the object it follows.
+pub const PROCESS_PACKAGE_DONE_SLOT: u32 = 0x59c;
+/// See [`PROCESS_PACKAGE_DONE_SLOT`].
+pub const PROCESS_SET_DONE_ONCE_SLOT: u32 = 0x5a8;
+/// See [`PROCESS_PACKAGE_DONE_SLOT`].
+pub const PROCESS_FOLLOWED_SLOT: u32 = 0x128;
+/// `TESPackage::pPackTarg` (+0x30): a `PackageTarget` whose type (+0, 0 = a reference) and
+/// reference (+4) say whom the package is about.
+pub const PACKAGE_TARGET_OFFSET: u32 = 0x30;

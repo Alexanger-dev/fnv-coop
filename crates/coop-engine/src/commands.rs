@@ -29,6 +29,43 @@ pub struct Commands {
     packages_on: AtomicBool,
     /// Guest: how many evaluations were answered with the host's package.
     given: AtomicU32,
+    /// Guest: the actors the host's game runs near this player now. Only they are given the
+    /// host's package: one the host has left behind is this game's own again.
+    followed: Mutex<std::collections::BTreeSet<u32>>,
+    /// Whether conversations between actors are the host's (`NV_COOP_SCENES`; on unless a
+    /// session turns it off, when every game runs its own as before).
+    scenes_off: AtomicBool,
+    /// Lines for the log: each scene a guest dropped, each first giving of a package.
+    notes: Mutex<Vec<String>>,
+    /// Guest: the (actor, package) pairs already written to the log.
+    given_seen: Mutex<std::collections::BTreeSet<(u32, u32)>>,
+}
+
+fn note(e: &mut Engine, line: String) {
+    let c = e.ext_free::<Commands>();
+    let mut notes = c.notes.lock().unwrap_or_else(PoisonError::into_inner);
+    if notes.len() < 200 {
+        notes.push(line);
+    }
+}
+
+/// Takes the lines for the log.
+pub fn drain_notes(e: &mut Engine) -> Vec<String> {
+    let c = e.ext_free::<Commands>();
+    std::mem::take(&mut *c.notes.lock().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Turns the sharing of scenes off or on (every game then runs its own, as before co-op).
+pub fn set_scenes_on(e: &mut Engine, on: bool) {
+    e.ext_free::<Commands>()
+        .scenes_off
+        .store(!on, Ordering::SeqCst);
+}
+
+/// Guest: names the actors the host's game runs near this player now.
+pub fn set_followed(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
+    let c = e.ext_free::<Commands>();
+    *c.followed.lock().unwrap_or_else(PoisonError::into_inner) = ids.into_iter().collect();
 }
 
 pub(crate) const FIND_PACKAGE: WrapSlot =
@@ -48,11 +85,32 @@ pub fn current_package(e: &mut Engine, id: u32) -> Option<u32> {
         return Some(0);
     }
     let pid = e.mem.u32(package.wrapping_add(addr::FORM_ID_OFFSET));
-    Some(if pid < actors::FIRST_DYNAMIC_ID {
-        pid
+    if pid >= actors::FIRST_DYNAMIC_ID || about_the_player(e, package) {
+        return Some(0);
+    }
+    Some(pid)
+}
+
+/// Whether a package is aimed at the player in a way that must stay each game's own: its target
+/// is the player's reference and it is not one that keeps company (follow, escort, accompany).
+/// "Walk up to the player and talk" given to a guest's copy would send it to the guest while the
+/// host's goes to the host; keeping company works for both players when they are together.
+fn about_the_player(e: &mut Engine, package: u32) -> bool {
+    let target = e.mem.u32(package.wrapping_add(addr::PACKAGE_TARGET_OFFSET));
+    if target == 0 {
+        return false;
+    }
+    let player = e.mem.u32(addr::PLAYER_SINGLETON);
+    let aimed = e.mem.u32(target) & 0xff == 0 && player != 0 && e.mem.u32(target + 4) == player;
+    if !aimed {
+        return false;
+    }
+    let kind = if e.is_registered(addr::PACKAGE_TYPE) {
+        e.call(addr::PACKAGE_TYPE, &args![package]).u32()
     } else {
         0
-    })
+    };
+    !matches!(kind, 1 | 2 | 7)
 }
 
 /// Guest: the host's copy of actor `actor` runs package `package` (0: none this game has; this
@@ -95,26 +153,104 @@ pub fn packages_given(e: &mut Engine) -> u32 {
 /// and stayed with the guest indoors). Everything else is the game's own answer.
 pub(crate) fn find_package(e: &mut Engine, a: &[u32]) -> Ret {
     let reference = a.get(1).copied().unwrap_or(0);
-    if reference != 0 && gate::is_guest(e) {
+    if reference == 0 || !gate::is_guest(e) {
+        return e.call_next(addr::PACKAGE_LIST_FIND_CURRENT, a);
+    }
+    let id = e.mem.u32(reference.wrapping_add(addr::FORM_ID_OFFSET));
+    let wanted = {
         let c = e.ext_free::<Commands>();
-        if c.packages_on.load(Ordering::SeqCst) {
-            let id = e.mem.u32(reference.wrapping_add(addr::FORM_ID_OFFSET));
-            if let Some(package) = wanted_package(e, id).and_then(|w| forms::form(e, w)) {
-                if e.mem.u8(package.wrapping_add(addr::FORM_TYPE_OFFSET)) == addr::FORM_TYPE_PACKAGE
-                {
-                    if e.call(addr::PACKAGE_PROCEDURE_TYPE, &args![package]).u32() as i32 == -1 {
-                        let value = e.call(addr::REF_PROCEDURE_VALUE, &args![reference]).u32();
-                        e.call(addr::PACKAGE_CALCULATE_PROCEDURE, &args![package, value]);
-                    }
-                    e.ext_free::<Commands>()
-                        .given
-                        .fetch_add(1, Ordering::SeqCst);
-                    return package.into_ret();
-                }
+        let followed = c
+            .followed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&id);
+        if c.packages_on.load(Ordering::SeqCst) && followed {
+            wanted_package(e, id)
+        } else {
+            None
+        }
+    };
+    let package = wanted
+        .and_then(|w| forms::form(e, w))
+        .filter(|p| e.mem.u8(p.wrapping_add(addr::FORM_TYPE_OFFSET)) == addr::FORM_TYPE_PACKAGE);
+    let Some(package) = package else {
+        return e.call_next(addr::PACKAGE_LIST_FIND_CURRENT, a);
+    };
+    picked(e, package, reference);
+    let first = {
+        let c = e.ext_free::<Commands>();
+        c.given.fetch_add(1, Ordering::SeqCst);
+        c.given_seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert((id, wanted.unwrap_or(0)))
+    };
+    if first {
+        note(
+            e,
+            format!(
+                "co-op packages: actor {id:08x} runs the host's package {:08x} here",
+                wanted.unwrap_or(0)
+            ),
+        );
+    }
+    package.into_ret()
+}
+
+/// What `FindCurrentPackage` does for the package it picks, before it returns it (its `picked`,
+/// without the debug line): the procedure type computed when it is not yet; when the package
+/// replaces another, the old one's end (a follow package's follower removed from whom it
+/// followed, action flag 0x800, the process's `PackageDone` and `SetPackageDoneOnce(0)`) and the
+/// new one's beginning (action flag 0x200).
+fn picked(e: &mut Engine, package: u32, reference: u32) {
+    if e.call(addr::PACKAGE_PROCEDURE_TYPE, &args![package]).u32() as i32 == -1 {
+        let value = e.call(addr::REF_PROCEDURE_VALUE, &args![reference]).u32();
+        e.call(addr::PACKAGE_CALCULATE_PROCEDURE, &args![package, value]);
+    }
+    if !e.is_registered(addr::REF_GET_CURRENT_PACKAGE) {
+        return;
+    }
+    let current = e
+        .call(addr::REF_GET_CURRENT_PACKAGE, &args![reference])
+        .u32();
+    if current == package {
+        return;
+    }
+    let process = e
+        .mem
+        .u32(reference.wrapping_add(addr::ACTOR_PROCESS_OFFSET));
+    if current != 0 {
+        if process != 0 && e.call(addr::PACKAGE_TYPE, &args![current]).u32() == 1 {
+            let followed = e
+                .vcall(process, addr::PROCESS_FOLLOWED_SLOT, &args![])
+                .u32();
+            // The game casts the followed object to an actor; a mobile reference is one.
+            if followed != 0
+                && e.vcall(followed, addr::REF_IS_MOBILE_SLOT, &args![]).u32() & 0xff != 0
+            {
+                let list = e.call(addr::REF_EXTRA_LIST, &args![followed]).u32();
+                e.call(addr::EXTRA_REMOVE_FOLLOWER, &args![list, reference]);
             }
         }
+        let list = e.call(addr::REF_EXTRA_LIST, &args![reference]).u32();
+        e.call(
+            addr::PACKAGE_SET_ACTION_FLAG,
+            &args![current, list, 0x800u32],
+        );
+        if process != 0 {
+            e.vcall(
+                process,
+                addr::PROCESS_PACKAGE_DONE_SLOT,
+                &args![reference, current],
+            );
+            e.vcall(process, addr::PROCESS_SET_DONE_ONCE_SLOT, &args![0u32]);
+        }
     }
-    e.call_next(addr::PACKAGE_LIST_FIND_CURRENT, a)
+    let list = e.call(addr::REF_EXTRA_LIST, &args![reference]).u32();
+    e.call(
+        addr::PACKAGE_SET_ACTION_FLAG,
+        &args![package, list, 0x200u32],
+    );
 }
 
 pub(crate) const CONVERSE: WrapSlot = WrapSlot::new(Owner::Coop, addr::CMD_START_CONVERSATION);
@@ -189,7 +325,8 @@ pub(crate) fn converse(e: &mut Engine, a: &[u32]) -> Ret {
     let this_obj = a.get(2).copied().unwrap_or(0);
     let player = e.mem.u32(addr::PLAYER_SINGLETON);
     let guest = gate::is_guest(e);
-    if this_obj == 0 || this_obj == player || !(guest || journal::armed(e)) {
+    let off = e.ext_free::<Commands>().scenes_off.load(Ordering::SeqCst);
+    if off || this_obj == 0 || this_obj == player || !(guest || journal::armed(e)) {
         return e.call_next(addr::CMD_START_CONVERSATION, a);
     }
     let Some(v) = parse(e, a, true) else {
@@ -220,6 +357,12 @@ pub(crate) fn converse(e: &mut Engine, a: &[u32]) -> Ret {
         e.ext_free::<Commands>()
             .dropped
             .fetch_add(1, Ordering::SeqCst);
+        note(
+            e,
+            format!(
+                "co-op scenes: this game's own script asked actor {actor_id:08x} to talk to {target_id:08x}: not run here (the host's game runs scenes)"
+            ),
+        );
         return 1u32.into_ret();
     }
     let pos = |e: &mut Engine, r: u32| {
@@ -235,12 +378,14 @@ pub(crate) fn converse(e: &mut Engine, a: &[u32]) -> Ret {
         actor_pos: pos(e, this_obj),
         target_pos: pos(e, target),
     };
+    // Noted once the game's own body has run, so what a guest is told happened here.
+    let ret = e.call_next(addr::CMD_START_CONVERSATION, a);
     e.ext_free::<Commands>()
         .scenes
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(scene);
-    e.call_next(addr::CMD_START_CONVERSATION, a)
+    ret
 }
 
 /// Takes the conversations between actors that scripts started since the last call.
@@ -261,6 +406,9 @@ pub enum NoScene {
     Absent,
     /// One of the two is not an actor the game can make talk.
     NotMobile,
+    /// The game's own body would refuse it here: one of the two has no 3D or no process, is dead
+    /// or fading out, or the actor's state forbids it.
+    Refused,
 }
 
 /// Plays the host's conversation in this game: both are put where the host had them when they
@@ -280,6 +428,21 @@ pub fn play_scene(e: &mut Engine, s: &Scene) -> Result<(), NoScene> {
         if e.vcall(r, addr::REF_IS_MOBILE_SLOT, &args![]).u32() & 0xff == 0 {
             return Err(NoScene::NotMobile);
         }
+    }
+    // The body's own checks before the slot (`run_005c8740.rs`), and two it has no need of in
+    // its own game: both loaded here, and alive.
+    for (r, id) in [(actor, s.actor), (target, s.target)] {
+        if e.mem.u32(r.wrapping_add(addr::REF_LOADED_OFFSET)) == 0
+            || e.mem.u32(r.wrapping_add(addr::ACTOR_PROCESS_OFFSET)) == 0
+            || actors::dead(e, id) != Some(false)
+            || (e.is_registered(addr::REF_IS_PENDING_FADE_DISABLED)
+                && e.call(addr::REF_IS_PENDING_FADE_DISABLED, &args![r]).u32() & 0xff != 0)
+        {
+            return Err(NoScene::Refused);
+        }
+    }
+    if e.vcall(actor, addr::ACTOR_SLOT_214, &args![]).u32() == 9 {
+        return Err(NoScene::Refused);
     }
     for (r, pos) in [(actor, s.actor_pos), (target, s.target_pos)] {
         if fight::space_of(e, r) == s.space {
@@ -318,6 +481,14 @@ pub fn play_scene(e: &mut Engine, s: &Scene) -> Result<(), NoScene> {
                 0u32
             ],
         );
+        // As the body: a dialogue package made by the slot is given to the player's record.
+        if e.is_registered(addr::REF_GET_CURRENT_PACKAGE) {
+            let made = e.call(addr::REF_GET_CURRENT_PACKAGE, &args![actor]).u32();
+            if made != 0 && e.call(addr::PACKAGE_TYPE, &args![made]).u32() == 0x1c {
+                let player = e.mem.u32(addr::PLAYER_SINGLETON);
+                e.call(addr::PLAYER_SET_CONVERSATION_PACKAGE, &args![player, made]);
+            }
+        }
         e.call(addr::PACKAGE_LOCATION_DESTRUCT, &args![at[1]]);
         e.call(addr::PACKAGE_LOCATION_DESTRUCT, &args![at[0]]);
     });
@@ -349,6 +520,16 @@ pub fn drain_evaluations(e: &mut Engine) -> Vec<u32> {
 
 /// Tells actor `id` to evaluate its package again, as a script's `evp` does (buffered; AI reset).
 /// False when the actor is not in this game now.
+/// Tells actor `id` to pick its package again without resetting its AI (buffered): an interrupt
+/// it is in (a conversation) is not ended. False when the actor is not in this game now.
+pub fn repick_package(e: &mut Engine, id: u32) -> bool {
+    let Some(a) = actors::actor(e, id) else {
+        return false;
+    };
+    e.call(addr::ACTOR_EVALUATE_PACKAGE, &args![a, 0u32, 0u32]);
+    true
+}
+
 pub fn evaluate_package(e: &mut Engine, id: u32) -> bool {
     let Some(a) = actors::actor(e, id) else {
         return false;

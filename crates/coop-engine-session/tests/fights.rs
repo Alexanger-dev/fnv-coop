@@ -776,6 +776,22 @@ fn a_followed_actor_runs_the_package_the_hosts_copy_runs() {
     p.host.set_own_package(RAIDER, STAY_IN);
     p.frames(20);
     assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    // Given as the game's own pick is: the procedure type computed, the old package ended and
+    // the new one begun.
+    let (computed, begun, _) = p.guest.package_marks(LEAD_OUT);
+    assert!(computed && begun >= 1, "{computed} {begun}");
+    assert!(p.guest.package_marks(STAY_IN).2 >= 1);
+    assert!(coop_engine::commands::drain_notes(&mut p.guest.e)
+        .iter()
+        .any(|l| l.contains(&format!("{RAIDER:08x}")) && l.contains(&format!("{LEAD_OUT:08x}"))));
+    // The host goes away from the actor: its copy here is this game's own again.
+    p.host.set_near(RAIDER, false);
+    p.frames(20);
+    p.guest.set_own_package(RAIDER, LEAD_OUT);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    p.host.set_near(RAIDER, true);
+    p.frames(80);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
     // The other actor, of which the host has said nothing, is this game's own.
     p.guest.place_actor(GECKO, HOUSE, [0.0; 3], 0.0);
     p.guest.set_own_package(GECKO, LEAD_OUT);
@@ -784,4 +800,99 @@ fn a_followed_actor_runs_the_package_the_hosts_copy_runs() {
         (p.gd.refused, p.gd.healed, p.gd.sync.desyncs_detected),
         (0, 0, 0)
     );
+}
+
+/// Peer review, 2026-11-11: a scene was asked of actors the game's own command would refuse. An
+/// actor without its 3D here (its cell not loaded), or dead, is not made to talk; the log says so.
+#[test]
+fn a_scene_is_not_played_for_an_actor_the_game_would_refuse() {
+    let mut p = Pair::new();
+    p.hd.fight = None;
+    p.gd.fight = None;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.host.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    // On the guest the raider is placed; the gecko has no 3D.
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.frames(30);
+    p.host.script_start_conversation(RAIDER, GECKO, MQ);
+    p.frames(60);
+    assert_eq!(p.guest.conversations(RAIDER).0, 0);
+    assert_eq!((p.gd.scenes_played, p.gd.scenes_missed), (0, 1));
+    // A dead one likewise; and each new scene of the same actor is its own (the count).
+    p.guest.place_actor(GECKO, HOUSE, [0.0; 3], 0.0);
+    p.guest.kill(GECKO);
+    p.host.script_start_conversation(RAIDER, GECKO, MQ);
+    p.frames(60);
+    assert_eq!((p.gd.scenes_played, p.gd.scenes_missed), (0, 2));
+    assert!(p.gd.healed_notes.iter().any(|l| l.contains("Refused")));
+}
+
+/// D5's condition 6: with scenes switched off every game runs its own, as before.
+#[test]
+fn with_scenes_off_every_game_runs_its_own_conversations() {
+    let mut p = Pair::new();
+    p.hd.fight = None;
+    p.gd.fight = None;
+    for s in [&mut p.host, &mut p.guest] {
+        coop_engine::commands::set_scenes_on(&mut s.e, false);
+        s.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+        s.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    }
+    p.frames(30);
+    p.guest.script_start_conversation(RAIDER, GECKO, MQ);
+    assert_eq!(p.guest.conversations(RAIDER).0, 1);
+    p.host.script_start_conversation(RAIDER, GECKO, MQ);
+    p.frames(60);
+    assert_eq!(p.guest.conversations(RAIDER).0, 1);
+    assert_eq!((p.gd.scenes_played, p.gd.scenes_missed), (0, 0));
+}
+
+/// D5's condition 6 for following: each part has its switch. Plain following puts a strayed
+/// actor back and does nothing else: no leading, no bringing, no packages.
+#[test]
+fn plain_following_neither_leads_nor_brings_nor_gives_packages() {
+    let mut p = Pair::new();
+    {
+        let f = p.gd.fight.as_mut().unwrap();
+        f.follow = true;
+        f.lead_on = false;
+        f.bring_on = false;
+        f.packages_on = false;
+    }
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.host.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.guest.place_actor(GECKO, TOWN, [5.0, 5.0, 0.0], 0.0);
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    for _ in 0..3 {
+        p.frames(40);
+        p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
+    }
+    let f = p.guest_fight();
+    assert!(f.nudges >= 3, "{}", f.nudges);
+    assert_eq!((f.leads, f.brings, f.package_asks), (0, 0, 0));
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    assert_eq!(p.guest.actor_view(GECKO).pos, [5.0, 5.0, 0.0]);
+}
+
+/// Peer review, 2026-11-11: a copy that leaves again each time it is brought is not brought for
+/// ever, and a dead copy is not brought at all.
+#[test]
+fn a_copy_is_brought_a_few_times_at_most() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [300.0, 300.0, 0.0], 0.0);
+    for _ in 0..6 {
+        p.guest.place_actor(RAIDER, TOWN, [900.0, 900.0, 0.0], 2.0);
+        p.frames(80);
+    }
+    assert_eq!(p.guest_fight().brings, fight::BRING_AT_MOST);
+    assert!(p
+        .guest_fight()
+        .lines
+        .iter()
+        .any(|l| l.contains("left to this game from now")));
 }

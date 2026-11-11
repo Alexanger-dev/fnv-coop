@@ -648,6 +648,9 @@ pub struct GuestDriver {
     /// The script last seen changing each form in this game (the guest's own journal): what a
     /// drift of that form is put down to.
     causes: std::collections::BTreeMap<u32, gate::Cause>,
+    /// The count of the last scene seen for each actor, and whether the join's state is in.
+    scene_seen: std::collections::BTreeMap<u32, u8>,
+    joined: bool,
     /// The host's conversations between actors played in this game, and those that could not be.
     pub scenes_played: u32,
     /// See [`GuestDriver::scenes_played`].
@@ -710,6 +713,8 @@ impl GuestDriver {
             claimed: BTreeSet::new(),
             life_pending: BTreeSet::new(),
             causes: std::collections::BTreeMap::new(),
+            scene_seen: std::collections::BTreeMap::new(),
+            joined: false,
             scenes_played: 0,
             scenes_missed: 0,
             drift_named: 0,
@@ -925,15 +930,21 @@ impl GuestDriver {
             .collect();
         for (form, field) in due {
             if let Some(scene) = scene_of(form, &field) {
-                // One that comes with a join or a repair happened before: it is over.
-                if all {
+                // One that comes with the join happened before: it is over. After that, one whose
+                // count this game has not played is new, whether it comes alone or with a repair.
+                let count = match &field {
+                    Field::Custom { data, .. } => data.first().copied().unwrap_or(0),
+                    _ => 0,
+                };
+                let seen = self.scene_seen.insert(form, count);
+                if !self.joined || seen == Some(count) {
                     continue;
                 }
                 match gate::applying(e, |e| commands::play_scene(e, &scene)) {
                     Ok(()) => {
                         self.scenes_played += 1;
                         self.healed_notes.push(format!(
-                            "co-op guest: the host's scene: actor {:08x} talks to {:08x} (topic {:08x})",
+                            "co-op guest: the host's scene, asked of this game: actor {:08x} talks to {:08x} (topic {:08x})",
                             scene.actor, scene.target, scene.topic
                         ));
                     }
@@ -950,6 +961,9 @@ impl GuestDriver {
             if !apply_field(e, form, &field) {
                 self.refused += 1;
             }
+        }
+        if all {
+            self.joined = true;
         }
         self.applied_upto = self.sync.store.rev();
         self.snapshots_applied = self.sync.snapshots_loaded;
@@ -974,9 +988,10 @@ fn apply_field(e: &mut Engine, form: u32, field: &Field) -> bool {
         // The package the host's copy runs: remembered for the game's own evaluation to be
         // answered with, and the actor told to evaluate.
         Field::Custom { tag, .. } if *tag == PACKAGE_TAG => match package_of(field) {
+            // Remembered only: the fights' follow step asks the copy to take it, when this
+            // player's own opening is done and the host runs the actor near this player.
             Some(package) => {
                 commands::set_wanted_package(e, form, package);
-                gate::applying(e, |e| commands::evaluate_package(e, form));
                 true
             }
             None => false,

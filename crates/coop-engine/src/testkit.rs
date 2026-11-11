@@ -53,6 +53,13 @@ const CONVERSATIONS_OFFSET: u32 = 0xe90;
 /// Where an actor's packages are kept, in its own block: the one it runs, then the one this
 /// game's own schedule and conditions would pick for it.
 const PACKAGE_OFFSET: u32 = 0xea0;
+/// In a package's own block: whether its procedure type is computed, and how many times it
+/// began and ended for an actor.
+const PROCEDURE_OFFSET: u32 = 0x100;
+const BEGUN_OFFSET: u32 = 0x104;
+const ENDED_OFFSET: u32 = 0x108;
+/// A stand-in that answers 0, behind virtual slots whose effect no test reads.
+pub(crate) const NOTHING_FN: u32 = 0x0170_0000;
 const SCENE_ARGS: u32 = RAN + 0x60;
 const SCENE_OFFSET: u32 = RAN + 0x80;
 /// The stand-ins behind two of an actor's virtual slots.
@@ -518,7 +525,40 @@ impl Story {
         e.register(addr::ACTOR_GET_CURRENT_EDITOR_PACKAGE, |e, a| {
             eax(e.mem.u32(a[0] + PACKAGE_OFFSET))
         });
-        e.register(addr::PACKAGE_PROCEDURE_TYPE, |_, _| eax(0));
+        // A package whose procedure type is not computed yet answers -1 once.
+        e.register(addr::PACKAGE_PROCEDURE_TYPE, |e, a| {
+            eax(if e.mem.u32(a[0] + PROCEDURE_OFFSET) == 0 {
+                u32::MAX
+            } else {
+                0
+            })
+        });
+        e.register(addr::PACKAGE_CALCULATE_PROCEDURE, |e, a| {
+            e.mem.set_u32(a[0] + PROCEDURE_OFFSET, 1);
+            Ret::default()
+        });
+        e.register(addr::REF_PROCEDURE_VALUE, |_, _| eax(0));
+        // What the game's own pick does besides: the flags a package's end and beginning set.
+        e.register(addr::REF_GET_CURRENT_PACKAGE, |e, a| {
+            eax(e.mem.u32(a[0] + PACKAGE_OFFSET))
+        });
+        e.register(addr::PACKAGE_TYPE, |_, _| eax(0));
+        e.register(addr::REF_EXTRA_LIST, |_, a| eax(a[0]));
+        e.register(addr::EXTRA_REMOVE_FOLLOWER, |_, _| Ret::default());
+        e.register(addr::PACKAGE_SET_ACTION_FLAG, |e, a| {
+            bump(
+                e,
+                a[0] + if a[2] == 0x200 {
+                    BEGUN_OFFSET
+                } else {
+                    ENDED_OFFSET
+                },
+            );
+            Ret::default()
+        });
+        e.register(addr::REF_IS_PENDING_FADE_DISABLED, |_, _| eax(0));
+        e.register(addr::PLAYER_SET_CONVERSATION_PACKAGE, |_, _| Ret::default());
+        e.register(NOTHING_FN, |_, _| eax(0));
         e.register(addr::PLAYER_UPDATE_OBJECTIVE, player_update_objective);
         e.register(addr::QUEST_GET_CURRENT_STAGE, |e, a| {
             eax(u32::from(e.mem.u8(a[0] + addr::QUEST_CURRENT_STAGE_OFFSET)))
@@ -854,6 +894,17 @@ impl Story {
     /// The form id of the package `actor` runs (0 for none).
     pub fn package(&mut self, actor: u32) -> u32 {
         crate::commands::current_package(&mut self.e, actor).expect("an actor of the story")
+    }
+
+    /// For a package: whether its procedure type was computed, and how many times it began and
+    /// ended for an actor (the action flags the game's own pick sets).
+    pub fn package_marks(&mut self, package: u32) -> (bool, u32, u32) {
+        let p = forms::form(&mut self.e, package).expect("a package of the story");
+        (
+            self.e.mem.u32(p + PROCEDURE_OFFSET) != 0,
+            self.e.mem.u32(p + BEGUN_OFFSET),
+            self.e.mem.u32(p + ENDED_OFFSET),
+        )
     }
 
     /// Kills a placed actor as a lethal hit by this game's player does.

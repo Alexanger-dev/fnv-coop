@@ -547,3 +547,29 @@ A companion that follows the player who hired it, as the host's actor, was not s
   there (`fight::nudge`) and picks its package again. A copy in another space than the host's actor is left
   alone. Holding (`state` and up) remains for the shared fights that need it.
 
+## S19: packages, doors, and the first peer review (implemented; not yet run on a PC)
+
+- **The host's package.** PC run 12: the two copies of an actor picked different packages (Sunny led the
+  host outdoors and walked back indoors on the guest; Chet sat on the host and walked on the spot on the
+  guest), because a package's schedule and conditions are each game's own and "the player" is that game's
+  player. The host writes the package each actor near it runs (`PACKAGE_TAG`; 0 when it has none both
+  games have, when it is aimed at the player other than to keep company, and when the host stops running
+  the actor). On a guest a wrap of `PackageList::FindCurrentPackage` (`0067e780`, WRAPS step C-7) answers an
+  evaluation of a followed actor with that package, after doing what the game's own pick does (`picked`:
+  procedure type, the old package's end, the new one's beginning). The follow step asks a copy that does not
+  run it to pick again (no AI reset), at once when the host's changes, else every 3 s, 5 times at most.
+- **Through doors.** A followed copy in another space than the host's actor is brought with the game's own
+  `MoveTo` (`005ccb20`) to this player's space at the host's place, every 3 s at most, 3 times at most.
+- **Switches** (D5, condition 6): `NV_COOP_SCENES=off`; `NV_COOP_FIGHT=follow-plain` (no leading, bringing or
+  packages); `NV_COOP_PACKAGES=off`.
+- **Peer review of this milestone (two reviewers, 2026-11-11).** Fixed: a scene asked of actors the game's
+  own command refuses (now its checks, plus loaded and alive); the package pin outliving the host's
+  interest; `picked`'s bookkeeping skipped; packages aimed at the player; unbounded asks and brings; an AI
+  reset on every package change; a scene lost when it came with a repair (now by count); the scene noted
+  before the game's body ran; no switches; counters and lines missing from the log. Open, recorded: a
+  guest's own scripts' conversations between actors are dropped and not forwarded to the host (a scene only
+  a guest triggers does not happen until the host's game triggers it); two scenes of one actor between two
+  sends keep the last; an actor in dialogue with the guest's player, or its companion, is not exempt from
+  following; the stand-ins move and pick at once where the game takes frames, so timing faults show only on
+  a PC.
+
