@@ -715,3 +715,28 @@ fn an_actor_that_keeps_straying_is_led_every_frame_for_a_while() {
     p.frames(60);
     assert!(close(p.guest.actor_view(RAIDER).pos, [350.0, 20.0, 0.0]));
 }
+
+/// PC run 12, 2026-11-11: the host's Sunny walked out of the saloon; the guest's copy stood at
+/// the door and walked back. A followed copy that is in another space than the host's actor is
+/// brought into the guest's player's space, at the host's place, by the game's own `MoveTo`.
+#[test]
+fn a_followed_copy_is_brought_through_the_door_after_the_hosts_actor() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    // The host and its actor are in the house; so is the guest's player, but its copy is not.
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [300.0, 300.0, 0.0], 0.0);
+    p.guest.place_actor(RAIDER, TOWN, [900.0, 900.0, 0.0], 2.0);
+    p.frames(40);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos) && g.ai, "{g:?} {h:?}");
+    assert_eq!(p.guest_fight().brings, 1);
+    assert!(p
+        .guest_fight()
+        .lines
+        .iter()
+        .any(|l| l.contains("brought to") && l.contains(&format!("{RAIDER:08x}"))));
+    // In the same space from then on: followed as any other, not brought again.
+    p.frames(200);
+    assert_eq!(p.guest_fight().brings, 1);
+}

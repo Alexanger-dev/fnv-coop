@@ -58,6 +58,9 @@ pub const FOLLOW_DISTANCE: f32 = 200.0;
 /// See [`FOLLOW_DISTANCE`].
 pub const FOLLOW_MS: u64 = 1500;
 
+/// A copy in another space than the host's actor is brought through at most this often.
+pub const BRING_EVERY_MS: u64 = 3000;
+
 /// An actor put at the host's place this many times within [`LEAD_WINDOW_MS`] is led every frame
 /// for [`LEAD_MS`], then followed again.
 pub const LEAD_AFTER: u32 = 2;
@@ -164,6 +167,10 @@ pub struct Fight {
     led_until: BTreeMap<u32, u64>,
     /// Guest: how many times an actor began to be led.
     pub leads: u32,
+    /// Guest: when each actor was last brought from another space, and how many times one was.
+    brought: BTreeMap<u32, u64>,
+    /// See [`Fight::brought`].
+    pub brings: u32,
     /// Guest: actors not held because this game's copy is in another space than the host's.
     elsewhere: BTreeSet<u32>,
     /// Host: states published.
@@ -252,6 +259,8 @@ impl Fight {
             nudged: BTreeMap::new(),
             led_until: BTreeMap::new(),
             leads: 0,
+            brought: BTreeMap::new(),
+            brings: 0,
             elsewhere: BTreeSet::new(),
             published: 0,
             hits_applied: 0,
@@ -669,6 +678,27 @@ impl Fight {
                 // inside the saloon). It is left to this game until it is in that space too.
                 let here = actors::actor(e, id).map(|copy| fight::space_of(e, copy));
                 if here.is_some_and(|space| space != s.cell.0) {
+                    // Followed, it is brought through: the game's own `MoveTo`, to this player's
+                    // space at the host's place (PC run 12: Sunny's copy stood at the door the
+                    // host's had gone through). Not more often than every few seconds.
+                    let due = self
+                        .brought
+                        .get(&id)
+                        .is_none_or(|t| now_ms.saturating_sub(*t) >= BRING_EVERY_MS);
+                    if self.follow && due && a.alive && s.flags & FLAG_DEAD == 0 {
+                        self.brought.insert(id, now_ms);
+                        let to = s.pos.map(dequant_pos);
+                        if fight::bring(e, id, to) {
+                            self.brings += 1;
+                            if self.brings <= 60 {
+                                self.say(format!(
+                                    "co-op fights: actor {id:08x} was in {:08x} here and is in {:08x} on the host: brought to ({:.0}, {:.0}, {:.0})",
+                                    here.unwrap_or(0), s.cell.0, to[0], to[1], to[2]
+                                ));
+                            }
+                            continue;
+                        }
+                    }
                     if self.elsewhere.insert(id) {
                         self.say(format!(
                             "co-op fights: actor {id:08x} is in {:08x} on the host and in {:08x} here: not held",

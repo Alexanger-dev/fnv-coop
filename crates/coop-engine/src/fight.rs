@@ -441,6 +441,27 @@ pub fn lead(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32
     place_of(e, id)
 }
 
+/// Brings an actor that is in another space of this game into this game's player's space, at
+/// `pos` there: the game's own `MoveTo` to the player with the difference as offsets. For a copy
+/// the host's actor left behind by walking through a door. False when the actor or the player is
+/// not in this game now, or the program has no such function.
+pub fn bring(e: &mut Engine, id: u32, pos: [f32; 3]) -> bool {
+    let player = e.mem.u32(addr::PLAYER_SINGLETON);
+    let Some(a) = actors::actor(e, id) else {
+        return false;
+    };
+    if player == 0 || !e.is_registered(addr::MOVE_TO_FUNCTION_BASE) {
+        return false;
+    }
+    let at = [0, 4, 8].map(|o| e.mem.f32(player.wrapping_add(addr::REF_POS_OFFSET + o)));
+    let off = [0, 1, 2].map(|i| (pos[i] - at[i]).to_bits());
+    e.call(
+        addr::MOVE_TO_FUNCTION_BASE,
+        &args![a, player, off[0], off[1], off[2]],
+    );
+    true
+}
+
 /// Gives a held actor back to this game: its AI on again. False when it is not in this game now.
 pub fn release(e: &mut Engine, id: u32) -> bool {
     match actors::actor(e, id) {

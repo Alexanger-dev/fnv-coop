@@ -594,3 +594,9 @@ pub const REF_IS_MOBILE_SLOT: u32 = 0x100;
 /// An actor's virtual slot that starts a conversation with another (nine words: the other, two
 /// locations or 0, two flags, 0, the topic, 0, 0), as the command's body calls it.
 pub const ACTOR_START_CONVERSATION_SLOT: u32 = 0x280;
+
+/// `Script::MoveToFunctionBase` (`cdecl`: the reference, a target reference, and three offsets as
+/// `f32`; `tesscriptfunctions_p4.rs`): what the `MoveTo` script command ends in. It takes the
+/// reference to the target's cell or world space, at the target's place plus the offsets: the one
+/// function of the game that moves a reference from one space to another.
+pub const MOVE_TO_FUNCTION_BASE: u32 = 0x005c_cb20;

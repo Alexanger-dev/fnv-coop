@@ -462,6 +462,18 @@ impl Story {
             }
             eax(1)
         });
+        // The game's `MoveTo`: the reference goes to the target's cell, at its place plus the
+        // offsets.
+        e.register(addr::MOVE_TO_FUNCTION_BASE, |e, a| {
+            let (r, target) = (a[0], a[1]);
+            let cell = e.mem.u32(target + addr::REF_CELL_OFFSET);
+            e.mem.set_u32(r + addr::REF_CELL_OFFSET, cell);
+            for (i, o) in [0u32, 4, 8].into_iter().enumerate() {
+                let v = e.mem.f32(target + addr::REF_POS_OFFSET + o) + f32::from_bits(a[2 + i]);
+                e.mem.set_f32(r + addr::REF_POS_OFFSET + o, v);
+            }
+            Ret::default()
+        });
         e.register(IS_MOBILE_FN, |_, _| eax(1));
         e.register(START_CONVERSATION_FN, |e, a| {
             let at = a[0] + CONVERSATIONS_OFFSET;
