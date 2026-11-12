@@ -91,6 +91,23 @@ pub fn current_package(e: &mut Engine, id: u32) -> Option<u32> {
     Some(pid)
 }
 
+/// Whether package `id` keeps company with the player (follow, escort, accompany: its target is
+/// the player's reference): the actor goes where that player goes.
+pub fn keeps_company(e: &mut Engine, id: u32) -> bool {
+    let Some(package) = crate::forms::form(e, id)
+        .filter(|p| e.mem.u8(p.wrapping_add(addr::FORM_TYPE_OFFSET)) == addr::FORM_TYPE_PACKAGE)
+    else {
+        return false;
+    };
+    let target = e.mem.u32(package.wrapping_add(addr::PACKAGE_TARGET_OFFSET));
+    let player = e.mem.u32(addr::PLAYER_SINGLETON);
+    let aimed = target != 0
+        && e.mem.u32(target) & 0xff == 0
+        && player != 0
+        && e.mem.u32(target + 4) == player;
+    aimed && !about_the_player(e, package)
+}
+
 /// Whether package `id` is aimed at the player other than to keep company ("wait here until the
 /// player comes near, then talk"). The host says such a package too: on each game the actor then
 /// waits for, and talks to, that game's own player, so whichever player comes to it is served

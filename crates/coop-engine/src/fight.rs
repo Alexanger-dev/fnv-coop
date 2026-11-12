@@ -76,6 +76,9 @@ pub struct Fights {
     avatars: RwLock<BTreeSet<u32>>,
     /// Guest: the form ids of the actors held at the host's state.
     held: RwLock<BTreeSet<u32>>,
+    /// The form ids of the actors handed to a player's game (hand-off) whose damage the host's
+    /// ledger keeps: on the game that runs one, and on the host for its copy.
+    ledgered: RwLock<BTreeSet<u32>>,
     /// Hits kept from the game since the last drain.
     hits: Mutex<Vec<Hit>>,
     /// Hits kept from the game, ever.
@@ -128,6 +131,14 @@ pub(crate) fn kill(e: &mut Engine, a: &[u32]) -> Ret {
 /// Whether `Actor::HitMe` is wrapped on this game (hits can be shared).
 pub fn hits_wrapped(e: &mut Engine) -> bool {
     e.ext_free::<Fights>().wrapped.load(Ordering::SeqCst) != 0
+}
+
+/// Sets the actors handed to a player's game whose damage the host's ledger keeps.
+pub fn set_ledgered(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
+    *e.ext_free::<Fights>()
+        .ledgered
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = ids.into_iter().collect();
 }
 
 /// Sets what this machine is for the hit wrap.
@@ -204,9 +215,12 @@ pub(crate) fn hit_me(e: &mut Engine, a: &[u32]) -> Ret {
         // This guest's player: what the host's actors and the other players do to it comes
         // from the host.
         (has(&f.held, aid) || has(&f.avatars, aid), false)
-    } else if role == 2 && has(&f.held, tid) {
-        // An actor the host runs: this player's hit is a claim for the host; anything else
-        // that hits it here is for the host's game to decide.
+    } else if (role == 2 && has(&f.held, tid)) || has(&f.ledgered, tid) {
+        // An actor whose damage the host's ledger keeps (one the host runs, held on a guest; or
+        // one handed to the nearest player's game): this player's hit goes through the ledger,
+        // and the game that runs the actor takes its damage from there; anything else that hits
+        // it here is for that game to decide. What such an actor does to this game's player is
+        // this game's own (it runs here, or its copy here is led to where it is run).
         (true, aid == actors::PLAYER_REF_ID)
     } else {
         (false, false)
@@ -292,6 +306,29 @@ pub fn near(e: &mut Engine) -> Vec<u32> {
         .map(|i| e.mem.u32(lists + addr::CLOSE_ACTORS_OFFSET + 4 * i))
         .filter(|a| *a != 0)
         .collect()
+}
+
+/// Every actor the game has loaded, at any process level (the close-actors list holds only those
+/// at full detail near this game's player). Falls back to [`near`] where the game's process array
+/// is not there (tests).
+pub fn loaded(e: &mut Engine) -> Vec<u32> {
+    if !e.is_registered(addr::PROCESS_ARRAY_HEAD)
+        || !e.is_registered(addr::PROCESS_ARRAY_TAIL)
+        || !e.is_registered(addr::PROCESS_ARRAY_OBJECT)
+    {
+        return near(e);
+    }
+    let array = addr::PROCESS_LISTS + 4;
+    let first = e.call(addr::PROCESS_ARRAY_HEAD, &args![array, 0u32]).u32();
+    let end = e.call(addr::PROCESS_ARRAY_TAIL, &args![array, 3u32]).u32();
+    let mut out = Vec::new();
+    for i in first..end.min(first.saturating_add(4096)) {
+        let o = e.call(addr::PROCESS_ARRAY_OBJECT, &args![array, i]).u32();
+        if o != 0 && actors::is_actor_type(e.mem.u8(o.wrapping_add(addr::FORM_TYPE_OFFSET))) {
+            out.push(o);
+        }
+    }
+    out
 }
 
 /// An actor's health, through its `ActorValueOwner`.
@@ -402,6 +439,11 @@ pub fn place_of(e: &mut Engine, id: u32) -> Option<[f32; 3]> {
         return None;
     }
     Some([0, 4, 8].map(|o| e.mem.f32(a.wrapping_add(addr::REF_POS_OFFSET + o))))
+}
+
+/// The position of the actor at `actor` (a pointer), whatever its state.
+pub fn place_of_ptr(e: &mut Engine, actor: u32) -> [f32; 3] {
+    [0, 4, 8].map(|o| e.mem.f32(actor.wrapping_add(addr::REF_POS_OFFSET + o)))
 }
 
 /// Puts an actor this game runs itself at the host's place and heading (radians), its AI left

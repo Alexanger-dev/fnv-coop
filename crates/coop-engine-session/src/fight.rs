@@ -110,6 +110,9 @@ pub const FLAG_DEAD: u16 = 2;
 /// coop-core's vitals use for a player as an attacker).
 pub const PLAYER_TARGET_BASE: u32 = 0xfe00_0000;
 /// How far a copy whose package is aimed at the player may be from the host's place.
+/// How near a guest's avatar an actor the host's game has loaded must be to be tracked (and
+/// so be run by the nearest player's game).
+pub const HANDOFF_RADIUS: f32 = 4096.0;
 pub const AIMED_DISTANCE: f32 = 800.0;
 /// The host reads and publishes its actors this often.
 pub const PUBLISH_EVERY_MS: u64 = 50;
@@ -206,6 +209,25 @@ pub struct Fight {
     elsewhere: BTreeSet<u32>,
     /// Guest: actors whose host's copy has left this player's space while this game's has not.
     left_behind: BTreeSet<u32>,
+    /// Hand-off: the nearest player's game runs an actor (`NV_COOP_HANDOFF=off`: the host's
+    /// runs every one).
+    pub handoff: bool,
+    /// Host: the actors a guest's game runs now.
+    theirs: BTreeSet<u32>,
+    /// Host: frames a copy of an actor a guest runs was put at that guest's place.
+    pub guest_run_moves: u64,
+    /// Host: this player's hits on actors a guest runs, put into the ledger.
+    pub hosts_hits_forwarded: u32,
+    /// Host: the id of the last such hit.
+    next_hit: u32,
+    /// Guest: states sent of the actors this game runs.
+    pub owned_published: u64,
+    /// Guest: damage the ledger said was done to an actor this game runs, taken here.
+    pub owned_damage_taken: u32,
+    /// Guest: when this game's actors' states were last sent.
+    owned_published_ms: Option<u64>,
+    /// Guest: the last state sent of each actor this game runs.
+    owned_last: BTreeMap<u32, ActorState>,
     /// Guest: frames an actor fighting on the host was kept at the host's place.
     pub fight_leads: u64,
     /// Host: how often the players of a space were told an actor had left it.
@@ -309,6 +331,15 @@ impl Fight {
             brings: 0,
             elsewhere: BTreeSet::new(),
             left_behind: BTreeSet::new(),
+            handoff: true,
+            theirs: BTreeSet::new(),
+            guest_run_moves: 0,
+            hosts_hits_forwarded: 0,
+            next_hit: 0,
+            owned_published: 0,
+            owned_damage_taken: 0,
+            owned_published_ms: None,
+            owned_last: BTreeMap::new(),
             fight_leads: 0,
             left_told: 0,
             published: 0,
@@ -388,9 +419,9 @@ impl Fight {
 
     /// An actor of the host's game as the state the ledger carries. A target that is a player
     /// (the host's own, or a guest's avatar) is named by the player.
-    fn state_of(s: &Snap, avatars: &[(PlayerId, u32)]) -> ActorState {
+    fn state_of(s: &Snap, avatars: &[(PlayerId, u32)], me: PlayerId) -> ActorState {
         let target = if s.target == actors::PLAYER_REF_ID {
-            PLAYER_TARGET_BASE
+            PLAYER_TARGET_BASE + u32::from(me.0)
         } else if let Some((p, _)) = avatars
             .iter()
             .find(|(_, a)| *a == s.target && s.target != 0)
@@ -431,6 +462,7 @@ impl Fight {
         if self.cap >= Cap::Damage {
             self.host_damage(e, sync, avatars, now_ms, &mut out);
         }
+        self.host_follow(e, sync);
         if self
             .published_ms
             .is_some_and(|t| now_ms.saturating_sub(t) < PUBLISH_EVERY_MS)
@@ -439,7 +471,39 @@ impl Fight {
         }
         self.published_ms = Some(now_ms);
         let mut seen = BTreeSet::new();
-        for a in fight::near(e) {
+        // The actors near the host's player, and with hand-off those near a guest's avatar too:
+        // the host's game may run those at a low level or not at all, and the guest's game, near
+        // them, runs them (PC run 21: with the host's player at the saloon, Sunny and the geckos
+        // outside stood still on the host and jumped about on the guest).
+        let places: Vec<(u32, [f32; 3])> = if self.handoff {
+            avatars
+                .iter()
+                .filter_map(|(_, av)| {
+                    let a = actors::actor(e, *av)?;
+                    Some((fight::space_of(e, a), fight::place_of(e, *av)?))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut candidates = fight::near(e);
+        if !places.is_empty() {
+            for a in fight::loaded(e) {
+                if candidates.contains(&a) {
+                    continue;
+                }
+                let (space, pos) = (fight::space_of(e, a), fight::place_of_ptr(e, a));
+                let close = places.iter().any(|(sp, p)| {
+                    *sp == space
+                        && (0..3).map(|i| (p[i] - pos[i]).powi(2)).sum::<f32>().sqrt()
+                            <= HANDOFF_RADIUS
+                });
+                if close {
+                    candidates.push(a);
+                }
+            }
+        }
+        for a in candidates {
             let s = fight::snap(e, a);
             if !actors::shareable(s.id)
                 || s.space == 0
@@ -449,13 +513,18 @@ impl Fight {
                 continue;
             }
             let id = FormId(s.id);
-            let state = Self::state_of(&s, avatars);
+            let state = Self::state_of(&s, avatars, PlayerId::HOST);
             if let std::collections::btree_map::Entry::Vacant(slot) = self.tracked.entry(s.id) {
                 sync.live.actors.register(id, state);
-                // Pinned to the host: its game runs every actor it has.
-                sync.live.actors.own.set_follower(id, Some(PlayerId::HOST));
                 slot.insert(Tracked::default());
             }
+            // Without hand-off every actor is the host's game's to run. With it, the nearest
+            // player's game runs it, except an actor keeping company with the host's player (a
+            // companion, someone leading it), whose package is about that player.
+            let keeps_company = coop_engine::commands::current_package(e, s.id)
+                .is_some_and(|p| p != 0 && coop_engine::commands::keeps_company(e, p));
+            let pin = (!self.handoff || keeps_company).then_some(PlayerId::HOST);
+            sync.live.actors.own.set_follower(id, pin);
             seen.insert(s.id);
             // The ledger's health is the game's, and the game says who cannot die.
             sync.live.actors.set_protected(id, s.essential);
@@ -484,6 +553,9 @@ impl Fight {
                 continue;
             };
             if rec.owner != Some(PlayerId::HOST) {
+                // A guest's game runs it: the host's copy is put where that game has it (each
+                // frame, in `host_follow`), and its state is not the host's to send.
+                t.last = None;
                 continue;
             }
             if t.last != Some(state) {
@@ -584,6 +656,48 @@ impl Fight {
 
     /// The host's part of the damage: what the ledger accepted of the guests' hits goes into
     /// the game, and the game's hits on avatars go to their players through the vitals.
+    /// Host: the actors a guest's game runs are put, here, where that game has them, every frame,
+    /// with the ledger's health; the hit wrap routes this player's hits on them through the
+    /// ledger, and keeps theirs on this player (the guest's game says those).
+    fn host_follow(&mut self, e: &mut Engine, sync: &mut HostSync) {
+        let mut theirs = BTreeSet::new();
+        for id in self.tracked.keys().copied().collect::<Vec<_>>() {
+            let Some(rec) = sync.live.actors.own.get(FormId(id)).copied() else {
+                continue;
+            };
+            if rec.owner.is_none() || rec.owner == Some(PlayerId::HOST) {
+                continue;
+            }
+            theirs.insert(id);
+            let s = rec.state;
+            if actors::actor(e, id).is_some_and(|a| fight::space_of(e, a) == s.cell.0) {
+                fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading));
+                self.guest_run_moves += 1;
+            }
+            if s.health > 0 {
+                fight::mend(e, id, f32::from(s.health));
+            }
+        }
+        if theirs != self.theirs {
+            let gained: Vec<u32> = theirs.difference(&self.theirs).copied().collect();
+            let lost: Vec<u32> = self.theirs.difference(&theirs).copied().collect();
+            for id in gained {
+                self.say(format!(
+                    "co-op fights: actor {id:08x} is nearer a guest: that guest's game runs it now"
+                ));
+            }
+            for id in lost {
+                self.say(format!(
+                    "co-op fights: actor {id:08x} is the host's game's to run again"
+                ));
+            }
+            self.theirs = theirs;
+        }
+        if self.cap >= Cap::Damage {
+            fight::set_ledgered(e, self.theirs.iter().copied());
+        }
+    }
+
     fn host_damage(
         &mut self,
         e: &mut Engine,
@@ -622,6 +736,27 @@ impl Fight {
             }
         }
         for h in fight::take_hits(e) {
+            // This player's hit on an actor a guest's game runs: into the ledger, which tells
+            // that game.
+            if self.theirs.contains(&h.target) {
+                let amount = damage16(h.amount);
+                if amount > 0 {
+                    self.next_hit += 1;
+                    let msg = ActorMsg::Hit {
+                        actor: FormId(h.target),
+                        hit: self.next_hit,
+                        amount,
+                    };
+                    out.extend(sync.live.on_msg(
+                        PlayerId::HOST,
+                        Msg::Actor(msg),
+                        now_ms,
+                        &mut sync.auth,
+                    ));
+                    self.hosts_hits_forwarded += 1;
+                }
+                continue;
+            }
             let Some((victim, _)) = avatars.iter().find(|(_, a)| *a == h.target) else {
                 continue;
             };
@@ -992,6 +1127,52 @@ impl Fight {
             }
         }
         coop_engine::commands::set_followed(e, followed);
+        // The actors this game runs (the host handed them over: this player is the nearest).
+        let owned: Vec<u32> = sync.live.actors.owned().iter().map(|f| f.0).collect();
+        if self.cap >= Cap::Damage {
+            // Every player's hit on them goes through the host's ledger, this one's too, and
+            // the damage the ledger records is done here, where they are run.
+            fight::set_ledgered(e, owned.iter().copied());
+            for (actor, by, amount) in std::mem::take(&mut sync.live.actors.damage_log) {
+                if !owned.contains(&actor.0) || amount == 0 {
+                    continue;
+                }
+                let attacker = if by == sync.player {
+                    actors::PLAYER_REF_ID
+                } else {
+                    avatars.iter().find(|(p, _)| *p == by).map_or(0, |a| a.1)
+                };
+                if fight::hurt_actor(e, actor.0, f32::from(amount), attacker).is_some() {
+                    self.owned_damage_taken += 1;
+                }
+            }
+        }
+        if !owned.is_empty()
+            && self
+                .owned_published_ms
+                .map_or(true, |t| now_ms.saturating_sub(t) >= PUBLISH_EVERY_MS)
+        {
+            self.owned_published_ms = Some(now_ms);
+            for id in &owned {
+                let Some(a) = actors::actor(e, *id) else {
+                    continue;
+                };
+                let s = fight::snap(e, a);
+                if s.space == 0 {
+                    continue;
+                }
+                let state = Self::state_of(&s, avatars, sync.player);
+                if self.owned_last.get(id) == Some(&state) {
+                    continue;
+                }
+                if let Some(msg) = sync.live.actors.publish(FormId(*id), state) {
+                    self.owned_last.insert(*id, state);
+                    self.owned_published += 1;
+                    out.push(Msg::Actor(msg));
+                }
+            }
+        }
+        self.owned_last.retain(|id, _| owned.contains(id));
         for id in self.held.difference(&holding) {
             // (a followed actor's AI was never off)
             if !self.follow {

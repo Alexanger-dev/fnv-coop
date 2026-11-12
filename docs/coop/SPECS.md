@@ -634,3 +634,28 @@ the hit wrap reads (a guest's hit on it is a claim for the host; its own blows o
 dropped, the host's game says what hits), and has the host's health. PC run 16 at `follow-threat`: geckos
 died to the guest's shots on both games and turned on the guest.
 
+## S22: hand-off, the nearest player's game runs an actor (implemented; not yet run on a PC)
+
+PC run 21: a game runs its actors at full detail only near its own player. With the host's player at
+the saloon door, the host's Sunny and geckos near the guest stood still or moved in jumps (low process),
+and the guest's copies, following them, did the same.
+
+- **Who runs an actor.** coop-core's ownership (nearest player in the actor's space, 300 units of
+  hysteresis, 1 s hold) is no longer pinned to the host, except for an actor whose package keeps
+  company with the host's player (`commands::keeps_company`: follow, escort, accompany aimed at the
+  player). `NV_COOP_HANDOFF=off` pins every actor to the host as before.
+- **What the host tracks.** The actors near its player (the close-actors list) and every loaded actor
+  (the process array, all four levels: `005de0f0`, `005be5c0`, `00968670`) within 4096 units of a
+  guest's avatar in the same space.
+- **A guest that runs an actor.** It leaves it to its own AI (with the host's package still pinned),
+  and sends its state every 100 ms when it changes (`ActorClient::publish`; the target names this
+  guest's player).
+- **The host's copy.** Put at the guest's place and heading every frame, health from the ledger.
+- **Damage.** Every player's hit on a handed actor is kept from that game (`fight::set_ledgered`) and
+  goes to the host's ledger; the game that runs the actor does the damage the ledger records
+  (`damage_log`), its death is that game's and reaches the host as a claim. What the actor does to a
+  player is that player's game's own.
+- **Known limits.** The host's copy of a handed actor is moved without its walk. A guest's game runs a
+  handed actor with the host's package; a package that only the host's game has started may not be
+  where the guest's copy is.
+

@@ -422,6 +422,15 @@ pub const CLOSE_ACTORS_OFFSET: u32 = 0x88;
 pub const CLOSE_ACTORS_COUNT_OFFSET: u32 = 0x150;
 /// See [`PROCESS_LISTS`] (`MAX_ACTORS_CLOSE_TO_PLAYER`).
 pub const CLOSE_ACTORS_MAX: u32 = 50;
+/// `ProcessArray` accessors (`processlists.rs`: `array_head`, `array_tail`, `array_object`),
+/// `this` the process array at `PROCESS_LISTS + 4`: the first index of a process level (0 high to
+/// 3 low), the end index of one, and the mobile object at an index. Every actor the game has
+/// loaded is in one of the levels, near its player or not.
+pub const PROCESS_ARRAY_HEAD: u32 = 0x005d_e0f0;
+/// See [`PROCESS_ARRAY_HEAD`].
+pub const PROCESS_ARRAY_TAIL: u32 = 0x005b_e5c0;
+/// See [`PROCESS_ARRAY_HEAD`].
+pub const PROCESS_ARRAY_OBJECT: u32 = 0x0096_8670;
 
 /// The `ActorValueOwner` part of an actor, at +0xa4, and its virtual `+0x0c`, the current value
 /// of an actor value as a float (`tesconditionfunctions.rs`, `fn_0059c4f0`, the `GetActorValue`

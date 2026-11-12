@@ -603,10 +603,18 @@ fn a_guest_is_not_moved_to_the_host_until_its_own_opening_is_done() {
     // itself (the trigger at the door gives the player its weapons back) and a little after.
     assert!(p.guest.set_stage(OPENING, 200));
     p.frames(40);
-    assert_eq!(p.guest.warps(), 0, "moved before walking out of the opening's room");
+    assert_eq!(
+        p.guest.warps(),
+        0,
+        "moved before walking out of the opening's room"
+    );
     p.guest.move_player(YARD, [5.0, 5.0, 0.0], 0.0);
     p.frames(10);
-    assert_eq!(p.guest.warps(), 0, "moved at once, before the door's trigger ran");
+    assert_eq!(
+        p.guest.warps(),
+        0,
+        "moved at once, before the door's trigger ran"
+    );
     p.frames(60);
     assert_eq!(p.guest.warps(), 1);
 }
@@ -960,6 +968,65 @@ fn a_copy_whose_package_is_aimed_at_the_player_is_given_it_and_room() {
     p.guest.move_actor(RAIDER, [2000.0, 20.0, 0.0], 0.5);
     p.frames(60);
     assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
+}
+
+/// PC run 21, 2026-11-12: with the host's player at the saloon door, Sunny and the geckos near
+/// the guest stood still on the host (its game ran them at a low level, far from its player)
+/// and jumped about on the guest. The nearest player's game runs an actor: here the guest's.
+/// The host's copy is put where the guest's game has it, the host's player's hits on it go
+/// through the ledger and are done in the guest's game, and the host takes it back when its
+/// player comes nearer.
+#[test]
+fn the_nearest_players_game_runs_an_actor() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(
+        p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)),
+        "{:?}",
+        p.host_fight().lines
+    );
+    // The guest's game moves it: the host's copy follows.
+    p.guest.move_actor(RAIDER, [200.0, 120.0, 0.0], 1.0);
+    p.frames(20);
+    assert!(close(p.host.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));
+    assert!(p.gd.fight.as_ref().unwrap().owned_published > 0);
+    // Its AI runs on the guest: it is not put back at the host's place.
+    assert!(close(p.guest.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));
+    // The host's player shoots it: done in the guest's game, through the ledger.
+    p.host.hit(RAIDER, PLAYER, 30.0);
+    assert_eq!(p.host.hits_run(), 0, "kept from the host's copy");
+    p.frames(10);
+    assert_eq!(p.guest.actor_view(RAIDER).health, 70.0);
+    assert_eq!(p.host.actor_view(RAIDER).health, 70.0);
+    // The guest's player shoots it: through the ledger too, done once.
+    let run = p.guest.hits_run();
+    p.guest.hit(RAIDER, PLAYER, 20.0);
+    assert_eq!(p.guest.hits_run(), run, "kept until the ledger says");
+    p.frames(10);
+    assert_eq!(p.guest.actor_view(RAIDER).health, 50.0);
+    // It hits the guest's player: that runs in the guest's game, where it is run.
+    let run = p.guest.hits_run();
+    p.guest.hit(PLAYER, RAIDER, 10.0);
+    assert_eq!(p.guest.hits_run(), run + 1);
+    // The host's player walks up to it: the host's game runs it again.
+    p.host.move_player(HOUSE, [210.0, 120.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.frames(80);
+    assert!(!p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    // With hand-off off the host keeps it whoever is nearer.
+    let mut q = Pair::with(Cap::Avatar, Some(fight::Cap::parse("")));
+    q.hd.fight.as_mut().unwrap().handoff = false;
+    q.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    q.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    q.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    q.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    q.frames(80);
+    assert!(!q.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
 }
 
 /// Peer review, 2026-11-11: a scene was asked of actors the game's own command would refuse. An

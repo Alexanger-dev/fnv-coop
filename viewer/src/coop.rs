@@ -403,16 +403,21 @@ impl Coop {
             let cap = shared.unwrap_or(session::fight::Cap::State);
             let mut fight = session::fight::Fight::new(guest, cap);
             fight.follow = true;
+            // Hand-off: the nearest player's game runs an actor (NV_COOP_HANDOFF=off: the
+            // host's game runs every one).
+            let handoff = std::env::var("NV_COOP_HANDOFF").map_or(true, |v| v.trim() != "off");
+            fight.handoff = handoff;
             fight.lead_on = !plain;
             fight.bring_on = !plain;
             fight.packages_on = packages;
             return (
                 Some(fight),
                 format!(
-                    "co-op fights: the host's actors are followed, fights shared up to {cap:?} (leading {}, through doors {}, the host's packages {}; NV_COOP_FIGHT=off turns it all off)",
+                    "co-op fights: the host's actors are followed, fights shared up to {cap:?} (leading {}, through doors {}, the host's packages {}, the nearest player's game runs an actor {}; NV_COOP_FIGHT=off turns it all off)",
                     if plain { "off" } else { "on" },
                     if plain { "off" } else { "on" },
-                    if packages { "on" } else { "off" }
+                    if packages { "on" } else { "off" },
+                    if handoff { "on" } else { "off" }
                 ),
             );
         }
