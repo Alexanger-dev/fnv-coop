@@ -99,6 +99,42 @@ struct GameData {
     globals: Vec<u32>,
     /// The game clock's globals: shared as the clock (the host's, about once a second).
     clock: Vec<u32>,
+    /// The quests each object script names (its `SCRO` references that are quests).
+    object_script_quests: std::collections::BTreeMap<u32, Vec<u32>>,
+}
+
+/// For every object script (`SCHR` type 0) of the load order, the quests it names.
+fn object_script_quests(order: &esm::LoadOrder) -> std::collections::BTreeMap<u32, Vec<u32>> {
+    let quests: std::collections::BTreeSet<u32> = order
+        .records_of_type(esm::FourCC::new(b"QUST"))
+        .map(|r| r.form_id.0)
+        .collect();
+    let mut out = std::collections::BTreeMap::new();
+    for r in order.records_of_type(esm::FourCC::new(b"SCPT")) {
+        let Ok(rec) = r.record() else { continue };
+        let object = rec
+            .get_all(esm::FourCC::new(b"SCHR"))
+            .next()
+            .and_then(|h| h.data.get(16..18).map(|t| u16::from_le_bytes([t[0], t[1]])))
+            == Some(0);
+        if !object {
+            continue;
+        }
+        let named: Vec<u32> = rec
+            .get_all(esm::FourCC::new(b"SCRO"))
+            .filter_map(|s| {
+                s.data
+                    .get(..4)
+                    .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            })
+            .map(|local| r.plugin.to_global(esm::FormId(local)).0)
+            .filter(|id| quests.contains(id))
+            .collect();
+        if !named.is_empty() {
+            out.insert(r.form_id.0, named);
+        }
+    }
+    out
 }
 
 /// The form ids, in the load order `plugins`, of the quests the rules class as per-player. A
@@ -181,7 +217,9 @@ fn game_data(data: &Path) -> Result<GameData, String> {
         .partition(|(clock, _)| *clock);
     let clock = clock.into_iter().map(|(_, id)| id).collect();
     let globals = globals.into_iter().map(|(_, id)| id).collect();
+    let object_script_quests = object_script_quests(&order);
     Ok(GameData {
+        object_script_quests,
         plugins,
         quests,
         own_quests,
@@ -231,6 +269,7 @@ pub struct Coop {
     plugins: Vec<String>,
     own_quests: Vec<u32>,
     own_scripts: Vec<u32>,
+    object_script_quests: std::collections::BTreeMap<u32, Vec<u32>>,
     scenes_set: bool,
     started: Instant,
     last_status: Option<Instant>,
@@ -394,6 +433,7 @@ impl Coop {
             own_scripts,
             globals,
             clock,
+            object_script_quests,
         } = game_data(data)?;
         let cfg = EndpointConfig {
             name: name.to_string(),
@@ -462,6 +502,7 @@ impl Coop {
                 plugins,
                 own_quests: own_quests.clone(),
                 own_scripts,
+                object_script_quests,
                 scenes_set: false,
                 started: Instant::now(),
                 last_status: None,
@@ -516,6 +557,7 @@ impl Coop {
                             lines.push(line);
                             g.proposals_on = std::env::var("NV_COOP_PROPOSE")
                                 .map_or(true, |v| v.trim() != "off");
+                            g.object_script_quests = self.object_script_quests.clone();
                             lines.push(format!(
                                 "co-op proposals: what this game's own object scripts do to the story is {} (NV_COOP_PROPOSE=off puts it back as before)",
                                 if g.proposals_on { "proposed to the host" } else { "put back" }

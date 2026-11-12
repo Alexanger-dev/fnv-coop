@@ -44,6 +44,8 @@ pub struct Gate {
     /// The form ids of story scripts a guest runs itself whatever their quest (the rules'
     /// guest-local scripts).
     own_scripts: RwLock<BTreeSet<u32>>,
+    /// The object scripts (not a quest's) that ran since [`drain_object_scripts`] last asked.
+    object_ran: Mutex<BTreeSet<u32>>,
     /// The distinct story scripts skipped (at most [`SEEN_MAX`]): the script's form id to whether
     /// it is a quest script, its owner quest's form id (0 for none) and how often it was skipped.
     seen: Mutex<BTreeMap<u32, SkippedScript>>,
@@ -114,6 +116,12 @@ fn run_named(e: &mut Engine, a: &[u32]) -> Ret {
     };
     let depth = {
         let g = e.ext_free::<Gate>();
+        if named.script != 0 && !named.quest_script {
+            g.object_ran
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(named.script);
+        }
         let mut s = g.running.lock().unwrap_or_else(PoisonError::into_inner);
         s.push(named);
         s.len() - 1
@@ -182,6 +190,18 @@ pub fn set_own_scripts(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
 }
 
 // social
+/// The object scripts (form ids; not a quest's script, not a dialogue result) that ran in this
+/// game since the last call.
+pub fn drain_object_scripts(e: &mut Engine) -> BTreeSet<u32> {
+    std::mem::take(
+        &mut *e
+            .ext_free::<Gate>()
+            .object_ran
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    )
+}
+
 /// Whether quest `id` is one the player runs for themself ([`set_own_quests`]).
 pub fn is_own_quest(e: &mut Engine, id: u32) -> bool {
     let g = e.ext_free::<Gate>();

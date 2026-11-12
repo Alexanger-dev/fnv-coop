@@ -17,6 +17,8 @@ const MQ: u32 = 0x0010_4c0c;
 const OPENING: u32 = 0x0010_4c1c;
 const HOUSE: u32 = 0x0010_5a00;
 const TOWN: u32 = 0x0010_5a01;
+/// A third place: the yard outside the opening's room.
+const YARD: u32 = 0x0010_5a02;
 const RAIDER: u32 = 0x0010_4f25;
 const GECKO: u32 = 0x0010_4f26;
 const PLAYER: u32 = 0x14;
@@ -28,7 +30,7 @@ fn spec() -> StorySpec {
     StorySpec {
         quests: vec![(MQ, vec![10, 20]), (OPENING, vec![200])],
         globals: vec![(0x39, 0.0)],
-        cells: vec![HOUSE, TOWN],
+        cells: vec![HOUSE, TOWN, YARD],
         actors: vec![RAIDER, GECKO],
         packages: vec![LEAD_OUT, STAY_IN],
         ..StorySpec::default()
@@ -597,8 +599,15 @@ fn a_guest_is_not_moved_to_the_host_until_its_own_opening_is_done() {
         .lines
         .iter()
         .any(|l| l.contains("follows once its own opening is done")));
+    // PC run 19: the stage is set indoors; the guest is not moved until it has walked out
+    // itself (the trigger at the door gives the player its weapons back) and a little after.
     assert!(p.guest.set_stage(OPENING, 200));
     p.frames(40);
+    assert_eq!(p.guest.warps(), 0, "moved before walking out of the opening's room");
+    p.guest.move_player(YARD, [5.0, 5.0, 0.0], 0.0);
+    p.frames(10);
+    assert_eq!(p.guest.warps(), 0, "moved at once, before the door's trigger ran");
+    p.frames(60);
     assert_eq!(p.guest.warps(), 1);
 }
 

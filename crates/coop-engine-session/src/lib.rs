@@ -772,6 +772,12 @@ pub struct GuestDriver {
     differed: std::collections::BTreeSet<(u32, u8, u32)>,
     /// Entries of the story this game could not take when they last came.
     unapplied: std::collections::BTreeSet<(u32, u8, u32)>,
+    /// The quests each object script of the game's data names (from the data files): a change
+    /// to one of them with no cause in the journal is proposed only when such a script ran here
+    /// just before.
+    pub object_script_quests: std::collections::BTreeMap<u32, Vec<u32>>,
+    /// Object scripts naming a quest that ran here lately, and when.
+    recent_object_scripts: std::collections::BTreeMap<u32, u64>,
     /// Whether this game's own object scripts' changes are proposed to the host
     /// (`NV_COOP_PROPOSE=off` turns it off: they are put back as before).
     pub proposals_on: bool,
@@ -851,6 +857,8 @@ impl GuestDriver {
             differed: std::collections::BTreeSet::new(),
             unapplied: std::collections::BTreeSet::new(),
             proposals_on: true,
+            object_script_quests: std::collections::BTreeMap::new(),
+            recent_object_scripts: std::collections::BTreeMap::new(),
             proposals_sent: 0,
             proposals_lapsed: 0,
             scene_seen: std::collections::BTreeMap::new(),
@@ -931,6 +939,13 @@ impl GuestDriver {
             w.apply(e, &self.sync.store);
         }
         self.keep_clock(e, now_ms);
+        for script in gate::drain_object_scripts(e) {
+            if self.object_script_quests.contains_key(&script) {
+                self.recent_object_scripts.insert(script, now_ms);
+            }
+        }
+        self.recent_object_scripts
+            .retain(|_, at| now_ms.saturating_sub(*at) <= PROPOSE_RECENT_MS);
         let claims = std::mem::take(&mut self.proposals_out);
         if !claims.is_empty() {
             for msg in self.sync.send_intent(Epoch(0), claims) {
@@ -1082,6 +1097,12 @@ impl GuestDriver {
         }
     }
 
+    /// Forgets what the journal said caused each change so far (tests: a change that comes later
+    /// with no cause of its own).
+    pub fn forget_causes(&mut self) {
+        self.causes.clear();
+    }
+
     /// Whether a difference from the story is left alone for now: it is what one of this game's
     /// own object scripts did (not a quest's script, which the gate holds; not a line of dialogue,
     /// which the conversations carry), it has been proposed to the host, and the host has had
@@ -1111,6 +1132,15 @@ impl GuestDriver {
         let stable = self.joined && !self.unapplied.contains(&key);
         let fresh = !self.differed.contains(&key);
         let cause = self.causes.get(&m.form);
+        // A quest's variable or stage changed with no cause in the journal (`set Quest.var to`
+        // leaves none) is this player's doing only if an object script that names that quest
+        // ran in this game just before (PC run 19: quests of the pre-order packs changed here on
+        // their own, every few seconds, and were proposed).
+        let named_by_a_script = self.recent_object_scripts.iter().any(|(script, _)| {
+            self.object_script_quests
+                .get(script)
+                .is_some_and(|qs| qs.contains(&m.form))
+        });
         let allowed = match &m.want {
             // A reference: only when one of this game's own object scripts is known to have done
             // it (lights and the like differ between two games for reasons of their own).
@@ -1121,10 +1151,14 @@ impl GuestDriver {
             // script (the gate holds those). An object script's `set Quest.var to` leaves no
             // cause behind (PC run 17: the bottles' count), and a line of dialogue that gives
             // this player something runs here and moves the story too (the Varmint Rifle).
-            Field::ScriptVar { .. } => !cause.is_some_and(|c| c.quest_script),
-            Field::Custom { tag, .. } if *tag == record::QUEST_RECORD_TAG => {
-                !cause.is_some_and(|c| c.quest_script)
-            }
+            Field::ScriptVar { .. } => match cause {
+                Some(c) => c.script != 0 && !c.quest_script && c.owner_quest == 0,
+                None => named_by_a_script,
+            },
+            Field::Custom { tag, .. } if *tag == record::QUEST_RECORD_TAG => match cause {
+                Some(c) => c.script != 0 && !c.quest_script && c.owner_quest == 0,
+                None => named_by_a_script,
+            },
             _ => false,
         };
         if !(stable && fresh && allowed)
@@ -1476,6 +1510,9 @@ impl Proposal {
         }
     }
 }
+
+/// How long after an object script naming a quest ran a change to that quest is put down to it.
+pub const PROPOSE_RECENT_MS: u64 = 3000;
 
 /// What tells two fields of one kind on one form apart (a variable's index).
 fn sub_of(f: &Field) -> u32 {

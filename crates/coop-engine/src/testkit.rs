@@ -49,6 +49,10 @@ const BOTTLE_SCRIPT: u32 = 0x0150_0600;
 /// An object script whose body is `Disable` on the reference it runs on (a trigger that spends
 /// itself).
 const SPEND_SCRIPT: u32 = 0x0150_0500;
+/// The form id of the object script [`Story::run_object_script_setting_stage`] runs.
+pub const SETTER_SCRIPT_ID: u32 = 0x0015_0001;
+/// The form id of the target's script [`Story::shoot_target`] runs (`VCG02TargetSCRIPT`'s).
+pub const BOTTLE_SCRIPT_ID: u32 = 0x0010_a1ef;
 /// Where a reference's primitive is kept, in its own block (a trigger volume has one).
 const PRIMITIVE_OFFSET: u32 = 0xeb0;
 /// Where an actor's count of package evaluations is kept, in its own block.
@@ -325,7 +329,10 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
     if a[1] == BOTTLE_SCRIPT {
         // A target's script: the stage, the quest's first variable up by one, itself off.
         let (quest, stage) = (e.mem.u32(SETTER + 4), e.mem.u32(SETTER + 8) as u8);
-        forms::set_quest_stage(e, quest, stage);
+        // (stage 0: only the count, as the first bottles do)
+        if stage != 0 {
+            forms::set_quest_stage(e, quest, stage);
+        }
         if let Some((index, bits)) =
             crate::vars::quest_vars(e, quest).and_then(|v| v.first().copied())
         {
@@ -846,6 +853,9 @@ impl Story {
         let r = forms::form(&mut self.e, reference).expect("a reference of the story");
         self.e.mem.set_u32(SETTER + 4, quest);
         self.e.mem.set_u32(SETTER + 8, u32::from(stage));
+        self.e
+            .mem
+            .set_u32(SETTER_SCRIPT + addr::FORM_ID_OFFSET, SETTER_SCRIPT_ID);
         self.e.call(
             addr::SCRIPT_RUNNER_RUN,
             &args![0u32, SETTER_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
@@ -958,7 +968,7 @@ impl Story {
         self.e.mem.set_u32(SETTER + 8, u32::from(stage));
         self.e
             .mem
-            .set_u32(BOTTLE_SCRIPT + addr::FORM_ID_OFFSET, 0x0010_a1ef);
+            .set_u32(BOTTLE_SCRIPT + addr::FORM_ID_OFFSET, BOTTLE_SCRIPT_ID);
         self.e.call(
             addr::SCRIPT_RUNNER_RUN,
             &args![0u32, BOTTLE_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],

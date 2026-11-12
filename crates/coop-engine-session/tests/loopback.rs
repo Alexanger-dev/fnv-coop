@@ -1126,6 +1126,13 @@ fn a_reference_that_is_no_trigger_and_spends_itself_is_still_shared() {
 fn what_a_guests_own_object_script_does_is_done_by_the_host_for_everyone() {
     let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
     let mut t = 0;
+    // The game's data: these object scripts name the main quest.
+    for script in [
+        coop_engine::testkit::SETTER_SCRIPT_ID,
+        coop_engine::testkit::BOTTLE_SCRIPT_ID,
+    ] {
+        gd.object_script_quests.insert(script, vec![MQ]);
+    }
     frames(
         30,
         &mut t,
@@ -1188,6 +1195,33 @@ fn what_a_guests_own_object_script_does_is_done_by_the_host_for_everyone() {
         &mut *gnet,
     );
     assert_eq!(f64::from_bits(var(&mut host)), before + 3.0);
+    // A bottle that only counts (no stage, no objective): nothing in the journal names a cause
+    // for the quest; the script that ran names the quest, which is enough.
+    guest.set_disabled(CHET, false);
+    host.set_disabled(CHET, false);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    gd.forget_causes();
+    guest.shoot_target(CHET, MQ, 0);
+    frames(
+        80,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(f64::from_bits(var(&mut host)), before + 4.0);
     assert_same_game(&mut host, &mut guest);
     assert_eq!((gd.refused, gd.sync.desyncs_detected), (0, 0));
 }
@@ -1200,6 +1234,13 @@ fn what_a_guests_own_object_script_does_is_done_by_the_host_for_everyone() {
 fn a_guests_stage_is_done_by_the_host_and_another_drift_is_put_back() {
     let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
     let mut t = 0;
+    // The game's data: these object scripts name the main quest.
+    for script in [
+        coop_engine::testkit::SETTER_SCRIPT_ID,
+        coop_engine::testkit::BOTTLE_SCRIPT_ID,
+    ] {
+        gd.object_script_quests.insert(script, vec![MQ]);
+    }
     frames(
         30,
         &mut t,
@@ -1231,6 +1272,48 @@ fn a_guests_stage_is_done_by_the_host_and_another_drift_is_put_back() {
     let notes = gd.healed_notes.join("\n");
     assert!(notes.contains("cause unknown"), "{notes}");
     assert!(notes.contains("proposed to the host"), "{notes}");
+}
+
+/// PC run 19, 2026-11-12: quests of the pre-order packs changed in the guest's game on their own
+/// (timers, references), with no cause in the journal, and were proposed every few seconds. A
+/// change with no cause is proposed only when an object script that names that quest ran in
+/// this game just before; otherwise it is put back as before.
+#[test]
+fn a_quest_change_no_script_of_this_game_explains_is_put_back() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    // The data says the bottle's script names some other quest, not this one.
+    gd.object_script_quests
+        .insert(coop_engine::testkit::BOTTLE_SCRIPT_ID, vec![0x0099_0001]);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    let var = |s: &mut Story| coop_engine::vars::quest_vars(&mut s.e, MQ).unwrap()[0].1;
+    let before = var(&mut host);
+    // The quest's variable moves in the guest's game with nothing in the journal, while an
+    // object script that names another quest runs.
+    guest.shoot_target(CHET, 0x0099_0001, 20);
+    let index = coop_engine::vars::quest_vars(&mut guest.e, MQ).unwrap()[0].0;
+    coop_engine::vars::set_quest_var(&mut guest.e, MQ, index, 2.5f64.to_bits());
+    frames(
+        80,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(var(&mut host), before);
+    assert_eq!(var(&mut guest), before, "put back");
 }
 
 /// A guest whose game is merely behind the story (it joins with a game that already did things
