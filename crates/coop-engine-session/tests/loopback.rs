@@ -1091,7 +1091,7 @@ fn a_reference_that_is_no_trigger_and_spends_itself_is_still_shared() {
     );
     assert_eq!(guest.disabled(CHET), Some(true));
     assert_eq!(hd.triggers_kept, 0);
-    // And the guest's own is put back.
+    // And the guest's own, spent by its player, is proposed and gone for everyone (S21).
     host.set_disabled(CHET, false);
     frames(
         30,
@@ -1114,7 +1114,8 @@ fn a_reference_that_is_no_trigger_and_spends_itself_is_still_shared() {
         &mut gd,
         &mut *gnet,
     );
-    assert_eq!(guest.disabled(CHET), Some(false));
+    assert_eq!(guest.disabled(CHET), Some(true));
+    assert_eq!(host.disabled(CHET), Some(true));
 }
 
 /// PC run 16, 2026-11-11: the guest shot Sunny's bottles and the count stayed the host's; only
@@ -1314,6 +1315,42 @@ fn a_quest_change_no_script_of_this_game_explains_is_put_back() {
     );
     assert_eq!(var(&mut host), before);
     assert_eq!(var(&mut guest), before, "put back");
+}
+
+/// PC run 20, 2026-11-12: Sunny's rifle line ran in the guest's game (objective 5 completed,
+/// 10 shown) and was put back, so the guest got no instructions. A quest change the journal puts
+/// down to a line of this player's dialogue is proposed like an object script's.
+#[test]
+fn a_quest_change_made_by_the_guests_dialogue_is_done_by_the_host() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    // A dialogue result (script id 0, run on the speaker) sets the stage in the guest's game.
+    guest.run_dialogue_result_setting_stage(SUNNY, MQ, 20);
+    frames(
+        60,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert!(coop_engine::quest::record(&mut host.e, MQ)
+        .unwrap()
+        .done
+        .contains(&20));
+    assert_same_game(&mut host, &mut guest);
 }
 
 /// A guest whose game is merely behind the story (it joins with a game that already did things

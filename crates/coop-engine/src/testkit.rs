@@ -862,6 +862,19 @@ impl Story {
         );
     }
 
+    /// A line's result script (no form id of its own) run on `speaker` sets `quest`'s stage, as
+    /// a line of this player's dialogue whose result runs in this game does.
+    pub fn run_dialogue_result_setting_stage(&mut self, speaker: u32, quest: u32, stage: u8) {
+        let r = forms::form(&mut self.e, speaker).expect("a reference of the story");
+        self.e.mem.set_u32(SETTER + 4, quest);
+        self.e.mem.set_u32(SETTER + 8, u32::from(stage));
+        self.e.mem.set_u32(SETTER_SCRIPT + addr::FORM_ID_OFFSET, 0);
+        self.e.call(
+            addr::SCRIPT_RUNNER_RUN,
+            &args![0u32, SETTER_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
+    }
+
     /// A script tells an actor to evaluate its package (`evp`), as a stage's result script does.
     pub fn script_evp(&mut self, actor: u32) {
         let a = crate::actors::actor(&mut self.e, actor).expect("an actor of the story");

@@ -1141,24 +1141,24 @@ impl GuestDriver {
                 .get(script)
                 .is_some_and(|qs| qs.contains(&m.form))
         });
+        // What this game's own doing is: an object script's, or a line of this player's own
+        // dialogue whose result ran here (PC run 20: Sunny's rifle line completed an objective
+        // and showed the next in the guest's game; put back, the guest got no instructions). A
+        // quest's script is the host's (the gate holds those). Everything proposed is done by
+        // the host only if it still fits, so a result the host also runs is not done twice.
+        let own_doing = |c: &gate::Cause| !c.quest_script && c.owner_quest == 0;
         let allowed = match &m.want {
-            // A reference: only when one of this game's own object scripts is known to have done
-            // it (lights and the like differ between two games for reasons of their own).
-            Field::RefDisabled { .. } => {
-                cause.is_some_and(|c| c.script != 0 && !c.quest_script && c.owner_quest == 0)
+            // A reference: only when this game's own doing is known to have done it (lights and
+            // the like differ between two games for reasons of their own).
+            Field::RefDisabled { .. } => cause.is_some_and(own_doing),
+            // A quest's variable or record: a script that names the quest ran here just before,
+            // or the journal's last word on the quest is this game's own doing. (A variable leaves
+            // nothing in the journal, so the journal's word may be older than the change: PC run
+            // 20, the bottles' count was put down to the rifle line.)
+            Field::ScriptVar { .. } => named_by_a_script || cause.is_some_and(own_doing),
+            Field::Custom { tag, .. } if *tag == record::QUEST_RECORD_TAG => {
+                named_by_a_script || cause.is_some_and(own_doing)
             }
-            // A quest's variable, stage or objective: whatever in this game did it but a quest's
-            // script (the gate holds those). An object script's `set Quest.var to` leaves no
-            // cause behind (PC run 17: the bottles' count), and a line of dialogue that gives
-            // this player something runs here and moves the story too (the Varmint Rifle).
-            Field::ScriptVar { .. } => match cause {
-                Some(c) => c.script != 0 && !c.quest_script && c.owner_quest == 0,
-                None => named_by_a_script,
-            },
-            Field::Custom { tag, .. } if *tag == record::QUEST_RECORD_TAG => match cause {
-                Some(c) => c.script != 0 && !c.quest_script && c.owner_quest == 0,
-                None => named_by_a_script,
-            },
             _ => false,
         };
         if !(stable && fresh && allowed)
