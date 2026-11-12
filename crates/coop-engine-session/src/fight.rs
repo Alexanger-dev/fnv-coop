@@ -204,6 +204,8 @@ pub struct Fight {
     elsewhere: BTreeSet<u32>,
     /// Guest: actors whose host's copy has left this player's space while this game's has not.
     left_behind: BTreeSet<u32>,
+    /// Guest: frames an actor fighting on the host was kept at the host's place.
+    pub fight_leads: u64,
     /// Host: how often the players of a space were told an actor had left it.
     pub left_told: u64,
     /// Host: states published.
@@ -305,6 +307,7 @@ impl Fight {
             brings: 0,
             elsewhere: BTreeSet::new(),
             left_behind: BTreeSet::new(),
+            fight_leads: 0,
             left_told: 0,
             published: 0,
             hits_applied: 0,
@@ -863,6 +866,15 @@ impl Fight {
                     }
                     self.ask_package(e, id, now_ms);
                     let to = s.pos.map(dequant_pos);
+                    // In a shared fight the place matters more than the gait: an actor fighting on
+                    // the host is kept at the host's place every frame (PC run 17: the guest's
+                    // copies fought their own fight, and were put back in jumps and out of sight).
+                    if self.cap >= Cap::Damage && s.flags & FLAG_COMBAT != 0 {
+                        fight::lead(e, id, to, dequant_heading(s.heading));
+                        self.far_since.remove(&id);
+                        self.fight_leads += 1;
+                        continue;
+                    }
                     if self.led_until.get(&id).is_some_and(|until| now_ms < *until) {
                         fight::lead(e, id, to, dequant_heading(s.heading));
                         self.far_since.remove(&id);

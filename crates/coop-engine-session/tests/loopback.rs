@@ -1192,10 +1192,12 @@ fn what_a_guests_own_object_script_does_is_done_by_the_host_for_everyone() {
     assert_eq!((gd.refused, gd.sync.desyncs_detected), (0, 0));
 }
 
-/// D5, rung 1 (the census): a shared quest a guest's own script advanced is put back, as before,
-/// and the log names the script that did it. Nothing else changes.
+/// D5, rungs 1 and 2: a shared quest's stage that something in a guest's game set (a line of
+/// dialogue that also hands this player an item runs there: the Varmint Rifle, PC run 17) is
+/// proposed and done by the host; a change the host cannot do for everyone (a global) is put
+/// back, as before, and logged.
 #[test]
-fn a_drift_is_put_back_and_its_cause_named() {
+fn a_guests_stage_is_done_by_the_host_and_another_drift_is_put_back() {
     let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
     let mut t = 0;
     frames(
@@ -1208,12 +1210,10 @@ fn a_drift_is_put_back_and_its_cause_named() {
         &mut gd,
         &mut *gnet,
     );
-    // An object script of the guest's game (a trigger, a line of dialogue) sets a shared stage.
     guest.run_object_script_setting_stage(CHET, MQ, 20);
-    // A change no script made (the cause is not known).
     guest.set_global(0x39, 7.0);
     frames(
-        25,
+        60,
         &mut t,
         &mut host,
         &mut hd,
@@ -1222,21 +1222,27 @@ fn a_drift_is_put_back_and_its_cause_named() {
         &mut gd,
         &mut *gnet,
     );
+    assert!(coop_engine::quest::record(&mut host.e, MQ)
+        .unwrap()
+        .done
+        .contains(&20));
     assert_same_game(&mut host, &mut guest);
-    assert_eq!((gd.drift_named, gd.drift_unnamed), (1, 1));
+    assert_eq!((gd.drift_named, gd.drift_unnamed), (0, 1));
     let notes = gd.healed_notes.join("\n");
-    assert!(
-        notes.contains(&format!("COOP-DRIFT form {MQ:08x}"))
-            && notes.contains(&format!(
-                "object script 00000000 (quest 00000000) on reference {CHET:08x}"
-            )),
-        "{notes}"
-    );
     assert!(notes.contains("cause unknown"), "{notes}");
-    // The same drift again is not logged again.
+    assert!(notes.contains("proposed to the host"), "{notes}");
+}
+
+/// A guest whose game is merely behind the story (it joins with a game that already did things
+/// of its own) proposes nothing: the story is put into its game, not its game into the story.
+#[test]
+fn a_guest_that_joins_with_a_game_of_its_own_proposes_nothing() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
     guest.run_object_script_setting_stage(CHET, MQ, 20);
+    guest.shoot_target(SUNNY, MQ, 20);
     frames(
-        25,
+        80,
         &mut t,
         &mut host,
         &mut hd,
@@ -1245,8 +1251,12 @@ fn a_drift_is_put_back_and_its_cause_named() {
         &mut gd,
         &mut *gnet,
     );
-    assert_eq!((gd.drift_named, gd.drift_unnamed), (1, 1));
-    assert_eq!(hd.claims_enacted + hd.claims_dropped, 0);
+    assert!(!coop_engine::quest::record(&mut host.e, MQ)
+        .unwrap()
+        .done
+        .contains(&20));
+    assert_eq!((hd.proposals_enacted, gd.proposals_sent), (0, 0));
+    assert_same_game(&mut host, &mut guest);
 }
 
 /// PC run 6, 2026-11-10: after her dialogue Sunny stood still. The stage's result script tells

@@ -316,6 +316,13 @@ fn a_guests_hit_on_a_followed_actor_goes_through_the_host() {
     assert_eq!((h.health, h.attacker), (70.0, avatar));
     let g = p.guest.actor_view(RAIDER);
     assert_eq!((g.health, g.ai), (70.0, true));
+    // While it fights on the host its copy is kept at the host's place every frame, however
+    // little it has strayed.
+    p.host.set_combat(RAIDER, PLAYER);
+    p.host.move_actor(RAIDER, [40.0, 20.0, 0.0], 0.5);
+    p.frames(3);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [40.0, 20.0, 0.0]));
+    assert!(p.guest_fight().fight_leads > 0);
     // What the copy's own AI does to this player is the host's to say.
     p.guest.hit(PLAYER, RAIDER, 20.0);
     assert_eq!(p.guest.hits_run(), 0);

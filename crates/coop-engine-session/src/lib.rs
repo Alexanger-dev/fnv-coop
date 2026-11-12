@@ -768,6 +768,10 @@ pub struct GuestDriver {
     proposed: std::collections::BTreeMap<(u32, u8, u32), (Field, u64)>,
     /// Proposals to send.
     proposals_out: Vec<(FormId, Field)>,
+    /// What differed from the story at the last heal.
+    differed: std::collections::BTreeSet<(u32, u8, u32)>,
+    /// Entries of the story this game could not take when they last came.
+    unapplied: std::collections::BTreeSet<(u32, u8, u32)>,
     /// Whether this game's own object scripts' changes are proposed to the host
     /// (`NV_COOP_PROPOSE=off` turns it off: they are put back as before).
     pub proposals_on: bool,
@@ -844,6 +848,8 @@ impl GuestDriver {
             now_ms: 0,
             proposed: std::collections::BTreeMap::new(),
             proposals_out: Vec::new(),
+            differed: std::collections::BTreeSet::new(),
+            unapplied: std::collections::BTreeSet::new(),
             proposals_on: true,
             proposals_sent: 0,
             proposals_lapsed: 0,
@@ -1099,11 +1105,32 @@ impl GuestDriver {
             }
             self.proposed.remove(&key);
         }
-        let own_script = self
-            .causes
-            .get(&m.form)
-            .is_some_and(|c| c.script != 0 && !c.quest_script && c.owner_quest == 0);
-        if !own_script || !self.proposals_on || self.sync.phase() != GuestPhase::Active {
+        // This game changed it, not the story: the story's entry went into this game when it
+        // last came (an entry this game could not take is this game being behind, and is never
+        // proposed), and this game agreed with the story at the last heal.
+        let stable = self.joined && !self.unapplied.contains(&key);
+        let fresh = !self.differed.contains(&key);
+        let cause = self.causes.get(&m.form);
+        let allowed = match &m.want {
+            // A reference: only when one of this game's own object scripts is known to have done
+            // it (lights and the like differ between two games for reasons of their own).
+            Field::RefDisabled { .. } => {
+                cause.is_some_and(|c| c.script != 0 && !c.quest_script && c.owner_quest == 0)
+            }
+            // A quest's variable, stage or objective: whatever in this game did it but a quest's
+            // script (the gate holds those). An object script's `set Quest.var to` leaves no
+            // cause behind (PC run 17: the bottles' count), and a line of dialogue that gives
+            // this player something runs here and moves the story too (the Varmint Rifle).
+            Field::ScriptVar { .. } => !cause.is_some_and(|c| c.quest_script),
+            Field::Custom { tag, .. } if *tag == record::QUEST_RECORD_TAG => {
+                !cause.is_some_and(|c| c.quest_script)
+            }
+            _ => false,
+        };
+        if !(stable && fresh && allowed)
+            || !self.proposals_on
+            || self.sync.phase() != GuestPhase::Active
+        {
             return false;
         }
         let ps = Proposal::between(m.form, &m.want, found);
@@ -1143,7 +1170,12 @@ impl GuestDriver {
         for id in quests {
             self.relisted += quest::relist(e, id);
         }
-        for m in echo(e, &self.sync.store) {
+        let mismatches = echo(e, &self.sync.store);
+        let differ: std::collections::BTreeSet<(u32, u8, u32)> = mismatches
+            .iter()
+            .map(|m| (m.form, m.want.kind(), sub_of(&m.want)))
+            .collect();
+        for m in mismatches {
             if self.own_trigger_keeps(m.form, &m.want) {
                 continue;
             }
@@ -1173,6 +1205,7 @@ impl GuestDriver {
                 self.heal_refused += 1;
             }
         }
+        self.differed = differ;
     }
 
     /// Applies to the game what changed in the replica since the last call; after a snapshot or a
@@ -1221,8 +1254,12 @@ impl GuestDriver {
             if self.own_trigger_keeps(form, &field) {
                 continue;
             }
-            if !apply_field(e, form, &field) {
+            let key = (form, field.kind(), sub_of(&field));
+            if apply_field(e, form, &field) {
+                self.unapplied.remove(&key);
+            } else {
                 self.refused += 1;
+                self.unapplied.insert(key);
             }
         }
         if all {
