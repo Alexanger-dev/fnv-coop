@@ -113,6 +113,11 @@ pub const PLAYER_TARGET_BASE: u32 = 0xfe00_0000;
 /// How near a guest's avatar an actor the host's game has loaded must be to be tracked (and
 /// so be run by the nearest player's game).
 pub const HANDOFF_RADIUS: f32 = 4096.0;
+
+/// How long an actor must have been in the host's close-actors list without a break before it
+/// counts as run in full by the host's game (ms). The game's list leaves an actor out and takes
+/// it back from one moment to the next near its edge.
+pub const CLOSE_SETTLE_MS: u64 = 5_000;
 pub const AIMED_DISTANCE: f32 = 800.0;
 /// The host reads and publishes its actors this often.
 pub const PUBLISH_EVERY_MS: u64 = 50;
@@ -228,6 +233,10 @@ pub struct Fight {
     owned_published_ms: Option<u64>,
     /// Guest: the last state sent of each actor this game runs.
     owned_last: BTreeMap<u32, ActorState>,
+    /// Guest: the actors this game ran at the last frame.
+    owned_before: BTreeSet<u32>,
+    /// Host: when the game's close-actors list last left each tracked actor out.
+    left_out_at: BTreeMap<u32, u64>,
     /// Guest: frames an actor fighting on the host was kept at the host's place.
     pub fight_leads: u64,
     /// Host: how often the players of a space were told an actor had left it.
@@ -340,6 +349,8 @@ impl Fight {
             owned_damage_taken: 0,
             owned_published_ms: None,
             owned_last: BTreeMap::new(),
+            owned_before: BTreeSet::new(),
+            left_out_at: BTreeMap::new(),
             fight_leads: 0,
             left_told: 0,
             published: 0,
@@ -486,7 +497,29 @@ impl Fight {
             Vec::new()
         };
         let mut candidates = fight::near(e);
-        let close_to_host: BTreeSet<u32> = candidates.iter().copied().collect();
+        // In the list now, and, for one a guest's game runs that the list left out at some time,
+        // without a break for CLOSE_SETTLE_MS since (PC run 25: Sunny, at the edge of the host's
+        // list between the wells, went from one game to the other every second or two, and
+        // stood ~20 s).
+        let id_of =
+            |e: &mut Engine, a: u32| e.mem.u32(a.wrapping_add(coop_engine::addr::FORM_ID_OFFSET));
+        let near_ids: BTreeSet<u32> = candidates.iter().map(|a| id_of(e, *a)).collect();
+        for id in &self.theirs {
+            if !near_ids.contains(id) {
+                self.left_out_at.insert(*id, now_ms);
+            }
+        }
+        self.left_out_at
+            .retain(|a, t| self.theirs.contains(a) && now_ms.saturating_sub(*t) < CLOSE_SETTLE_MS);
+        let close_to_host: BTreeSet<u32> = candidates
+            .iter()
+            .copied()
+            .filter(|a| {
+                self.left_out_at
+                    .get(&id_of(e, *a))
+                    .map_or(true, |t| now_ms.saturating_sub(*t) >= CLOSE_SETTLE_MS)
+            })
+            .collect();
         if !places.is_empty() {
             for a in fight::loaded(e) {
                 if candidates.contains(&a) {
@@ -568,7 +601,9 @@ impl Fight {
             }
             // The package it runs, sent when it changes: a guest's copy is given the same. A
             // dead one runs none of the host's.
-            let package = if s.dead() {
+            // Nor one a guest's game runs: its copy there picks its own (this game's copy is kept
+            // still and its package here says nothing).
+            let package = if s.dead() || self.theirs.contains(&s.id) {
                 Some(0)
             } else {
                 coop_engine::commands::current_package(e, s.id)
@@ -711,10 +746,15 @@ impl Fight {
             }
             theirs.insert(id);
             let s = rec.state;
+            // Kept still here, its AI off: the guest's game runs it, and this game's copy must
+            // do none of its own doing meanwhile (PC run 25: led with its AI on, Sunny's copy
+            // here, far from this player and run at a low level, finished her sneak package and
+            // her conversation at once and set the stages past them, so the guest's copy never
+            // sneaked and its player was not told to).
             if fight::place_of(e, id).is_some()
                 && actors::actor(e, id).is_some_and(|a| fight::space_of(e, a) == s.cell.0)
+                && fight::still(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading)).is_some()
             {
-                fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading));
                 self.guest_run_moves += 1;
             }
         }
@@ -727,6 +767,8 @@ impl Fight {
                 ));
             }
             for id in lost {
+                // This game runs it again, from where the guest's game left it.
+                fight::rethink(e, id);
                 self.say(format!(
                     "co-op fights: actor {id:08x} is the host's game's to run again"
                 ));
@@ -1149,10 +1191,25 @@ impl Fight {
         // (the host takes its word back when it no longer runs the actor): one that walked out
         // after the host's must not turn round because this game would have it elsewhere (PC
         // run 13: Sunny's copy went out and came back in).
-        let followed = match me {
-            Some(_) => coop_engine::commands::wanted_ids(e),
+        // The actors this game runs (the host handed them over: this player is the nearest).
+        let owned: Vec<u32> = sync.live.actors.owned().iter().map(|f| f.0).collect();
+        // One of them picks its own package here, as this game has the story: the host's copy is
+        // kept still while this game runs it, and its package there says nothing.
+        let followed: BTreeSet<u32> = match me {
+            Some(_) => coop_engine::commands::wanted_ids(e)
+                .into_iter()
+                .filter(|id| !owned.contains(id))
+                .collect(),
             None => BTreeSet::new(),
         };
+        for id in &owned {
+            if !self.owned_before.contains(id) && fight::rethink(e, *id) {
+                self.say(format!(
+                    "co-op fights: actor {id:08x} is this game's to run: it picks its own package"
+                ));
+            }
+        }
+        self.owned_before = owned.iter().copied().collect();
         // A copy near this player of an actor the host runs out of its own player's sight (no
         // place is told of it then, only its package): asked to take that package too.
         if let Some(me) = me.filter(|_| self.follow) {
@@ -1167,8 +1224,6 @@ impl Fight {
             }
         }
         coop_engine::commands::set_followed(e, followed);
-        // The actors this game runs (the host handed them over: this player is the nearest).
-        let owned: Vec<u32> = sync.live.actors.owned().iter().map(|f| f.0).collect();
         if self.cap >= Cap::Damage {
             // Every player's hit on them goes through the host's ledger, this one's too, and
             // the damage the ledger records is done here, where they are run.

@@ -833,6 +833,10 @@ fn a_followed_copy_is_brought_through_the_door_after_the_hosts_actor() {
 fn a_followed_actor_runs_the_package_the_hosts_copy_runs() {
     let mut p = Pair::new();
     p.gd.fight.as_mut().unwrap().follow = true;
+    // The host's game runs it throughout (with hand-off, one out of the host's player's sight
+    // near the guest is the guest's game's, which picks its own package: see
+    // `the_nearest_players_game_runs_an_actor`).
+    p.hd.fight.as_mut().unwrap().handoff = false;
     p.gd.fight.as_mut().unwrap().hold_after = Some((OPENING, 200));
     p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
     p.guest.move_player(HOUSE, [0.0; 3], 0.0);
@@ -1024,6 +1028,19 @@ fn the_nearest_players_game_runs_an_actor() {
     p.guest.move_player(HOUSE, [900.0, 20.0, 0.0], 0.0);
     p.frames(60);
     assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    // PC run 25: at the edge of the host's list it is in and out from one moment to the next:
+    // it stays the guest's until the host's list has had it CLOSE_SETTLE_MS without a break.
+    for _ in 0..4 {
+        p.host.set_near(RAIDER, true);
+        p.frames(40);
+        p.host.set_near(RAIDER, false);
+        p.frames(2);
+    }
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    p.host.set_near(RAIDER, true);
+    p.frames(140);
+    assert!(!p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    p.host.set_near(RAIDER, false);
     p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
     p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
     p.frames(20);
@@ -1035,20 +1052,30 @@ fn the_nearest_players_game_runs_an_actor() {
     assert!(p.gd.fight.as_ref().unwrap().owned_published > 0);
     // Its AI runs on the guest: it is not put back at the host's place.
     assert!(close(p.guest.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));
-    // PC run 25: a stage's result on the host has it take another package: the copy the guest
-    // runs is asked at once.
-    p.host.set_own_package(RAIDER, STAY_IN);
+    // PC run 25: led with its AI on, the host's copy far from its player finished Sunny's sneak
+    // package and her conversation at once and set the stages past them. The host's copy is kept
+    // still, its AI off, and its package says nothing: the guest's copy picks its own, as the
+    // guest's game has the story.
+    assert!(!p.host.actor_view(RAIDER).ai);
+    p.host.set_own_package(RAIDER, LEAD_OUT);
     p.guest.set_own_package(RAIDER, STAY_IN);
     p.frames(80);
-    p.host.set_own_package(RAIDER, LEAD_OUT);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    assert_eq!(
+        coop_engine::commands::wanted_package(&mut p.guest.e, RAIDER),
+        None
+    );
+    p.guest.set_own_package(RAIDER, LEAD_OUT);
     p.frames(20);
     assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
-    // Its own AI here picks another (a cell loaded, a fight ended): asked again a moment later.
-    let a = coop_engine::actors::actor(&mut p.guest.e, RAIDER).unwrap();
-    let stay = coop_engine::forms::form(&mut p.guest.e, STAY_IN).unwrap();
-    p.guest.e.mem.set_u32(a + 0xea0, stay);
-    assert_eq!(p.guest.package(RAIDER), STAY_IN);
-    p.frames(80);
+    // A word of the host's about its package that comes late changes nothing here, nor does a
+    // host's script telling it to evaluate its package (its own pick stands).
+    coop_engine::commands::set_wanted_package(&mut p.guest.e, RAIDER, STAY_IN);
+    p.frames(5);
+    assert!(coop_engine::commands::evaluate_package(
+        &mut p.guest.e,
+        RAIDER
+    ));
     assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
     // The host's player shoots it: done in the guest's game, through the ledger.
     p.host.hit(RAIDER, PLAYER, 30.0);
@@ -1071,6 +1098,8 @@ fn the_nearest_players_game_runs_an_actor() {
     p.guest.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
     p.frames(80);
     assert!(!p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    // Its AI on again in the host's game.
+    assert!(p.host.actor_view(RAIDER).ai);
     // With hand-off off the host keeps it whoever is nearer.
     let mut q = Pair::with(Cap::Avatar, Some(fight::Cap::parse("")));
     q.hd.fight.as_mut().unwrap().handoff = false;

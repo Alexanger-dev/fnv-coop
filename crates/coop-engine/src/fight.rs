@@ -483,6 +483,46 @@ pub fn lead(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32
     place_of(e, id)
 }
 
+/// Keeps an actor that another player's game runs still in this one: its AI off (it does none of
+/// its own doing here: no package, no package's end, no conversation), moved to `pos` and
+/// `heading` (radians). Its health is left alone. `Some(true)` when its AI was on until now;
+/// `None`, and nothing done, as [`place_of`].
+pub fn still(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<bool> {
+    place_of(e, id)?;
+    let a = actors::actor(e, id)?;
+    let flag = a.wrapping_add(addr::ACTOR_PROCESS_ME_OFFSET);
+    let woke = e.mem.u8(flag) != 0;
+    if woke {
+        e.mem.set_u8(flag, 0);
+        e.call(addr::ACTOR_END_MOVEMENT, &args![a]);
+    }
+    for (axis, v) in (*b"XYZ").into_iter().zip(pos) {
+        e.call(addr::SET_POS_BASE, &args![a, u32::from(axis), v.to_bits()]);
+    }
+    e.call(
+        addr::SET_ANGLE_BASE,
+        &args![a, u32::from(b'Z'), heading.to_degrees().to_bits()],
+    );
+    Some(woke)
+}
+
+/// Gives an actor back to this game's own running: its AI on and its package picked again from
+/// where it is now. False when it is not in this game now or is dead here.
+pub fn rethink(e: &mut Engine, id: u32) -> bool {
+    if place_of(e, id).is_none() {
+        return false;
+    }
+    let Some(a) = actors::actor(e, id) else {
+        return false;
+    };
+    e.mem
+        .set_u8(a.wrapping_add(addr::ACTOR_PROCESS_ME_OFFSET), 1);
+    if e.is_registered(addr::ACTOR_EVALUATE_PACKAGE) {
+        e.call(addr::ACTOR_EVALUATE_PACKAGE, &args![a, 0u32, 0u32]);
+    }
+    true
+}
+
 /// Brings an actor that is in another space of this game into this game's player's space, at
 /// `pos` there: the game's own `MoveTo` to the player with the difference as offsets. For a copy
 /// the host's actor left behind by walking through a door. False when the actor or the player is
