@@ -860,7 +860,7 @@ pub struct GuestDriver {
     /// just before.
     pub object_script_quests: std::collections::BTreeMap<u32, Vec<u32>>,
     /// Object scripts naming a quest that ran here lately, and when.
-    recent_object_scripts: std::collections::BTreeMap<u32, u64>,
+    recent_object_scripts: std::collections::BTreeMap<(u32, u32), u64>,
     /// Whether this game's own object scripts' changes are proposed to the host
     /// (`NV_COOP_PROPOSE=off` turns it off: they are put back as before).
     pub proposals_on: bool,
@@ -1035,12 +1035,9 @@ impl GuestDriver {
         }
         self.keep_clock(e, now_ms);
         for (script, reference) in gate::drain_object_scripts(e) {
-            // A death script's doing is the host's: the host's game runs the death of its own
-            // copy when it takes the claim (PC run 23: a gecko counted twice).
-            if self.object_script_quests.contains_key(&script)
-                && actors::dead(e, reference) != Some(true)
-            {
-                self.recent_object_scripts.insert(script, now_ms);
+            if self.object_script_quests.contains_key(&script) {
+                self.recent_object_scripts
+                    .insert((script, reference), now_ms);
             }
         }
         self.recent_object_scripts
@@ -1261,11 +1258,22 @@ impl GuestDriver {
         // leaves none) is this player's doing only if an object script that names that quest
         // ran in this game just before (PC run 19: quests of the pre-order packs changed here on
         // their own, every few seconds, and were proposed).
-        let named_by_a_script = self.recent_object_scripts.iter().any(|(script, _)| {
-            self.object_script_quests
-                .get(script)
-                .is_some_and(|qs| qs.contains(&m.form))
-        });
+        // Which of them ran on an actor that has died here since: what such a script does to the
+        // quest is its death's doing, and the host runs the death of its own copy (PC run 25:
+        // the third well's geckos were counted in both games, the count passed 3 without being
+        // 3, the well was never cleared, and the settler and Sunny waited for ever).
+        let naming: Vec<u32> = self
+            .recent_object_scripts
+            .keys()
+            .filter(|(script, _)| {
+                self.object_script_quests
+                    .get(script)
+                    .is_some_and(|qs| qs.contains(&m.form))
+            })
+            .map(|(_, reference)| *reference)
+            .collect();
+        let a_death = naming.iter().any(|r| actors::dead(e, *r) == Some(true));
+        let named_by_a_script = !naming.is_empty() && !a_death;
         // What this game's own doing is: an object script's, or a line of this player's own
         // dialogue whose result ran here (PC run 20: Sunny's rifle line completed an objective
         // and showed the next in the guest's game; put back, the guest got no instructions). A
@@ -1285,9 +1293,11 @@ impl GuestDriver {
             // or the journal's last word on the quest is this game's own doing. (A variable leaves
             // nothing in the journal, so the journal's word may be older than the change: PC run
             // 20, the bottles' count was put down to the rifle line.)
-            Field::ScriptVar { .. } => named_by_a_script || cause.is_some_and(own_doing),
+            Field::ScriptVar { .. } => {
+                !a_death && (named_by_a_script || cause.is_some_and(own_doing))
+            }
             Field::Custom { tag, .. } if *tag == record::QUEST_RECORD_TAG => {
-                named_by_a_script || cause.is_some_and(own_doing)
+                !a_death && (named_by_a_script || cause.is_some_and(own_doing))
             }
             _ => false,
         };

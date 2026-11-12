@@ -1353,6 +1353,61 @@ fn a_quest_change_made_by_the_guests_dialogue_is_done_by_the_host() {
     assert_same_game(&mut host, &mut guest);
 }
 
+/// PC run 25, 2026-11-12: the third well's geckos were counted in both games (their death script
+/// in the guest's game, the death of each copy in the host's), the count passed 3 without being
+/// 3, and the well was never cleared. What a script does to a quest after the actor it ran on
+/// has died is that death's, and the host runs it.
+#[test]
+fn a_quest_change_from_an_actors_death_is_the_hosts() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    gd.object_script_quests
+        .insert(coop_engine::testkit::BOTTLE_SCRIPT_ID, vec![MQ]);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    let var = |s: &mut Story| coop_engine::vars::quest_vars(&mut s.e, MQ).unwrap()[0].1;
+    let before = f64::from_bits(var(&mut host));
+    // Its script runs while it lives (shot): that counts, as the bottles do.
+    guest.shoot_target(CHET, MQ, 0);
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(f64::from_bits(var(&mut host)), before + 1.0);
+    // It dies in the guest's game and its death script counts it there: not proposed.
+    guest.kill(CHET);
+    let index = coop_engine::vars::quest_vars(&mut guest.e, MQ).unwrap()[0].0;
+    let now = f64::from_bits(var(&mut guest));
+    coop_engine::vars::set_quest_var(&mut guest.e, MQ, index, (now + 1.0).to_bits());
+    frames(
+        80,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(f64::from_bits(var(&mut host)), before + 1.0);
+    assert_eq!(host.dead(CHET), Some(true), "the death reached the host");
+    assert_same_game(&mut host, &mut guest);
+}
+
 /// PC run 25, 2026-11-12: the guest's player died, its game loaded the last save, and the guest
 /// proposed the whole of that save to the host. After a load nothing is proposed for a while:
 /// the guest's game is put back to the story.

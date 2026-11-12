@@ -1035,6 +1035,21 @@ fn the_nearest_players_game_runs_an_actor() {
     assert!(p.gd.fight.as_ref().unwrap().owned_published > 0);
     // Its AI runs on the guest: it is not put back at the host's place.
     assert!(close(p.guest.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));
+    // PC run 25: a stage's result on the host has it take another package: the copy the guest
+    // runs is asked at once.
+    p.host.set_own_package(RAIDER, STAY_IN);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    p.frames(80);
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.frames(20);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    // Its own AI here picks another (a cell loaded, a fight ended): asked again a moment later.
+    let a = coop_engine::actors::actor(&mut p.guest.e, RAIDER).unwrap();
+    let stay = coop_engine::forms::form(&mut p.guest.e, STAY_IN).unwrap();
+    p.guest.e.mem.set_u32(a + 0xea0, stay);
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    p.frames(80);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
     // The host's player shoots it: done in the guest's game, through the ledger.
     p.host.hit(RAIDER, PLAYER, 30.0);
     assert_eq!(p.host.hits_run(), 0, "kept from the host's copy");
