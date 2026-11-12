@@ -1134,6 +1134,54 @@ fn the_nearest_players_game_runs_an_actor() {
     assert!(!q.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
 }
 
+/// PC run 27, 2026-11-12: the guest started Sunny's tutorial; the host's player stood nearer, at
+/// the saloon, so the host's game took her back, and her package waiting for "the player" had her
+/// walk to the host's player and wait for it to talk. An actor is run by the game of the player
+/// it last spoke with while that player is near it.
+#[test]
+fn an_actor_is_run_by_the_game_of_the_player_it_spoke_with() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    let guest = p.gd.sync.player;
+    let owned = |p: &Pair| p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER));
+    p.host.move_player(HOUSE, [12.0, 20.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [900.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(60);
+    assert!(!owned(&p), "the host's player is nearer");
+    p.hd.fight.as_mut().unwrap().engage(RAIDER, guest);
+    p.frames(60);
+    assert!(owned(&p));
+    assert!(!p.host.actor_view(RAIDER).ai);
+    // Spoken with by the host's player out of its game's full detail: it stays the guest's,
+    // the nearer.
+    p.host.set_near(RAIDER, false);
+    p.hd.fight
+        .as_mut()
+        .unwrap()
+        .engage(RAIDER, coop_core::ids::PlayerId::HOST);
+    p.frames(60);
+    assert!(owned(&p));
+    p.host.set_near(RAIDER, true);
+    p.frames(120);
+    // The host's player speaks with it: the host's game runs it again.
+    p.hd.fight
+        .as_mut()
+        .unwrap()
+        .engage(RAIDER, coop_core::ids::PlayerId::HOST);
+    p.frames(60);
+    assert!(!owned(&p));
+    assert!(p.host.actor_view(RAIDER).ai);
+    // The guest speaks with it again and then goes far off: the nearest player's game again.
+    p.hd.fight.as_mut().unwrap().engage(RAIDER, guest);
+    p.frames(60);
+    assert!(owned(&p));
+    p.guest.move_player(HOUSE, [9000.0, 20.0, 0.0], 0.0);
+    p.frames(60);
+    assert!(!owned(&p));
+}
+
 /// PC run 23: a gecko's death script ran twice in the guest's game, and Sunny's quest counted two
 /// geckos with one left. A dead actor is never hurt or killed again.
 #[test]

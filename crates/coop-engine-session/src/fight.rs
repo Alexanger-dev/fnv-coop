@@ -235,6 +235,9 @@ pub struct Fight {
     owned_last: BTreeMap<u32, ActorState>,
     /// Guest: the actors this game ran at the last frame.
     owned_before: BTreeSet<u32>,
+    /// Host: the player each actor last spoke with (a conversation's first line), whose game runs
+    /// it while that player is near it.
+    engaged: BTreeMap<u32, PlayerId>,
     /// Host: when the game's close-actors list last left each tracked actor out.
     left_out_at: BTreeMap<u32, u64>,
     /// Guest: frames an actor fighting on the host was kept at the host's place.
@@ -351,6 +354,7 @@ impl Fight {
             owned_last: BTreeMap::new(),
             owned_before: BTreeSet::new(),
             left_out_at: BTreeMap::new(),
+            engaged: BTreeMap::new(),
             fight_leads: 0,
             left_told: 0,
             published: 0,
@@ -580,8 +584,25 @@ impl Fight {
                     .min_by(|a, b| a.1.total_cmp(&b.1))
                     .map(|(p, _)| p)
             };
+            let engaged = self.engaged.get(&s.id).copied().filter(|p| {
+                if *p == PlayerId::HOST {
+                    close_to_host.contains(&a)
+                } else {
+                    places.iter().any(|(q, sp, pos)| {
+                        q == p
+                            && *sp == s.space
+                            && (0..3)
+                                .map(|i| (pos[i] - s.pos[i]).powi(2))
+                                .sum::<f32>()
+                                .sqrt()
+                                <= HANDOFF_RADIUS
+                    })
+                }
+            });
             let pin = if !self.handoff || keeps_company {
                 Some(PlayerId::HOST)
+            } else if engaged.is_some() {
+                engaged
             } else if close_to_host.contains(&a) {
                 // The nearest player's game, as coop-core's ownership has it, when a guest in
                 // the shared world is near it; the host's otherwise (a guest in its own opening
@@ -739,6 +760,19 @@ impl Fight {
             self.host_threat(e, sync, avatars, now_ms);
         }
         out
+    }
+
+    /// Host: actor `npc` spoke with player `p` (a conversation began). While `p` is near it, `p`'s
+    /// game runs it: its packages aimed at "the player" are about that player (PC run 27: the
+    /// guest started Sunny's tutorial, the host's player stood nearer at the saloon, the host's
+    /// game took her back, and she walked to the host's player and waited for it to talk).
+    pub fn engage(&mut self, npc: u32, p: PlayerId) {
+        if self.engaged.insert(npc, p) != Some(p) {
+            self.say(format!(
+                "co-op fights: actor {npc:08x} spoke with player {}: that player's game runs it while near",
+                p.0
+            ));
+        }
     }
 
     /// The host's part of the damage: what the ledger accepted of the guests' hits goes into
