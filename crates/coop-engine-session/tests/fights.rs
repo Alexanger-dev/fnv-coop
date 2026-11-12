@@ -911,6 +911,48 @@ fn a_copy_keeps_the_hosts_package_when_the_hosts_actor_is_in_another_space() {
     );
 }
 
+/// PC run 18, 2026-11-12: Sunny waits for "the player" and talks to whoever that is in each game;
+/// her copy on the guest was not given that package, chose its own, walked off and was dragged
+/// back, and only the host's player could be spoken to. A package aimed at the player is given
+/// to the copy like any other, and the copy is then given room: it is not led, and is put back
+/// only when far from the host's place.
+#[test]
+fn a_copy_whose_package_is_aimed_at_the_player_is_given_it_and_room() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    for g in [&mut p.host, &mut p.guest] {
+        let pkg = coop_engine::forms::form(&mut g.e, LEAD_OUT).unwrap();
+        let player = g.e.mem.u32(coop_engine::addr::PLAYER_SINGLETON);
+        g.e.mem.set_u32(pkg + 0x60, 0);
+        g.e.mem.set_u32(pkg + 0x64, player);
+        g.e.mem
+            .set_u32(pkg + coop_engine::addr::PACKAGE_TARGET_OFFSET, pkg + 0x60);
+    }
+    assert!(coop_engine::commands::aimed_at_player(
+        &mut p.guest.e,
+        LEAD_OUT
+    ));
+    assert!(!coop_engine::commands::aimed_at_player(
+        &mut p.guest.e,
+        STAY_IN
+    ));
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    p.frames(80);
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    // It has turned to this game's player, 500 units from the host's: left where it is.
+    p.guest.move_actor(RAIDER, [510.0, 20.0, 0.0], 0.5);
+    p.frames(200);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [510.0, 20.0, 0.0]));
+    assert_eq!((p.guest_fight().nudges, p.guest_fight().leads), (0, 0));
+    // Far off it is still put back.
+    p.guest.move_actor(RAIDER, [2000.0, 20.0, 0.0], 0.5);
+    p.frames(60);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
+}
+
 /// Peer review, 2026-11-11: a scene was asked of actors the game's own command would refuse. An
 /// actor without its 3D here (its cell not loaded), or dead, is not made to talk; the log says so.
 #[test]

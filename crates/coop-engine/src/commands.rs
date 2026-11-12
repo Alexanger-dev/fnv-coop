@@ -85,10 +85,28 @@ pub fn current_package(e: &mut Engine, id: u32) -> Option<u32> {
         return Some(0);
     }
     let pid = e.mem.u32(package.wrapping_add(addr::FORM_ID_OFFSET));
-    if pid >= actors::FIRST_DYNAMIC_ID || about_the_player(e, package) {
+    if pid >= actors::FIRST_DYNAMIC_ID {
         return Some(0);
     }
     Some(pid)
+}
+
+/// Whether package `id` is aimed at the player other than to keep company ("wait here until the
+/// player comes near, then talk"). The host says such a package too: on each game the actor then
+/// waits for, and talks to, that game's own player, so whichever player comes to it is served
+/// (PC run 18: Sunny spoke only to the host's player and her copy on the guest, left to its own
+/// choice, walked off and was dragged back). A copy running one is not kept at the host's exact
+/// place, since the two may each turn to their own player.
+pub fn aimed_at_player(e: &mut Engine, id: u32) -> bool {
+    match crate::forms::form(e, id) {
+        Some(package)
+            if e.mem.u8(package.wrapping_add(addr::FORM_TYPE_OFFSET))
+                == addr::FORM_TYPE_PACKAGE =>
+        {
+            about_the_player(e, package)
+        }
+        _ => false,
+    }
 }
 
 /// Whether a package is aimed at the player in a way that must stay each game's own: its target

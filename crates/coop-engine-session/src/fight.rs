@@ -109,6 +109,8 @@ pub const FLAG_DEAD: u16 = 2;
 /// `ActorState::target` for a target that is a player: this plus the player's slot (the id
 /// coop-core's vitals use for a player as an attacker).
 pub const PLAYER_TARGET_BASE: u32 = 0xfe00_0000;
+/// How far a copy whose package is aimed at the player may be from the host's place.
+pub const AIMED_DISTANCE: f32 = 800.0;
 /// The host reads and publishes its actors this often.
 pub const PUBLISH_EVERY_MS: u64 = 50;
 /// The host's threat director looks at the fights this often.
@@ -875,7 +877,11 @@ impl Fight {
                         self.fight_leads += 1;
                         continue;
                     }
-                    if self.led_until.get(&id).is_some_and(|until| now_ms < *until) {
+                    // A copy whose package is aimed at the player may turn to this game's
+                    // player while the host's turns to its own: it is given room, and never led.
+                    let aimed = coop_engine::commands::wanted_package(e, id)
+                        .is_some_and(|p| coop_engine::commands::aimed_at_player(e, p));
+                    if !aimed && self.led_until.get(&id).is_some_and(|until| now_ms < *until) {
                         fight::lead(e, id, to, dequant_heading(s.heading));
                         self.far_since.remove(&id);
                         continue;
@@ -887,8 +893,13 @@ impl Fight {
                             .sum::<f32>()
                             .sqrt()
                     });
+                    let room = if aimed {
+                        AIMED_DISTANCE
+                    } else {
+                        FOLLOW_DISTANCE
+                    };
                     match off {
-                        Some(off) if off > FOLLOW_DISTANCE => {
+                        Some(off) if off > room => {
                             let since = *self.far_since.entry(id).or_insert(now_ms);
                             if now_ms.saturating_sub(since) >= FOLLOW_MS {
                                 self.far_since.remove(&id);
@@ -903,7 +914,7 @@ impl Fight {
                                             (n + 1, first)
                                         };
                                     self.nudged.insert(id, (n, first));
-                                    if n >= LEAD_AFTER && self.lead_on {
+                                    if n >= LEAD_AFTER && self.lead_on && !aimed {
                                         self.nudged.remove(&id);
                                         self.led_until.insert(id, now_ms + LEAD_MS);
                                         self.leads += 1;
