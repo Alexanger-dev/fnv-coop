@@ -1018,6 +1018,15 @@ fn the_nearest_players_game_runs_an_actor() {
     p.host.set_near(RAIDER, false);
     p.frames(30);
     assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    // PC run 24: the host's player is nearer by the numbers, but the host's game does not run
+    // it at full detail: it stays the guest's.
+    p.host.move_player(HOUSE, [12.0, 20.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [900.0, 20.0, 0.0], 0.0);
+    p.frames(60);
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.frames(20);
     p.host.set_near(RAIDER, true);
     // The guest's game moves it: the host's copy follows.
     p.guest.move_actor(RAIDER, [200.0, 120.0, 0.0], 1.0);

@@ -476,23 +476,24 @@ impl Fight {
         // them, runs them (PC run 21: with the host's player at the saloon, Sunny and the geckos
         // outside stood still on the host and jumped about on the guest).
         // Where the guests are, as they say (their avatars in this game may not be loaded).
-        let places: Vec<(u32, [f32; 3])> = if self.handoff {
+        let places: Vec<(PlayerId, u32, [f32; 3])> = if self.handoff {
             sync.players()
                 .into_iter()
-                .filter_map(|p| sync.live.avatars.state(p).copied())
-                .map(|st| (st.cell.0, st.pos.map(dequant_pos)))
+                .filter_map(|p| Some((p, sync.live.avatars.state(p).copied()?)))
+                .map(|(p, st)| (p, st.cell.0, st.pos.map(dequant_pos)))
                 .collect()
         } else {
             Vec::new()
         };
         let mut candidates = fight::near(e);
+        let close_to_host: BTreeSet<u32> = candidates.iter().copied().collect();
         if !places.is_empty() {
             for a in fight::loaded(e) {
                 if candidates.contains(&a) {
                     continue;
                 }
                 let (space, pos) = (fight::space_of(e, a), fight::place_of_ptr(e, a));
-                let close = places.iter().any(|(sp, p)| {
+                let close = places.iter().any(|(_, sp, p)| {
                     *sp == space
                         && (0..3).map(|i| (p[i] - pos[i]).powi(2)).sum::<f32>().sqrt()
                             <= HANDOFF_RADIUS
@@ -522,7 +523,32 @@ impl Fight {
             // companion, someone leading it), whose package is about that player.
             let keeps_company = coop_engine::commands::current_package(e, s.id)
                 .is_some_and(|p| p != 0 && coop_engine::commands::keeps_company(e, p));
-            let pin = (!self.handoff || keeps_company).then_some(PlayerId::HOST);
+            // The host's game runs at full detail only the actors close to its player: one it
+            // does not, near a guest, is that guest's however near the host's player may be
+            // (PC run 24: Sunny went back to the host's game whenever its player was nearer by
+            // the numbers, walked where she runs and stood still at the sneak).
+            let nearest_guest = || {
+                places
+                    .iter()
+                    .filter(|(_, sp, _)| *sp == s.space)
+                    .map(|(p, _, pos)| {
+                        let d = (0..3)
+                            .map(|i| (pos[i] - s.pos[i]).powi(2))
+                            .sum::<f32>()
+                            .sqrt();
+                        (*p, d)
+                    })
+                    .filter(|(_, d)| *d <= HANDOFF_RADIUS)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(p, _)| p)
+            };
+            let pin = if !self.handoff || keeps_company {
+                Some(PlayerId::HOST)
+            } else if close_to_host.contains(&a) {
+                None
+            } else {
+                nearest_guest()
+            };
             sync.live.actors.own.set_follower(id, pin);
             seen.insert(s.id);
             // The ledger's health is the game's, and the game says who cannot die.
@@ -609,6 +635,10 @@ impl Fight {
             // own lists may leave it out from one moment to the next (PC run 22: Sunny was handed
             // over and taken back every second).
             if self.theirs.contains(&id) && actors::dead(e, id) == Some(false) {
+                // Out of the host's lists altogether: the host's game is not running it, so it
+                // stays with the guest's that is.
+                let owner = sync.live.actors.own.get(FormId(id)).and_then(|r| r.owner);
+                sync.live.actors.own.set_follower(FormId(id), owner);
                 continue;
             }
             self.tracked.remove(&id);
