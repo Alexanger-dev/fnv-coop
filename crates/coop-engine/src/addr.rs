@@ -586,6 +586,24 @@ pub const TES_RUN_SCRIPTS: u32 = 0x0045_5490;
 /// parameter info, the script data, the reference the command runs on, the containing reference,
 /// the script, the event list, the result, and a pointer to the offset into the script data).
 pub const CMD_START_CONVERSATION: u32 = 0x005c_8740;
+/// The `SayTo` script command (`005c9100`, `run_005c8a50.rs`, `say_to`): `thisObj` says the
+/// topic to the target; parameters target, topic, two numbers.
+pub const CMD_SAY_TO: u32 = 0x005c_9100;
+/// `MobileObject::StopCurrentDialogue` (`00934250`, `thiscall`), as `SayTo` calls it first.
+pub const MOBILE_STOP_CURRENT_DIALOGUE: u32 = 0x0093_4250;
+/// `0057bd60` (`thiscall` on an actor, the other actor): `SayTo`'s pairing of speaker and target.
+pub const ACTOR_SAY_PAIR: u32 = 0x0057_bd60;
+/// `MobileObject::GetCurrentProcessType` (`00931850`, `thiscall`): 0 for high process.
+pub const MOBILE_PROCESS_TYPE: u32 = 0x0093_1850;
+/// `SayTo`'s virtual slots on a process: its talking state (`0x648`, a word), whom it talks to
+/// (`0x628`, the other actor), and say the topic (`0x2a4`: speaker, topic, flag, 0, 1, 1).
+pub const PROCESS_TALK_STATE_SLOT: u32 = 0x648;
+/// See [`PROCESS_TALK_STATE_SLOT`].
+pub const PROCESS_TALK_TO_SLOT: u32 = 0x628;
+/// See [`PROCESS_TALK_STATE_SLOT`].
+pub const PROCESS_SAY_TOPIC_SLOT: u32 = 0x2a4;
+/// The actor's "busy" virtual slot `SayTo` asks before (`0x22c`, one word, 1).
+pub const ACTOR_SAY_BUSY_SLOT: u32 = 0x22c;
 /// `Script::ParseParameters` (`cdecl`, varargs: the parameter info, the script data, the offset
 /// pointer, the reference, the container, the script, the event list, then one pointer per
 /// parameter). It moves the offset on past the parameters it read.

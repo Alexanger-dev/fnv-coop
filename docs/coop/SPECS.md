@@ -659,3 +659,22 @@ and the guest's copies, following them, did the same.
   handed actor with the host's package; a package that only the host's game has started may not be
   where the guest's copy is.
 
+## S22 addendum (PC run 22)
+
+A handed actor stays tracked while it lives, whatever the host's own lists say from one moment to the
+next; the guests' places are read from their avatar reports (`avatars.state`), not from their avatars in
+the host's game, which are not loaded while the host is in another space; a dead actor's package is
+withdrawn (0).
+
+## S23: lines said to the player away from the host (implemented; not yet run on a PC)
+
+`SayTo` (`005c9100`) is wrapped on the host. A line a script has an actor say to the player
+(`thisObj` an actor, the target the player) is noted with its topic before the body runs. If the
+speaker is not loaded or has no process here, is in another space, or is more than 1500 units from
+the host's player, or a guest's game runs it (S22), the host writes `SAY_TAG` (`0x5359`: a count, the
+topic) on the speaker. A guest whose player is within 2500 units of its copy, in the same space, says it
+there (`commands::say_to_player`: as `SayTo`'s high-process branch: stop the current dialogue, pair the
+processes, the process's say slot `0x2a4`); its result runs in that game and its story changes reach the
+host as proposals (S21). One that came with the join is not said. Not tested against the game's own
+command: the stand-ins have no `SayTo`.
+

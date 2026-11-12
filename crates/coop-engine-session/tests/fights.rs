@@ -990,6 +990,11 @@ fn the_nearest_players_game_runs_an_actor() {
         "{:?}",
         p.host_fight().lines
     );
+    // PC run 22: the host's own lists leave it out now and then; it stays the guest's.
+    p.host.set_near(RAIDER, false);
+    p.frames(30);
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    p.host.set_near(RAIDER, true);
     // The guest's game moves it: the host's copy follows.
     p.guest.move_actor(RAIDER, [200.0, 120.0, 0.0], 1.0);
     p.frames(20);

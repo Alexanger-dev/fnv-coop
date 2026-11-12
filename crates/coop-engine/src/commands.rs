@@ -21,6 +21,8 @@ pub struct Commands {
     evaluate: Mutex<Vec<u32>>,
     /// Conversations between two actors a script started, in order.
     scenes: Mutex<Vec<Scene>>,
+    /// Lines a script had an actor say to the player (`SayTo`), in order: speaker, topic.
+    says: Mutex<Vec<(u32, u32)>>,
     /// A guest's own conversations between two actors, dropped.
     dropped: AtomicU32,
     /// Guest: the package the host's copy of each actor runs (reference id to package id).
@@ -296,6 +298,8 @@ fn picked(e: &mut Engine, package: u32, reference: u32) {
 }
 
 pub(crate) const CONVERSE: WrapSlot = WrapSlot::new(Owner::Coop, addr::CMD_START_CONVERSATION);
+/// The wrap of the `SayTo` command.
+pub(crate) const SAY_TO: WrapSlot = WrapSlot::new(Owner::Coop, addr::CMD_SAY_TO);
 
 /// A conversation a script started between two actors (`StartConversation`): who, with whom,
 /// about what, and where both stood.
@@ -357,6 +361,85 @@ fn parse(e: &mut Engine, a: &[u32], keep: bool) -> Option<[u32; 6]> {
         e.mem.set_u32(offset_at, before);
     }
     parsed
+}
+
+/// The wrap at `005c9100` (`SayTo`). On the host, a line a script has an actor say to the
+/// player is noted (speaker, topic) before the body runs: the host's game may not say it at all
+/// (an actor far from its player has no process), and the guest whose game runs that actor says
+/// it there to its own player (PC run 22: Sunny's "go get them" after the sneak, said by a stage's
+/// result to the host's player far away, never came, and the quest waited for the host).
+pub(crate) fn say_to(e: &mut Engine, a: &[u32]) -> Ret {
+    let this_obj = a.get(2).copied().unwrap_or(0);
+    if this_obj == 0 || gate::is_guest(e) || !journal::armed(e) {
+        return e.call_next(addr::CMD_SAY_TO, a);
+    }
+    let speaker = e.mem.u32(this_obj.wrapping_add(addr::FORM_ID_OFFSET));
+    let is_actor = actors::is_actor_type(e.mem.u8(this_obj.wrapping_add(addr::FORM_TYPE_OFFSET)));
+    if is_actor && actors::shareable(speaker) {
+        if let Some(v) = parse(e, a, true) {
+            let player = e.mem.u32(addr::PLAYER_SINGLETON);
+            if v[0] == player && v[1] != 0 {
+                let topic = e.mem.u32(v[1].wrapping_add(addr::FORM_ID_OFFSET));
+                e.ext_free::<Commands>()
+                    .says
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push((speaker, topic));
+            }
+        }
+    }
+    e.call_next(addr::CMD_SAY_TO, a)
+}
+
+/// Host: the lines scripts had an actor say to the player since the last call (speaker, topic).
+pub fn drain_says(e: &mut Engine) -> Vec<(u32, u32)> {
+    std::mem::take(
+        &mut *e
+            .ext_free::<Commands>()
+            .says
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    )
+}
+
+/// Has actor `speaker` say topic `topic` to this game's player, as `SayTo` does for an actor in
+/// high process that is not run at once: the line is said through its process, and its result
+/// runs in this game when it ends.
+pub fn say_to_player(e: &mut Engine, speaker: u32, topic: u32) -> Result<(), NoScene> {
+    let (Some(a), Some(t)) = (actors::actor(e, speaker), crate::forms::form(e, topic)) else {
+        return Err(NoScene::Absent);
+    };
+    let player = e.mem.u32(addr::PLAYER_SINGLETON);
+    if player == 0 || actors::dead(e, speaker) != Some(false) {
+        return Err(NoScene::Absent);
+    }
+    let process = |e: &mut Engine, r: u32| e.mem.u32(r.wrapping_add(addr::ACTOR_PROCESS_OFFSET));
+    if process(e, a) == 0 || process(e, player) == 0 {
+        return Err(NoScene::NotMobile);
+    }
+    e.call(addr::MOBILE_STOP_CURRENT_DIALOGUE, &args![a]);
+    if e.vcall(a, addr::ACTOR_SAY_BUSY_SLOT, &args![1u32]).u32() & 0xff != 0 {
+        return Err(NoScene::Refused);
+    }
+    if e.call(addr::MOBILE_PROCESS_TYPE, &args![a]).u32() == 0 {
+        let pp = process(e, player);
+        e.vcall(pp, addr::PROCESS_TALK_STATE_SLOT, &args![0u32]);
+        let pp = process(e, player);
+        e.vcall(pp, addr::PROCESS_TALK_TO_SLOT, &args![a]);
+        e.call(addr::ACTOR_SAY_PAIR, &args![player, a]);
+        let sp = process(e, a);
+        e.vcall(sp, addr::PROCESS_TALK_STATE_SLOT, &args![0u32]);
+        let sp = process(e, a);
+        e.vcall(sp, addr::PROCESS_TALK_TO_SLOT, &args![player]);
+    }
+    e.call(addr::ACTOR_SAY_PAIR, &args![a, player]);
+    let sp = process(e, a);
+    e.vcall(
+        sp,
+        addr::PROCESS_SAY_TOPIC_SLOT,
+        &args![a, t, 0u32, 0u32, 1u32, 1u32],
+    );
+    Ok(())
 }
 
 /// The wrap at `005c8740`. A conversation with the player on either side is that player's own

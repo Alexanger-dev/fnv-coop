@@ -137,6 +137,13 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-5",
     },
+    // The SayTo command: on a co-op host a line an actor says to the player is noted, so the
+    // guest whose game runs that actor says it there to its own player (docs/coop/SPECS.md S23).
+    Entry {
+        addr: 0x005c_9100,
+        owners: COOP,
+        step: "C-8",
+    },
     // ScriptRunner::Run: the script context pushed and popped; co-op's guest gate (the story's
     // scripts run on the host only, docs/coop/SPECS.md S5).
     Entry {

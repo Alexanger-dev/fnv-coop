@@ -86,6 +86,9 @@ pub fn install(e: &mut Engine) {
     if e.is_registered(addr::PACKAGE_LIST_FIND_CURRENT) {
         e.wrap(commands::FIND_PACKAGE, commands::find_package);
     }
+    if e.is_registered(addr::CMD_SAY_TO) {
+        e.wrap(commands::SAY_TO, commands::say_to);
+    }
     let _ = e.ext_free::<commands::Commands>();
     // The gate's slot too, before the threads start.
     let _ = e.ext_free::<gate::Gate>();

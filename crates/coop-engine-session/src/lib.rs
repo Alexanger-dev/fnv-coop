@@ -72,6 +72,24 @@ pub const EVALUATE_TAG: u16 = 0x4556;
 /// [`echo`] and the heal leave it alone, and one that comes with a join or a repair is not
 /// played (it is over).
 pub const SCENE_TAG: u16 = 0x5343;
+/// The tag of a line an actor was made to say to the player (`SayTo`), on the speaker's form:
+/// a count, then the topic. The guest whose player the speaker is near says it there.
+pub const SAY_TAG: u16 = 0x5359;
+/// How far from the host's player a speaker must be (or in another space, or not loaded) for
+/// its line to be said in the guests' games too.
+pub const SAY_FAR: f32 = 1500.0;
+/// How near a guest's player a speaker must be for that guest's game to say the line.
+pub const SAY_NEAR: f32 = 2500.0;
+
+fn say_of(field: &Field) -> Option<(u8, u32)> {
+    match field {
+        Field::Custom { tag, data } if *tag == SAY_TAG && data.len() == 5 => Some((
+            data[0],
+            u32::from_le_bytes([data[1], data[2], data[3], data[4]]),
+        )),
+        _ => None,
+    }
+}
 
 /// The tag of the package the host's copy of an actor runs (`Field::Custom` on the actor's id:
 /// the package's form id, 0 for none both games have). A guest's copy is given the same package
@@ -243,6 +261,8 @@ pub struct HostDriver {
     evaluations: std::collections::BTreeMap<u32, u8>,
     /// How many conversations with another actor a script started for each actor.
     scenes: std::collections::BTreeMap<u32, u8>,
+    /// The count of the lines forwarded of each speaker.
+    says: std::collections::BTreeMap<u32, u8>,
     /// Stage changes of shared quests, for the log (taken by the caller).
     pub stage_notes: Vec<String>,
     /// Guests' death claims the host's game enacted.
@@ -320,6 +340,7 @@ impl HostDriver {
             clock_sent_ms: None,
             evaluations: std::collections::BTreeMap::new(),
             scenes: std::collections::BTreeMap::new(),
+            says: std::collections::BTreeMap::new(),
             stage_notes: Vec::new(),
             claims_enacted: 0,
             claims_dropped: 0,
@@ -612,6 +633,40 @@ impl HostDriver {
                 },
             );
         }
+        // A line a script had an actor say to the host's player far from it (or one a guest's
+        // game runs): the guest near it says it there.
+        let theirs = self
+            .fight
+            .as_ref()
+            .map(|f| f.theirs().clone())
+            .unwrap_or_default();
+        for (speaker, topic) in commands::drain_says(e) {
+            let far = match (coop_engine::live::local(e), actors::actor(e, speaker)) {
+                (Some(me), Some(a)) if me.loaded => {
+                    let here = coop_engine::fight::place_of_ptr(e, a);
+                    coop_engine::fight::space_of(e, a) != me.cell
+                        || e.mem.u32(a.wrapping_add(addr::ACTOR_PROCESS_OFFSET)) == 0
+                        || (0..3)
+                            .map(|i| (here[i] - me.pos[i]).powi(2))
+                            .sum::<f32>()
+                            .sqrt()
+                            > SAY_FAR
+                }
+                _ => true,
+            };
+            if !(far || theirs.contains(&speaker)) {
+                continue;
+            }
+            let n = self.says.entry(speaker).or_insert(0);
+            *n = n.wrapping_add(1);
+            let mut data = vec![*n];
+            data.extend(topic.to_le_bytes());
+            self.stage_notes.push(format!(
+                "say: actor {speaker:08x} says topic {topic:08x} to the player, away from this game's: the guest near it says it"
+            ));
+            self.sync
+                .write(FormId(speaker), Field::Custom { tag: SAY_TAG, data });
+        }
         // A conversation a script started between two actors: the guests' games play it too.
         for scene in commands::drain_scenes(e) {
             let n = self.scenes.entry(scene.actor).or_insert(0);
@@ -787,6 +842,10 @@ pub struct GuestDriver {
     pub proposals_lapsed: u32,
     /// The count of the last scene seen for each actor, and whether the join's state is in.
     scene_seen: std::collections::BTreeMap<u32, u8>,
+    /// The count of the last line of each speaker this game has seen.
+    say_seen: std::collections::BTreeMap<u32, u8>,
+    /// The host's lines said here.
+    pub says_said: u32,
     joined: bool,
     /// The host's conversations between actors played in this game, and those that could not be.
     pub scenes_played: u32,
@@ -862,6 +921,8 @@ impl GuestDriver {
             proposals_sent: 0,
             proposals_lapsed: 0,
             scene_seen: std::collections::BTreeMap::new(),
+            say_seen: std::collections::BTreeMap::new(),
+            says_said: 0,
             joined: false,
             scenes_played: 0,
             scenes_missed: 0,
@@ -1256,6 +1317,39 @@ impl GuestDriver {
             .map(|(k, en)| (k.form.0, en.field.clone()))
             .collect();
         for (form, field) in due {
+            if let Some((count, topic)) = say_of(&field) {
+                let seen = self.say_seen.insert(form, count);
+                if !self.joined || seen == Some(count) {
+                    continue;
+                }
+                let near = match (coop_engine::live::local(e), actors::actor(e, form)) {
+                    (Some(me), Some(a)) if me.loaded => {
+                        let here = coop_engine::fight::place_of_ptr(e, a);
+                        coop_engine::fight::space_of(e, a) == me.cell
+                            && (0..3)
+                                .map(|i| (here[i] - me.pos[i]).powi(2))
+                                .sum::<f32>()
+                                .sqrt()
+                                <= SAY_NEAR
+                    }
+                    _ => false,
+                };
+                if !near {
+                    continue;
+                }
+                match commands::say_to_player(e, form, topic) {
+                    Ok(()) => {
+                        self.says_said += 1;
+                        self.healed_notes.push(format!(
+                            "co-op guest: the host's line, said here: actor {form:08x} says topic {topic:08x} to this player"
+                        ));
+                    }
+                    Err(why) => self.healed_notes.push(format!(
+                        "co-op guest: the host's line of actor {form:08x} (topic {topic:08x}) was not said here: {why:?}"
+                    )),
+                }
+                continue;
+            }
             if let Some(scene) = scene_of(form, &field) {
                 // One that comes with the join happened before: it is over. After that, one whose
                 // count this game has not played is new, whether it comes alone or with a repair.
@@ -1331,7 +1425,7 @@ fn apply_field(e: &mut Engine, form: u32, field: &Field) -> bool {
             None => false,
         },
         // A host's scene: played by the driver when it comes, never from here.
-        Field::Custom { tag, .. } if *tag == SCENE_TAG => true,
+        Field::Custom { tag, .. } if *tag == SCENE_TAG || *tag == SAY_TAG => true,
         // A host command: the actor evaluates its package again, as the host's script told its
         // own copy. One that is not in this game now picks its package when it loads anyway.
         Field::Custom { tag, .. } if *tag == EVALUATE_TAG => {

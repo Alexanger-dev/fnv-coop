@@ -475,13 +475,12 @@ impl Fight {
         // the host's game may run those at a low level or not at all, and the guest's game, near
         // them, runs them (PC run 21: with the host's player at the saloon, Sunny and the geckos
         // outside stood still on the host and jumped about on the guest).
+        // Where the guests are, as they say (their avatars in this game may not be loaded).
         let places: Vec<(u32, [f32; 3])> = if self.handoff {
-            avatars
-                .iter()
-                .filter_map(|(_, av)| {
-                    let a = actors::actor(e, *av)?;
-                    Some((fight::space_of(e, a), fight::place_of(e, *av)?))
-                })
+            sync.players()
+                .into_iter()
+                .filter_map(|p| sync.live.avatars.state(p).copied())
+                .map(|st| (st.cell.0, st.pos.map(dequant_pos)))
                 .collect()
         } else {
             Vec::new()
@@ -541,8 +540,14 @@ impl Fight {
                     out.extend(sync.live.route_extern(o.aud, Msg::Actor(o.msg)));
                 }
             }
-            // The package it runs, sent when it changes: a guest's copy is given the same.
-            if let Some(package) = coop_engine::commands::current_package(e, s.id) {
+            // The package it runs, sent when it changes: a guest's copy is given the same. A
+            // dead one runs none of the host's.
+            let package = if s.dead() {
+                Some(0)
+            } else {
+                coop_engine::commands::current_package(e, s.id)
+            };
+            if let Some(package) = package {
                 if self.packages.insert(s.id, package) != Some(package) {
                     sync.write(FormId(s.id), crate::package_field(package));
                 }
@@ -600,6 +605,12 @@ impl Fight {
             .filter(|id| !seen.contains(id))
             .collect();
         for id in gone {
+            // One a guest's game runs stays tracked while this game still has it: the host's
+            // own lists may leave it out from one moment to the next (PC run 22: Sunny was handed
+            // over and taken back every second).
+            if self.theirs.contains(&id) && actors::dead(e, id) == Some(false) {
+                continue;
+            }
             self.tracked.remove(&id);
             // Its package is still the host's to say: the host's game runs the actor on, out of
             // its player's sight, and a guest's copy that picked its own would part from it (PC
@@ -670,7 +681,9 @@ impl Fight {
             }
             theirs.insert(id);
             let s = rec.state;
-            if actors::actor(e, id).is_some_and(|a| fight::space_of(e, a) == s.cell.0) {
+            if fight::place_of(e, id).is_some()
+                && actors::actor(e, id).is_some_and(|a| fight::space_of(e, a) == s.cell.0)
+            {
                 fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading));
                 self.guest_run_moves += 1;
             }
@@ -1436,6 +1449,11 @@ impl Fight {
             }
         }
         self.take_hurts(e, &mut sync.live);
+    }
+
+    /// Host: the actors a guest's game runs now (hand-off).
+    pub fn theirs(&self) -> &BTreeSet<u32> {
+        &self.theirs
     }
 
     /// The actors this guest holds now.
