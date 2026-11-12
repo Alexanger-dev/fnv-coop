@@ -583,6 +583,29 @@ fn a_guest_holds_no_actor_until_its_own_opening_is_done() {
     );
 }
 
+/// PC run 26, 2026-11-12: the guest, in its own opening in its own copy of Doc Mitchell's house,
+/// was handed the host's Doc Mitchell (the same room by the numbers); the host's copy stood still
+/// with its AI off, the host's player never got up, and the guest's opening skipped lines. A
+/// guest whose own opening runs is handed no actor.
+#[test]
+fn a_guest_in_its_own_opening_is_handed_no_actor() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.gd.fight.as_mut().unwrap().hold_after = Some((OPENING, 200));
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(!p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    assert!(p.host.actor_view(RAIDER).ai);
+    // Its opening done, the guest is the nearest player and its game runs the actor.
+    assert!(p.guest.set_stage(OPENING, 200));
+    p.frames(80);
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    assert!(!p.host.actor_view(RAIDER).ai);
+}
+
 /// The same for the move to the host: a host that leaves first does not pull a guest out of its
 /// own opening.
 #[test]

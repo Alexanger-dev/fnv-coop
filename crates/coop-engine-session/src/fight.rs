@@ -38,7 +38,7 @@ use std::io::Write as _;
 use coop_core::actors::{ActorMsg, ActorState};
 use coop_core::avatar::{
     dequant_heading, dequant_pos, quant_heading, quant_pos, AvatarState, FLAG_DEAD as AVATAR_DEAD,
-    FLAG_DOWNED as AVATAR_DOWNED,
+    FLAG_DOWNED as AVATAR_DOWNED, FLAG_OPENING as AVATAR_OPENING,
 };
 use coop_core::combat::{DamageKind, ThreatInput, LIMB_COUNT};
 use coop_core::ids::{CellId, FormId, PlayerId, Seq};
@@ -491,6 +491,11 @@ impl Fight {
             sync.players()
                 .into_iter()
                 .filter_map(|p| Some((p, sync.live.avatars.state(p).copied()?)))
+                // A guest whose own opening runs is not in the shared world: its game runs its
+                // own Doc Mitchell (PC run 26: the host's Doc Mitchell was handed to the guest,
+                // in the same room of its own game, and stood still with his AI off; the host's
+                // player never got up, and the guest's opening skipped lines).
+                .filter(|(_, st)| st.flags & AVATAR_OPENING == 0)
                 .map(|(p, st)| (p, st.cell.0, st.pos.map(dequant_pos)))
                 .collect()
         } else {
@@ -578,7 +583,13 @@ impl Fight {
             let pin = if !self.handoff || keeps_company {
                 Some(PlayerId::HOST)
             } else if close_to_host.contains(&a) {
-                None
+                // The nearest player's game, as coop-core's ownership has it, when a guest in
+                // the shared world is near it; the host's otherwise (a guest in its own opening
+                // is not in the shared world, whatever its place says).
+                match nearest_guest() {
+                    Some(_) => None,
+                    None => Some(PlayerId::HOST),
+                }
             } else {
                 nearest_guest()
             };
@@ -1360,6 +1371,10 @@ impl Fight {
 
     /// Writes this game's player's health and fall into the state the other players get.
     pub fn stamp(&self, e: &mut Engine, state: &mut AvatarState) {
+        // The host hands this player no actor while its own opening runs.
+        if self.waiting {
+            state.flags |= AVATAR_OPENING;
+        }
         if self.cap < Cap::Damage {
             return;
         }
