@@ -847,6 +847,10 @@ pub struct GuestDriver {
     proposed: std::collections::BTreeMap<(u32, u8, u32), (Field, u64)>,
     /// Proposals to send.
     proposals_out: Vec<(FormId, Field)>,
+    /// Loads of a save this game made, as last seen.
+    loads_seen: u64,
+    /// Until when nothing is proposed (after a load, or a burst of differences).
+    quiet_until: u64,
     /// What differed from the story at the last heal.
     differed: std::collections::BTreeSet<(u32, u8, u32)>,
     /// Entries of the story this game could not take when they last came.
@@ -939,6 +943,8 @@ impl GuestDriver {
             now_ms: 0,
             proposed: std::collections::BTreeMap::new(),
             proposals_out: Vec::new(),
+            loads_seen: 0,
+            quiet_until: 0,
             differed: std::collections::BTreeSet::new(),
             unapplied: std::collections::BTreeSet::new(),
             proposals_on: true,
@@ -1020,6 +1026,7 @@ impl GuestDriver {
         }
         // social
         social::guest_step(self, e, net, now_ms);
+        self.now_ms = now_ms;
         self.claim_deaths(e, net);
         self.apply(e);
         // world
@@ -1067,6 +1074,7 @@ impl GuestDriver {
     /// Tells the host of every placed actor that died in this game and is not dead in the host's
     /// story (a death applied from the host is in the replica by then, so it is not sent back).
     fn claim_deaths(&mut self, e: &mut Engine, net: &mut dyn Transport) {
+        self.note_loads(e);
         let changes = coop_engine::drain(e);
         for c in &changes {
             if let Some(cause) = c.cause {
@@ -1083,6 +1091,7 @@ impl GuestDriver {
                 && c.cause
                     .is_some_and(|k| k.script != 0 && !k.quest_script && k.owner_quest == 0)
                 && self.proposals_on
+                && self.now_ms >= self.quiet_until
                 && self.story_disabled(c.form).is_none()
                 && !actors::trigger_volume(e, c.form)
                 && self.sync.phase() == GuestPhase::Active
@@ -1204,6 +1213,21 @@ impl GuestDriver {
         self.causes.clear();
     }
 
+    /// Notes a load of a save in this game: nothing is proposed for a while.
+    fn note_loads(&mut self, e: &mut Engine) {
+        let loads = coop_engine::saves::loads(e);
+        if loads != self.loads_seen {
+            self.loads_seen = loads;
+            self.quiet_until = self.now_ms + PROPOSE_QUIET_MS;
+            self.proposed.clear();
+            self.causes.clear();
+            self.healed_notes.push(
+                "co-op guest: this game loaded a save: put back to the story, nothing proposed for a while"
+                    .into(),
+            );
+        }
+    }
+
     /// Whether a difference from the story is left alone for now: it is what one of this game's
     /// own object scripts did (not a quest's script, which the gate holds; not a line of dialogue,
     /// which the conversations carry), it has been proposed to the host, and the host has had
@@ -1270,6 +1294,7 @@ impl GuestDriver {
         if !(stable && fresh && allowed)
             || !self.proposals_on
             || self.sync.phase() != GuestPhase::Active
+            || self.now_ms < self.quiet_until
         {
             return false;
         }
@@ -1310,7 +1335,26 @@ impl GuestDriver {
         for id in quests {
             self.relisted += quest::relist(e, id);
         }
+        self.note_loads(e);
         let mismatches = echo(e, &self.sync.store);
+        // A game that loaded a save, or that differs from the story in many things at once, has
+        // not been played into it: everything is put back, nothing proposed, for a while (PC run
+        // 25: the guest's player died, the game loaded its last save, and the guest proposed the
+        // whole of that save to the host: the tutorial's quests went back, Sunny died).
+        let proposable = mismatches
+            .iter()
+            .filter(|m| {
+                !self
+                    .differed
+                    .contains(&(m.form, m.want.kind(), sub_of(&m.want)))
+            })
+            .count();
+        if proposable > PROPOSE_BURST && self.now_ms >= self.quiet_until {
+            self.quiet_until = self.now_ms + PROPOSE_QUIET_MS;
+            self.healed_notes.push(format!(
+                "co-op guest: {proposable} things differ from the story at once: put back, nothing proposed for a while"
+            ));
+        }
         let differ: std::collections::BTreeSet<(u32, u8, u32)> = mismatches
             .iter()
             .map(|m| (m.form, m.want.kind(), sub_of(&m.want)))
@@ -1649,6 +1693,12 @@ impl Proposal {
         }
     }
 }
+
+/// The most differences from the story one heal may find new and still propose: more is a game
+/// that was not played into them (a load, a reset).
+pub const PROPOSE_BURST: usize = 12;
+/// How long nothing is proposed after a load or a burst.
+pub const PROPOSE_QUIET_MS: u64 = 20_000;
 
 /// How long after an object script naming a quest ran a change to that quest is put down to it.
 pub const PROPOSE_RECENT_MS: u64 = 3000;

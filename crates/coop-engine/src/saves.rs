@@ -32,6 +32,15 @@ pub enum Event {
 #[derive(Debug, Default)]
 pub struct Saves {
     events: Mutex<Vec<Event>>,
+    /// Every load the game has made, counted (not taken).
+    loads: std::sync::atomic::AtomicU64,
+}
+
+/// How many saves this game has loaded since it started.
+pub fn loads(e: &mut Engine) -> u64 {
+    e.ext_free::<Saves>()
+        .loads
+        .load(std::sync::atomic::Ordering::SeqCst)
 }
 
 fn note(e: &mut Engine, name: u32, make: fn(String) -> Event) {
@@ -52,6 +61,9 @@ pub(crate) fn save_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 }
 
 pub(crate) fn load_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    e.ext_free::<Saves>()
+        .loads
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     note(e, a.first().copied().unwrap_or(0), Event::Loaded);
     None
 }

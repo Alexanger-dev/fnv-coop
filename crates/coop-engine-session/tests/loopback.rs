@@ -1353,6 +1353,53 @@ fn a_quest_change_made_by_the_guests_dialogue_is_done_by_the_host() {
     assert_same_game(&mut host, &mut guest);
 }
 
+/// PC run 25, 2026-11-12: the guest's player died, its game loaded the last save, and the guest
+/// proposed the whole of that save to the host. After a load nothing is proposed for a while:
+/// the guest's game is put back to the story.
+#[test]
+fn a_guest_that_loads_a_save_proposes_nothing() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    for script in [
+        coop_engine::testkit::SETTER_SCRIPT_ID,
+        coop_engine::testkit::BOTTLE_SCRIPT_ID,
+    ] {
+        gd.object_script_quests.insert(script, vec![MQ]);
+    }
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    let var = |s: &mut Story| coop_engine::vars::quest_vars(&mut s.e, MQ).unwrap()[0].1;
+    let before = var(&mut host);
+    // The load: the game reads a save, and its own scripts then run as after any load.
+    guest.load("autosave");
+    guest.shoot_target(CHET, MQ, 20);
+    frames(
+        80,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert_eq!(var(&mut host), before);
+    assert!(!coop_engine::quest::record(&mut host.e, MQ)
+        .unwrap()
+        .done
+        .contains(&20));
+    assert_eq!(hd.proposals_enacted, 0);
+    assert_same_game(&mut host, &mut guest);
+}
+
 /// A guest whose game is merely behind the story (it joins with a game that already did things
 /// of its own) proposes nothing: the story is put into its game, not its game into the story.
 #[test]

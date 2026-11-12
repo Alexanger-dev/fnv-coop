@@ -717,9 +717,6 @@ impl Fight {
                 fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading));
                 self.guest_run_moves += 1;
             }
-            if s.health > 0 {
-                fight::mend(e, id, f32::from(s.health));
-            }
         }
         if theirs != self.theirs {
             let gained: Vec<u32> = theirs.difference(&self.theirs).copied().collect();
@@ -1197,6 +1194,11 @@ impl Fight {
         {
             self.owned_published_ms = Some(now_ms);
             for id in &owned {
+                // Only one this game has loaded, alive (PC run 25: after a load, actors this
+                // game no longer had were sent as they were not).
+                if fight::place_of(e, *id).is_none() || actors::dead(e, *id) != Some(false) {
+                    continue;
+                }
                 let Some(a) = actors::actor(e, *id) else {
                     continue;
                 };
