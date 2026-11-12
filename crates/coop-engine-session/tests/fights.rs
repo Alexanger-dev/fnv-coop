@@ -661,10 +661,6 @@ fn a_conversation_between_actors_is_the_hosts_and_plays_once_on_the_guest() {
     p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
     p.guest.place_actor(GECKO, HOUSE, [-300.0, 40.0, 0.0], 2.0);
     p.frames(30);
-    // The guest's own trigger fires first: nothing plays there, and its script goes on.
-    assert_eq!(p.guest.script_start_conversation(RAIDER, GECKO, MQ), 6);
-    assert_eq!(p.guest.conversations(RAIDER).0, 0);
-    assert_eq!(coop_engine::commands::dropped_scenes(&mut p.guest.e), 1);
     // The host's script starts it: once there, once on the guest, both moved to the host's places.
     assert_eq!(p.host.script_start_conversation(RAIDER, GECKO, MQ), 6);
     assert_eq!(p.host.conversations(RAIDER), (1, GECKO, MQ));
@@ -690,6 +686,34 @@ fn a_conversation_between_actors_is_the_hosts_and_plays_once_on_the_guest() {
     p.frames(60);
     assert_eq!(p.guest.conversations(GECKO).0, 0);
     assert_eq!(p.gd.scenes_played, 1);
+}
+
+/// PC run 23, 2026-11-12: the guest walked into the trigger by Trudy and Joe Cobb and nothing
+/// happened in either game. A scene a guest's own script starts is asked of the host, whose game
+/// plays it and so has every game play it once; the host's own trigger firing after does not
+/// play it again.
+#[test]
+fn a_scene_a_guests_own_script_starts_is_played_by_the_host_for_everyone() {
+    let mut p = Pair::new();
+    p.hd.fight = None;
+    p.gd.fight = None;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.host.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    p.frames(30);
+    // The guest's trigger: not played there at once, and its script goes on.
+    assert_eq!(p.guest.script_start_conversation(RAIDER, GECKO, MQ), 6);
+    assert_eq!(p.guest.conversations(RAIDER).0, 0);
+    p.frames(60);
+    assert_eq!(p.host.conversations(RAIDER), (1, GECKO, MQ));
+    assert_eq!(p.guest.conversations(RAIDER), (1, GECKO, MQ));
+    assert_eq!(p.gd.scenes_asked, 1);
+    // The host's player walks into its own trigger: not a second time.
+    assert_eq!(p.host.script_start_conversation(RAIDER, GECKO, MQ), 6);
+    p.frames(60);
+    assert_eq!(p.host.conversations(RAIDER).0, 1);
+    assert_eq!(p.guest.conversations(RAIDER).0, 1);
 }
 
 /// A scene that happened before a guest joined is over: it comes with the join and is not played.
@@ -1032,6 +1056,27 @@ fn the_nearest_players_game_runs_an_actor() {
     q.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
     q.frames(80);
     assert!(!q.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+}
+
+/// PC run 23: a gecko's death script ran twice in the guest's game, and Sunny's quest counted two
+/// geckos with one left. A dead actor is never hurt or killed again.
+#[test]
+fn a_dead_actor_is_not_hurt_or_killed_again() {
+    let mut p = Pair::new();
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    let a = coop_engine::actors::actor(&mut p.guest.e, RAIDER).unwrap();
+    p.guest
+        .e
+        .mem
+        .set_u32(a + coop_engine::addr::ACTOR_LIFE_STATE_OFFSET, 2);
+    let health = p.guest.actor_view(RAIDER).health;
+    assert_eq!(
+        coop_engine::fight::hurt_actor(&mut p.guest.e, RAIDER, 30.0, 0),
+        None
+    );
+    assert_eq!(p.guest.actor_view(RAIDER).health, health);
+    assert!(!coop_engine::fight::kill_by(&mut p.guest.e, RAIDER, 0));
+    assert!(!coop_engine::actors::kill(&mut p.guest.e, RAIDER));
 }
 
 /// Peer review, 2026-11-11: a scene was asked of actors the game's own command would refuse. An

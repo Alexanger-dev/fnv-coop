@@ -23,6 +23,10 @@ pub struct Commands {
     scenes: Mutex<Vec<Scene>>,
     /// Lines a script had an actor say to the player (`SayTo`), in order: speaker, topic.
     says: Mutex<Vec<(u32, u32)>>,
+    /// Host: scenes played for a guest's ask (actor, target, topic), and when.
+    asked: Mutex<Vec<AskedScene>>,
+    /// Host: `SayTo` commands seen, for the log.
+    says_seen: AtomicU32,
     /// A guest's own conversations between two actors, dropped.
     dropped: AtomicU32,
     /// Guest: the package the host's copy of each actor runs (reference id to package id).
@@ -388,7 +392,33 @@ pub(crate) fn say_to(e: &mut Engine, a: &[u32]) -> Ret {
             }
         }
     }
-    e.call_next(addr::CMD_SAY_TO, a)
+    let ret = e.call_next(addr::CMD_SAY_TO, a);
+    let n = e
+        .ext_free::<Commands>()
+        .says_seen
+        .fetch_add(1, Ordering::SeqCst);
+    if n < 40 && is_actor {
+        note(
+            e,
+            format!("co-op says: actor {speaker:08x} was made to say a line (SayTo)"),
+        );
+    }
+    ret
+}
+
+/// A scene played for a guest's ask: (actor, target, topic), and when.
+type AskedScene = ((u32, u32, u32), std::time::Instant);
+
+/// How long after a scene played for a guest's ask the host's own same scene is not played.
+pub const ASKED_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Host: scene `s`, asked by a guest's game, was played here.
+pub fn played_for_a_guest(e: &mut Engine, s: &Scene) {
+    e.ext_free::<Commands>()
+        .asked
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(((s.actor, s.target, s.topic), std::time::Instant::now()));
 }
 
 /// Host: the lines scripts had an actor say to the player since the last call (speaker, topic).
@@ -476,23 +506,59 @@ pub(crate) fn converse(e: &mut Engine, a: &[u32]) -> Ret {
     {
         return e.call_next(addr::CMD_START_CONVERSATION, a);
     }
+    let pos = |e: &mut Engine, r: u32| {
+        [0, 4, 8].map(|o| e.mem.f32(r.wrapping_add(addr::REF_POS_OFFSET + o)))
+    };
     if guest {
-        // Read past the parameters as the body would, and say the command ran.
+        // Read past the parameters as the body would, and say the command ran. The scene is
+        // asked of the host's game, which plays it for everyone (PC run 23: the guest walked
+        // into the trigger by Trudy and Joe Cobb and nothing happened anywhere).
         let _ = parse(e, a, false);
-        e.ext_free::<Commands>()
-            .dropped
-            .fetch_add(1, Ordering::SeqCst);
+        let scene = Scene {
+            actor: actor_id,
+            target: target_id,
+            topic: id_of(e, v[1]),
+            locations: [id_of(e, v[2]), id_of(e, v[3])],
+            flags: [v[4] == 1, v[5] == 1],
+            space: fight::space_of(e, this_obj),
+            actor_pos: pos(e, this_obj),
+            target_pos: pos(e, target),
+        };
+        let c = e.ext_free::<Commands>();
+        c.dropped.fetch_add(1, Ordering::SeqCst);
+        c.scenes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(scene);
         note(
             e,
             format!(
-                "co-op scenes: this game's own script asked actor {actor_id:08x} to talk to {target_id:08x}: not run here (the host's game runs scenes)"
+                "co-op scenes: this game's own script asked actor {actor_id:08x} to talk to {target_id:08x}: asked of the host's game, which plays it for everyone"
             ),
         );
         return 1u32.into_ret();
     }
-    let pos = |e: &mut Engine, r: u32| {
-        [0, 4, 8].map(|o| e.mem.f32(r.wrapping_add(addr::REF_POS_OFFSET + o)))
+    // The same scene a guest's game asked of this one, played here a moment ago: not twice (a
+    // trigger fires once in each game; D5, condition 5).
+    let topic_id = id_of(e, v[1]);
+    let recent = {
+        let c = e.ext_free::<Commands>();
+        let mut asked = c.asked.lock().unwrap_or_else(PoisonError::into_inner);
+        asked.retain(|(_, at)| at.elapsed() < ASKED_FOR);
+        asked
+            .iter()
+            .any(|(k, _)| *k == (actor_id, target_id, topic_id))
     };
+    if recent {
+        let _ = parse(e, a, false);
+        note(
+            e,
+            format!(
+                "co-op scenes: actor {actor_id:08x} with {target_id:08x}: already played for a guest's ask, not again"
+            ),
+        );
+        return 1u32.into_ret();
+    }
     let scene = Scene {
         actor: actor_id,
         target: target_id,

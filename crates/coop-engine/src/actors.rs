@@ -42,6 +42,9 @@ pub fn dead(e: &mut Engine, id: u32) -> Option<bool> {
 /// False when the actor is not in this game now. The game may keep it alive (essential) or do the
 /// kill later in the frame: read [`dead`] afterwards.
 pub fn kill(e: &mut Engine, id: u32) -> bool {
+    if dead(e, id) != Some(false) {
+        return false;
+    }
     let Some(a) = actor(e, id) else {
         return false;
     };

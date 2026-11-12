@@ -332,6 +332,7 @@ impl HostDriver {
         let mut sync = HostSync::new(cfg);
         sync.claim_tags.insert(LIFE_TAG);
         sync.claim_tags.insert(PROPOSE_TAG);
+        sync.claim_tags.insert(SCENE_TAG);
         HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
@@ -380,6 +381,29 @@ impl HostDriver {
             let id = form.0;
             if let Some(p) = Proposal::read(&field) {
                 self.enact_proposal(e, from, id, p);
+                continue;
+            }
+            // A scene a guest's own script started: played here, and so for everyone.
+            if let Some(scene) = scene_of(id, &field) {
+                let played = commands::play_scene(e, &scene);
+                self.claim_notes.push(format!(
+                    "player {}'s game started a scene: actor {:08x} talks to {:08x} (topic {:08x}): {}",
+                    from.0,
+                    scene.actor,
+                    scene.target,
+                    scene.topic,
+                    match played {
+                        Ok(()) => "played here and for everyone".to_string(),
+                        Err(why) => format!("not played here: {why:?}"),
+                    }
+                ));
+                if played.is_ok() {
+                    commands::played_for_a_guest(e, &scene);
+                    let n = self.scenes.entry(scene.actor).or_insert(0);
+                    *n = n.wrapping_add(1);
+                    let field = scene_field(*n, &scene);
+                    self.sync.write(FormId(scene.actor), field);
+                }
                 continue;
             }
             if life_value(&field) != Some(true) || !actors::shareable(id) {
@@ -479,7 +503,7 @@ impl HostDriver {
         } else {
             self.proposals_dropped += 1;
         }
-        if self.proposals_enacted + self.proposals_dropped <= 80 {
+        if self.proposals_enacted + self.proposals_dropped <= 400 {
             self.claim_notes.push(format!(
                 "player {}'s game did {p:?} to {id:08x}: {}",
                 from.0,
@@ -846,6 +870,8 @@ pub struct GuestDriver {
     say_seen: std::collections::BTreeMap<u32, u8>,
     /// The host's lines said here.
     pub says_said: u32,
+    /// Scenes this game's own scripts started, asked of the host.
+    pub scenes_asked: u32,
     joined: bool,
     /// The host's conversations between actors played in this game, and those that could not be.
     pub scenes_played: u32,
@@ -923,6 +949,7 @@ impl GuestDriver {
             scene_seen: std::collections::BTreeMap::new(),
             say_seen: std::collections::BTreeMap::new(),
             says_said: 0,
+            scenes_asked: 0,
             joined: false,
             scenes_played: 0,
             scenes_missed: 0,
@@ -1000,13 +1027,26 @@ impl GuestDriver {
             w.apply(e, &self.sync.store);
         }
         self.keep_clock(e, now_ms);
-        for script in gate::drain_object_scripts(e) {
-            if self.object_script_quests.contains_key(&script) {
+        for (script, reference) in gate::drain_object_scripts(e) {
+            // A death script's doing is the host's: the host's game runs the death of its own
+            // copy when it takes the claim (PC run 23: a gecko counted twice).
+            if self.object_script_quests.contains_key(&script)
+                && actors::dead(e, reference) != Some(true)
+            {
                 self.recent_object_scripts.insert(script, now_ms);
             }
         }
         self.recent_object_scripts
             .retain(|_, at| now_ms.saturating_sub(*at) <= PROPOSE_RECENT_MS);
+        if self.proposals_on && self.sync.phase() == GuestPhase::Active {
+            for scene in commands::drain_scenes(e) {
+                self.proposals_out
+                    .push((FormId(scene.actor), scene_field(0, &scene)));
+                self.scenes_asked += 1;
+            }
+        } else {
+            let _ = commands::drain_scenes(e);
+        }
         let claims = std::mem::take(&mut self.proposals_out);
         if !claims.is_empty() {
             for msg in self.sync.send_intent(Epoch(0), claims) {
@@ -1169,7 +1209,7 @@ impl GuestDriver {
     /// which the conversations carry), it has been proposed to the host, and the host has had
     /// less than [`PROPOSE_HOLD_MS`] to answer. The first time, the proposal is queued. When the
     /// time is up the difference is put back like any other.
-    fn proposes(&mut self, m: &Mismatch) -> bool {
+    fn proposes(&mut self, e: &mut Engine, m: &Mismatch) -> bool {
         let Some(found) = &m.found else {
             return false;
         };
@@ -1207,7 +1247,12 @@ impl GuestDriver {
         // and showed the next in the guest's game; put back, the guest got no instructions). A
         // quest's script is the host's (the gate holds those). Everything proposed is done by
         // the host only if it still fits, so a result the host also runs is not done twice.
-        let own_doing = |c: &gate::Cause| !c.quest_script && c.owner_quest == 0;
+        let cause_dead = match cause {
+            Some(c) => actors::dead(e, c.reference) == Some(true),
+            None => false,
+        };
+        // (a script on an actor that died here: its death, which the host runs for its own copy)
+        let own_doing = |c: &gate::Cause| !c.quest_script && c.owner_quest == 0 && !cause_dead;
         let allowed = match &m.want {
             // A reference: only when this game's own doing is known to have done it (lights and
             // the like differ between two games for reasons of their own).
@@ -1236,7 +1281,7 @@ impl GuestDriver {
             self.proposals_out.push((FormId(m.form), p.field()));
         }
         self.proposals_sent += ps.len() as u32;
-        if self.proposals_sent <= 80 {
+        if self.proposals_sent <= 400 {
             self.healed_notes.push(format!(
                 "co-op guest: this game's script {:08x} did {ps:?} to {:08x}: proposed to the host",
                 self.causes.get(&m.form).map_or(0, |c| c.script),
@@ -1274,7 +1319,7 @@ impl GuestDriver {
             if self.own_trigger_keeps(m.form, &m.want) {
                 continue;
             }
-            if self.proposes(&m) {
+            if self.proposes(e, &m) {
                 continue;
             }
             if apply_field(e, m.form, &m.want) {

@@ -534,6 +534,11 @@ pub fn release(e: &mut Engine, id: u32) -> bool {
 /// any hit. Answers the actor's health afterwards; `None` when it is not in this game now. The
 /// applier does not kill: see [`kill_by`].
 pub fn hurt_actor(e: &mut Engine, id: u32, amount: f32, attacker: u32) -> Option<f32> {
+    // A dead one is not hurt again: the game would run its death once more (PC run 23: a
+    // gecko's death script counted it twice, and Sunny's quest moved on with one left).
+    if actors::dead(e, id) != Some(false) {
+        return None;
+    }
     let a = actors::actor(e, id)?;
     let by = forms::form(e, attacker).unwrap_or(0);
     e.vcall(
@@ -547,6 +552,9 @@ pub fn hurt_actor(e: &mut Engine, id: u32, amount: f32, attacker: u32) -> Option
 /// Kills actor `id` through the game's `Actor::Kill`, credited to `attacker` (a form id, or 0).
 /// False when the actor is not in this game now. The game keeps an essential actor alive.
 pub fn kill_by(e: &mut Engine, id: u32, attacker: u32) -> bool {
+    if actors::dead(e, id) != Some(false) {
+        return false;
+    }
     let Some(a) = actors::actor(e, id) else {
         return false;
     };

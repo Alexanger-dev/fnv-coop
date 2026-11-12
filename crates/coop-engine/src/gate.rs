@@ -45,7 +45,9 @@ pub struct Gate {
     /// guest-local scripts).
     own_scripts: RwLock<BTreeSet<u32>>,
     /// The object scripts (not a quest's) that ran since [`drain_object_scripts`] last asked.
-    object_ran: Mutex<BTreeSet<u32>>,
+    object_ran: Mutex<BTreeSet<(u32, u32)>>,
+    /// Story scripts run on a guest from inside its own doing (a stage's result).
+    ran_nested: AtomicU64,
     /// The distinct story scripts skipped (at most [`SEEN_MAX`]): the script's form id to whether
     /// it is a quest script, its owner quest's form id (0 for none) and how often it was skipped.
     seen: Mutex<BTreeMap<u32, SkippedScript>>,
@@ -120,7 +122,7 @@ fn run_named(e: &mut Engine, a: &[u32]) -> Ret {
             g.object_ran
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .insert(named.script);
+                .insert((named.script, named.reference));
         }
         let mut s = g.running.lock().unwrap_or_else(PoisonError::into_inner);
         s.push(named);
@@ -191,8 +193,8 @@ pub fn set_own_scripts(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
 
 // social
 /// The object scripts (form ids; not a quest's script, not a dialogue result) that ran in this
-/// game since the last call.
-pub fn drain_object_scripts(e: &mut Engine) -> BTreeSet<u32> {
+/// game since the last call, each with the reference it ran on.
+pub fn drain_object_scripts(e: &mut Engine) -> BTreeSet<(u32, u32)> {
     std::mem::take(
         &mut *e
             .ext_free::<Gate>()
@@ -277,8 +279,23 @@ pub(crate) fn run(e: &mut Engine, a: &[u32]) -> Ret {
                     .read()
                     .unwrap_or_else(PoisonError::into_inner)
                     .contains(&id);
-            if own {
+            // Run from inside this game's own doing (an object script, a package's script, a
+            // line of this player's dialogue setting a stage, whose result runs at once): the
+            // stage is this player's doing, and so is its result, here, for this player (PC run
+            // 23: Sunny's bark after the sneak, said by stage 40's result to the player, was the
+            // host's player's, far away, and the guest's player was never told to go on). What it
+            // does to the story reaches the host as proposals.
+            let nested_in_own = g
+                .running
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .last()
+                .is_some_and(|c| !c.quest_script && c.owner_quest == 0);
+            if own || nested_in_own {
                 g.ran_own.fetch_add(1, Ordering::SeqCst);
+                if nested_in_own && !own {
+                    g.ran_nested.fetch_add(1, Ordering::SeqCst);
+                }
                 return run_named(e, a);
             }
             g.skipped_story.fetch_add(1, Ordering::SeqCst);
@@ -337,6 +354,52 @@ mod tests {
         e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
         crate::install(&mut e);
         e
+    }
+
+    /// The runner of [`a_guest_runs_a_story_script_its_own_object_script_called`]: counts, and
+    /// the object script and the quest script each set a stage whose result runs at once.
+    fn nesting(e: &mut Engine, a: &[u32]) -> Ret {
+        let n = e.mem.u32(RAN);
+        e.mem.set_u32(RAN, n + 1);
+        if a[1] == OBJECT || a[1] == QUEST {
+            run_script(e, RESULT);
+        }
+        Ret {
+            eax: 1,
+            ..Ret::default()
+        }
+    }
+
+    /// PC run 23: a stage a guest's own object script sets runs its result there; the same
+    /// result on its own (the host's story), or called by a quest's script, does not.
+    #[test]
+    fn a_guest_runs_a_story_script_its_own_object_script_called() {
+        let mut e = Engine::new();
+        e.map(SCRIPTS, 0x1000);
+        e.map(RAN, 0x100);
+        e.map(0x0300_0000, 0x200);
+        e.mem.set_u8(QUEST + addr::SCRIPT_IS_QUEST_OFFSET, 1);
+        e.mem.set_u32(QUEST + addr::FORM_ID_OFFSET, 0x11);
+        e.mem.set_u32(RESULT + addr::FORM_ID_OFFSET, 0x22);
+        e.mem.set_u32(0x0300_0000 + addr::FORM_ID_OFFSET, 0x77);
+        e.mem.set_u32(0x0300_0100 + addr::FORM_ID_OFFSET, 0x11);
+        e.mem
+            .set_u32(RESULT + addr::SCRIPT_OWNER_QUEST_OFFSET, 0x0300_0000);
+        e.mem
+            .set_u32(QUEST + addr::SCRIPT_OWNER_QUEST_OFFSET, 0x0300_0100);
+        e.register(addr::SCRIPT_RUNNER_RUN, nesting);
+        e.register(addr::SAVE_LOAD_ADD_CHANGE, |_, _| Ret::default());
+        e.register(addr::ACTOR_EVALUATE_PACKAGE, |_, _| Ret::default());
+        crate::install(&mut e);
+        set_guest(&mut e, true);
+        assert_eq!(run_script(&mut e, RESULT), 0);
+        assert_eq!(runs(&e), 0);
+        assert_eq!(run_script(&mut e, OBJECT), 1);
+        assert_eq!(runs(&e), 2, "the object script and the result it called");
+        // The quest's own script (the player's own quest) runs; the result it calls does not.
+        set_own_quests(&mut e, [0x11]);
+        run_script(&mut e, QUEST);
+        assert_eq!(runs(&e), 3);
     }
 
     fn run_script(e: &mut Engine, script: u32) -> u32 {
