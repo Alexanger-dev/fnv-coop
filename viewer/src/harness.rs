@@ -224,7 +224,8 @@ impl Harness {
                         let info = read(e, topic.wrapping_add(0x18) * (topic != 0) as u32);
                         let id = read(
                             e,
-                            info.wrapping_add(coop_engine::addr::FORM_ID_OFFSET) * (info != 0) as u32,
+                            info.wrapping_add(coop_engine::addr::FORM_ID_OFFSET)
+                                * (info != 0) as u32,
                         );
                         vec![format!("{} topics; saying info {id:08x}", tiles.len())]
                     }
@@ -296,6 +297,22 @@ impl Harness {
             // (`TESObjectREFR::Activate`, `00573170`).
             "activate" => {
                 match hex(rest).and_then(|id| coop_engine::forms::form(e, id).map(|r| (id, r))) {
+                    // Within a player's reach only: in this player's space, loaded, and no
+                    // farther than REACH (a player cannot talk to someone in another building).
+                    Some((id, r))
+                        if coop_engine::fight::space_of(e, r)
+                            != coop_engine::live::local(e).map_or(0, |l| l.cell)
+                            || coop_engine::live::local(e).is_some_and(|l| {
+                                let p = coop_engine::fight::place_of_ptr(e, r);
+                                (0..3)
+                                    .map(|i| (p[i] - l.pos[i]).powi(2))
+                                    .sum::<f32>()
+                                    .sqrt()
+                                    > REACH
+                            }) =>
+                    {
+                        vec![format!("activate {id:08x}: out of this player's reach")]
+                    }
                     Some((id, r)) => {
                         let player = e.mem.u32(coop_engine::addr::PLAYER_SINGLETON);
                         let ok = e
@@ -427,6 +444,9 @@ impl Harness {
         }
     }
 }
+
+/// How far `activate` reaches (a door or a person across a room).
+const REACH: f32 = 1500.0;
 
 static TO_MAIN: std::sync::Mutex<std::collections::VecDeque<String>> =
     std::sync::Mutex::new(std::collections::VecDeque::new());
