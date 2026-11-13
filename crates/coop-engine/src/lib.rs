@@ -89,6 +89,9 @@ pub fn install(e: &mut Engine) {
     if e.is_registered(addr::CMD_SAY_TO) {
         e.wrap(commands::SAY_TO, commands::say_to);
     }
+    if e.is_registered(addr::OBJECTIVE_SET_STATE) {
+        e.wrap(quest::OBJECTIVE_STATE, quest::objective_state);
+    }
     let _ = e.ext_free::<commands::Commands>();
     // The gate's slot too, before the threads start.
     let _ = e.ext_free::<gate::Gate>();

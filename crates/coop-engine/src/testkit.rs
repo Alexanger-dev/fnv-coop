@@ -393,6 +393,8 @@ impl Story {
                 |e, i| {
                     let o = q + 0x400 + 0x28 * i as u32;
                     e.mem.set_u32(o + addr::OBJECTIVE_INDEX_OFFSET, objs[i]);
+                    // `pOwnerQuest`.
+                    e.mem.set_u32(o + addr::OBJECTIVE_QUEST_OFFSET, q);
                     o
                 },
             );

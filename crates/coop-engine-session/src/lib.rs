@@ -521,7 +521,13 @@ impl HostDriver {
                     for o in r.objectives.iter_mut().filter(|o| o.0 == number) {
                         o.1 = state;
                     }
-                    let ok = quest::apply(e, &r);
+                    // The guest's doing, as such (an objective it takes back is taken back).
+                    let ok = coop_engine::gate::applying(e, |e| quest::apply(e, &r));
+                    if ok && state & 2 != 0 {
+                        // Not taken back by this game's own scripts, whose `Player` is the
+                        // host's player alone (S24).
+                        quest::note_guest_completed(e, id, number);
+                    }
                     self.write_quest(e, id);
                     ok
                 }

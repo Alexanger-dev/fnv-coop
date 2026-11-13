@@ -83,6 +83,9 @@ pub const QUEST_OBJECTIVE_LIST_OFFSET: u32 = 0x4c;
 /// `BGSQuestObjective::iIndex`: the objective number at +0x04 (`bgsquestobjective.rs`).
 pub const OBJECTIVE_INDEX_OFFSET: u32 = 0x04;
 
+/// `BGSQuestObjective::pOwnerQuest` (Xbox PDB): the objective's quest.
+pub const OBJECTIVE_QUEST_OFFSET: u32 = 0x10;
+
 /// `BGSQuestObjective::eState`: `QUEST_OBJECTIVE_STATE` at +0x20, bit 0 displayed, bit 1
 /// completed (`bgsquestobjective.rs`; the save's quest record keeps the same word, `crates/fos`).
 pub const OBJECTIVE_STATE_OFFSET: u32 = 0x20;

@@ -169,6 +169,13 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-3",
     },
+    // BGSQuestObjective's state setter (objective, state): on a co-op host an objective a guest's
+    // game completed is not taken back by the host's own scripts (docs/coop/SPECS.md S24).
+    Entry {
+        addr: 0x005e_c5d0,
+        owners: COOP,
+        step: "C-9",
+    },
     // social: co-op's shared conversations and its sleep and wait vote (docs/coop/SPECS.md S14,
     // S17). TESTopicInfo::RunResult (info, index, reference): a conversation's results run once,
     // on the host. DialogMenu::Create (speaker, word, target): one conversation per NPC.

@@ -287,6 +287,45 @@ impl Harness {
                     None => vec![format!("activate {rest}: not here")],
                 }
             }
+            // A dialogue line's result scripts run as the game runs them when the line is said
+            // (`TESTopicInfo::RunResultScript`, begin then end), with SPEAKER as the speaker.
+            "info" => {
+                let p: Vec<u32> = rest.split_whitespace().filter_map(hex).collect();
+                match (
+                    p.first().and_then(|i| coop_engine::forms::form(e, *i)),
+                    p.get(1).and_then(|a| coop_engine::actors::actor(e, *a)),
+                ) {
+                    (Some(info), Some(speaker)) => {
+                        for end in [0u32, 1] {
+                            e.call(
+                                coop_engine::addr::INFO_RUN_RESULT,
+                                &args![info, end, speaker],
+                            );
+                        }
+                        vec![format!("info {rest}: ran")]
+                    }
+                    _ => vec!["info INFOHEX SPEAKERHEX".into()],
+                }
+            }
+            // How many of ITEM the player (or ACTOR) carries (`Actor::GetItemCountinContainer`,
+            // `00575610`).
+            "count" => {
+                let p: Vec<u32> = rest.split_whitespace().filter_map(hex).collect();
+                let who = p
+                    .get(1)
+                    .copied()
+                    .unwrap_or(coop_engine::actors::PLAYER_REF_ID);
+                match (
+                    p.first().and_then(|i| coop_engine::forms::form(e, *i)),
+                    coop_engine::actors::actor(e, who),
+                ) {
+                    (Some(item), Some(a)) => {
+                        let n = e.call(0x0057_5610, &args![a, item]).u32() as i32;
+                        vec![format!("count {:08x} on {who:08x}: {n}", p[0])]
+                    }
+                    _ => vec!["count ITEMHEX [ACTORHEX]".into()],
+                }
+            }
             "say" => vec![rest.to_string()],
             "menu" => vec![match coop_engine::talk::menu_npc(e) {
                 Some(npc) => format!("dialogue open with {npc:08x}"),

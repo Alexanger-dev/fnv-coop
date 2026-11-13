@@ -272,6 +272,11 @@ pub fn ran_own(e: &mut Engine) -> u64 {
     e.ext_free::<Gate>().ran_own.load(Ordering::SeqCst)
 }
 
+/// Whether this game is applying another game's doing now ([`applying`]).
+pub fn is_applying(e: &mut Engine) -> bool {
+    e.ext_free::<Gate>().applying.load(Ordering::SeqCst) > 0
+}
+
 /// Runs `f` as the application of the host's state: no script runs on a guest until it returns.
 pub fn applying<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     e.ext_free::<Gate>().applying.fetch_add(1, Ordering::SeqCst);

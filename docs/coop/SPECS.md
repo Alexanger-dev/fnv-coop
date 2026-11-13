@@ -678,3 +678,29 @@ processes, the process's say slot `0x2a4`); its result runs in that game and its
 host as proposals (S21). One that came with the join is not said. Not tested against the game's own
 command: the stand-ins have no `SayTo`.
 
+
+## S24: a guest's completed objectives and items between players (in part implemented)
+
+Found in the harness on 2026-11-13 (VCG03, Sunny's healing powder). A quest script runs in the
+host's game only, and its `Player` is the host's player alone. VCG03's script completes "find a
+Xander root and a Broc flower" while that player holds both and takes it back while it does not.
+So when a guest who held both completed it, through its own gather trigger, the host's script took
+it back at once.
+
+Decided by a committee of three (unanimous), between three options:
+- A. Per player, as the original game counts.
+- B. The party's items summed for quest scripts.
+- C. A, plus giving items between players.
+
+The vote was C. B makes a check pass on items that a removal (`Player.RemoveItem` in the speaker's
+game) then cannot take: deliveries, purchases. Every quest that counts items would be exposed, and
+a split pair still cannot be crafted. Plants are picked separately in each game, so each player
+can gather and cook. A split pair is pooled by giving one item to the other player.
+
+- Implemented: on the host, an objective a guest's game completed (its proposal applied) is not set
+  back by the host's own scripts. The wrap is at the objective state setter `005ec5d0`, step C-9.
+  The guest's own taking back is applied as ever.
+- To do: giving an item to another player, done by the host as one step (taken from one, given to
+  the other, or neither). Quest items are allowed between players only.
+- To do: rewards from host-only scripts (`RewardXP`, `Player.AddItem` in a stage's result) go to
+  the host's player alone.
