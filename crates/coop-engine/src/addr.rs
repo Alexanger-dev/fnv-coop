@@ -598,6 +598,9 @@ pub const PLAYER_WAIT_HOUR: u32 = 0x0094_df80;
 /// What the menu runs before each hour (`sleepwaitmenu.rs`, `UpdateSleeping`): the scripts once
 /// (`thiscall` on the object at `011dea10`; `00455490`, `tes.rs`).
 pub const TES_SINGLETON: u32 = 0x011d_ea10;
+/// `TES::IsCellLoaded` (`thiscall`, the TES, a cell, 0; `004511e0`): whether the game has the cell
+/// in its loaded grid (or is the interior it shows), so that what is in it is drawn.
+pub const CELL_IS_LOADED: u32 = 0x0045_11e0;
 /// See [`TES_SINGLETON`].
 pub const TES_RUN_SCRIPTS: u32 = 0x0045_5490;
 

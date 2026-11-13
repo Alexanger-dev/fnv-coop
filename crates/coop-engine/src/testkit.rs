@@ -56,6 +56,8 @@ const REWARD_SCRIPT: u32 = 0x0150_0700;
 pub(crate) const SCRIPT_REWARD_XP: u32 = 0x7c;
 /// The experience the player was given in all.
 const REWARD: u32 = RAN + 0x50;
+/// Two cells (their addresses) this game does not have loaded; 0 for none.
+const UNLOADED: u32 = RAN + 0x58;
 /// In any script's block: an item its body gives (`AddItem`; its form id, 0 for none), how many,
 /// and to whom (a reference's address; 0 for the player).
 pub(crate) const SCRIPT_ADD_ITEM: u32 = 0x68;
@@ -559,6 +561,14 @@ impl Story {
                 );
             }
             eax(1)
+        });
+        // A cell is loaded unless a test let it go. The game reads the cell: none is a fault.
+        e.register(addr::CELL_IS_LOADED, |e, a| {
+            let cell = a[1];
+            assert_ne!(cell, 0, "TES::IsCellLoaded of no cell");
+            eax(u32::from(
+                e.mem.u32(UNLOADED) != cell && e.mem.u32(UNLOADED + 4) != cell,
+            ))
         });
         // The game's `MoveTo`: the reference goes to the target's cell, at its place plus the
         // offsets.
@@ -1205,6 +1215,25 @@ impl Story {
     /// Whether a placed reference is disabled (`None`: not in this game now).
     pub fn disabled(&mut self, reference: u32) -> Option<bool> {
         crate::actors::disabled(&mut self.e, reference)
+    }
+
+    /// Makes this game let cell `cell` go (no longer loaded; what is in it is not drawn), or load
+    /// it again. Two cells at most are let go at once.
+    pub fn set_cell_loaded(&mut self, cell: u32, loaded: bool) {
+        let c = forms::form(&mut self.e, cell).expect("a cell of the story");
+        let slots = [UNLOADED, UNLOADED + 4];
+        if loaded {
+            for s in slots {
+                if self.e.mem.u32(s) == c {
+                    self.e.mem.set_u32(s, 0);
+                }
+            }
+        } else if let Some(s) = slots
+            .into_iter()
+            .find(|s| self.e.mem.u32(*s) == 0 || self.e.mem.u32(*s) == c)
+        {
+            self.e.mem.set_u32(s, c);
+        }
     }
 
     /// Takes a form out of the game (its cell is not loaded) or puts it back.

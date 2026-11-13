@@ -269,12 +269,26 @@ impl Harness {
                     Some((id, r)) => {
                         let pos = coop_engine::fight::place_of_ptr(e, r);
                         let space = coop_engine::fight::space_of(e, r);
+                        // Its parent cell (+0x40), whether the game has that cell loaded
+                        // (`004511e0`), and its 3D (vtable +0x1d0): what makes it seen.
+                        let cell = e.mem.u32(r + coop_engine::addr::REF_CELL_OFFSET);
+                        let cell_id = if cell != 0 {
+                            e.mem.u32(cell + coop_engine::addr::FORM_ID_OFFSET)
+                        } else {
+                            0
+                        };
+                        let tes = e.mem.u32(coop_engine::addr::TES_SINGLETON);
+                        let loaded = cell != 0
+                            && tes != 0
+                            && e.call(0x0045_11e0, &args![tes, cell, 0u32]).bool();
+                        let node = e.vcall(r, 0x1d0, &args![]).u32();
                         vec![format!(
-                            "ref {id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, disabled {:?}",
+                            "ref {id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, disabled {:?}, cell {cell_id:08x} loaded {loaded}, 3D {}",
                             pos[0],
                             pos[1],
                             pos[2],
-                            coop_engine::actors::disabled(e, id)
+                            coop_engine::actors::disabled(e, id),
+                            node != 0
                         )]
                     }
                     None => vec![format!("ref {rest}: not here")],

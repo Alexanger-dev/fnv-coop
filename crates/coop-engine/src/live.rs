@@ -162,12 +162,24 @@ pub fn avatar_create(e: &mut Engine, base: u32) -> Result<Avatar, Refusal> {
 pub struct Held {
     /// The game had switched its AI back on (a load does); it was switched off again.
     pub woke: bool,
+    /// It was in a cell this game does not have loaded (or in none): it was brought into the
+    /// player's cell first (see [`avatar_hold`]).
+    pub rehomed: bool,
     /// Where the avatar is after the move.
     pub pos: [f32; 3],
 }
 
 /// One frame of an avatar: its AI kept off, then moved to `pos` and `heading` (radians). `None`
 /// when the reference is gone (the game deleted it, or another game was loaded).
+///
+/// Moving it (`SetPos`) leaves it in the cell it was placed in. When this game lets that cell go
+/// (the player fast travelled away, or walked far), the avatar keeps its place but is drawn no more
+/// (PC run 30: after a fast travel each player saw the other only once they went into the saloon
+/// together). An avatar in a cell this game does not have loaded, or in none, is first brought
+/// with the game's own `MoveTo` to its place, which puts it in the cell there, when that place is
+/// within [`LOADED_REACH`] of this player (the cells this game keeps loaded). A player farther away
+/// cannot be seen from here: the avatar is only moved (the harness, 2026-11-13: between one
+/// player's fast travel and the other's, a `MoveTo` every frame put it in another unloaded cell).
 pub fn avatar_hold(e: &mut Engine, a: Avatar, pos: [f32; 3], heading: f32) -> Option<Held> {
     let r = forms::form(e, a.id)?;
     let flag = r.wrapping_add(addr::ACTOR_PROCESS_ME_OFFSET);
@@ -176,11 +188,49 @@ pub fn avatar_hold(e: &mut Engine, a: Avatar, pos: [f32; 3], heading: f32) -> Op
         e.mem.set_u8(flag, 0);
         e.call(addr::ACTOR_END_MOVEMENT, &args![r]);
     }
+    let rehomed = !in_loaded_cell(e, r) && rehome(e, r, pos);
     place(e, r, pos, heading);
     Some(Held {
         woke,
+        rehomed,
         pos: pos_of(e, r),
     })
+}
+
+/// Whether reference `r` is in a cell this game has loaded.
+fn in_loaded_cell(e: &mut Engine, r: u32) -> bool {
+    let cell = e.mem.u32(r.wrapping_add(addr::REF_CELL_OFFSET));
+    let tes = e.mem.u32(addr::TES_SINGLETON);
+    cell != 0 && e.call(addr::CELL_IS_LOADED, &args![tes, cell, 0u32]).bool()
+}
+
+/// How far from the local player an avatar's place can be and still be in the cells this game
+/// keeps loaded: two exterior cells of 4096 units (the game's `uGridsToLoad` of 5 is the player's
+/// cell and two around it).
+pub const LOADED_REACH: f32 = 8192.0;
+
+/// Brings reference `r` to `pos` with the game's `MoveTo` to the local player (the difference as
+/// offsets), which puts it in the cell there. False when the player is not in the world, `pos` is
+/// farther than [`LOADED_REACH`] from it, or the program has no such function.
+fn rehome(e: &mut Engine, r: u32, pos: [f32; 3]) -> bool {
+    let p = match player(e) {
+        Some(p) if e.mem.u32(p.wrapping_add(addr::REF_LOADED_OFFSET)) != 0 => p,
+        _ => return false,
+    };
+    if !e.is_registered(addr::MOVE_TO_FUNCTION_BASE) {
+        return false;
+    }
+    let at = [0, 4, 8].map(|o| e.mem.f32(p.wrapping_add(addr::REF_POS_OFFSET + o)));
+    let far = (0..2).map(|i| (pos[i] - at[i]).powi(2)).sum::<f32>().sqrt();
+    if far > LOADED_REACH {
+        return false;
+    }
+    let off = [0, 1, 2].map(|i| (pos[i] - at[i]).to_bits());
+    e.call(
+        addr::MOVE_TO_FUNCTION_BASE,
+        &args![r, p, off[0], off[1], off[2]],
+    );
+    true
 }
 
 /// Removes an avatar from the world (`TESObjectREFR::Disable`); false when it was already gone.

@@ -77,6 +77,8 @@ struct Peer {
     failed: bool,
     moved: u64,
     woke: u64,
+    /// Times the avatar was in a cell this game let go and was brought into this player's cell.
+    rehomed: u32,
     off_by: f32,
 }
 
@@ -417,6 +419,15 @@ impl Ladder {
                                 a.id
                             ),
                         );
+                    }
+                    if h.rehomed {
+                        let peer = self.peers.entry(*p).or_default();
+                        peer.rehomed += 1;
+                        let n = peer.rehomed;
+                        self.say(format!(
+                            "co-op live: avatar {:08x} of player {} was in a cell this game let go: brought into this player's cell ({n} times)",
+                            a.id, p.0
+                        ));
                     }
                 }
                 None => {
