@@ -443,13 +443,19 @@ mod tests {
         s.say(SHARED_LINE, true);
         assert_eq!(
             crate::reward::take(&mut s.e),
-            vec![crate::reward::Given { quest: MQ, xp: 50 }]
+            vec![crate::reward::Given {
+                quest: MQ,
+                what: crate::reward::What::Xp(50)
+            }]
         );
         s.leave();
         enact(&mut s.e, NPC, SHARED_LINE, true).unwrap();
         assert_eq!(
             crate::reward::take(&mut s.e),
-            vec![crate::reward::Given { quest: MQ, xp: 50 }]
+            vec![crate::reward::Given {
+                quest: MQ,
+                what: crate::reward::What::Xp(50)
+            }]
         );
         assert_eq!(s.xp(), 100);
         assert_eq!(result_quest(&mut s.e), None);

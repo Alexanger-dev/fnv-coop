@@ -1699,3 +1699,61 @@ fn the_storys_experience_goes_to_every_player() {
     );
     assert_eq!(guest.xp(), 50);
 }
+
+/// S25 (the user, 2026-11-13: both players get the caps and items a quest gives): caps and items
+/// the story gives the host's player go to each guest's player once, as `AddItem` gives them.
+#[test]
+fn the_storys_caps_and_items_go_to_every_player() {
+    const CAPS: u32 = 0x0000_000f;
+    const STIMPAK: u32 = 0x0001_5169;
+    let net = LoopbackNet::new();
+    let mut hostnet = net.endpoint(PlayerId::HOST);
+    let mut gnet = net.endpoint(PlayerId(1));
+    let mut host = Story::new(&spec());
+    let mut hd = HostDriver::new(HostConfig::new(hello(), 1), quest_ids(), GLOBALS);
+    hd.start(&mut host.e);
+    let mut guest = guest_story();
+    let mut gd = GuestDriver::new(PlayerId(1), hello());
+    for s in [&mut host, &mut guest] {
+        s.add_item_form(CAPS);
+        s.add_item_form(STIMPAK);
+    }
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut hostnet,
+        &mut guest,
+        &mut gd,
+        &mut gnet,
+    );
+    host.run_script_giving_item(MQ, CAPS, 100);
+    host.run_script_giving_item(MQ, STIMPAK, 2);
+    guest.run_script_giving_item(MQ, CAPS, 100);
+    frames(
+        10,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut hostnet,
+        &mut guest,
+        &mut gd,
+        &mut gnet,
+    );
+    assert_eq!((host.items(CAPS), guest.items(CAPS)), (100, 100));
+    assert_eq!((host.items(STIMPAK), guest.items(STIMPAK)), (2, 2));
+    assert_eq!((hd.rewards, gd.items_given), (2, 2));
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut hostnet,
+        &mut guest,
+        &mut gd,
+        &mut gnet,
+    );
+    assert_eq!(guest.items(CAPS), 100);
+}

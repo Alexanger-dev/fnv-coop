@@ -96,6 +96,9 @@ pub fn install(e: &mut Engine) {
     if e.is_registered(addr::PLAYER_REWARD_EXPERIENCE) {
         e.wrap(reward::EXPERIENCE, reward::experience);
     }
+    if e.is_registered(addr::CONTAINER_GIVE) {
+        e.wrap(reward::ITEMS, reward::items);
+    }
     let _ = e.ext_free::<commands::Commands>();
     // The gate's slot too, before the threads start.
     let _ = e.ext_free::<gate::Gate>();

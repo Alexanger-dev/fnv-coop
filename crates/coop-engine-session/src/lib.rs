@@ -38,7 +38,7 @@ use coop_core::compat;
 use coop_core::delta::StateStore;
 use coop_core::ids::{Epoch, FormId, PlayerId, Rev, Tick};
 use coop_core::proto::{self, Hello, Msg};
-use coop_core::rules::Notice;
+use coop_core::rules::{Gift, Notice};
 use coop_core::schema::Field;
 use coop_core::sync::{GuestLive, HostConfig, HostSync};
 use coop_core::sync::{GuestPhase, GuestSync};
@@ -232,6 +232,30 @@ pub fn hello(plugins: Vec<String>) -> Hello {
 /// Encodes and sends `msg`; a message too large to encode, or a peer the transport does not have,
 /// is counted and dropped (coop-core's sync splits what it sends to fit; a refused send ends the
 /// session through the transport's own liveness check).
+/// A reward as the rules carry it (S25).
+fn gift_of(what: coop_engine::reward::What) -> Gift {
+    match what {
+        coop_engine::reward::What::Xp(xp) => Gift::Xp(xp),
+        coop_engine::reward::What::Item { form, count } => Gift::Item { form, count },
+    }
+}
+
+/// A reward as the game gives it (S25).
+fn what_of(gift: Gift) -> coop_engine::reward::What {
+    match gift {
+        Gift::Xp(xp) => coop_engine::reward::What::Xp(xp),
+        Gift::Item { form, count } => coop_engine::reward::What::Item { form, count },
+    }
+}
+
+/// A reward in the log's words.
+fn describe(gift: Gift) -> String {
+    match gift {
+        Gift::Xp(xp) => format!("{xp} experience"),
+        Gift::Item { form, count } => format!("{count} of item {form:08x}"),
+    }
+}
+
 fn send(net: &mut dyn Transport, to: PlayerId, msg: &Msg, failures: &mut u32) {
     match proto::encode(msg) {
         Ok(bytes) => {
@@ -868,10 +892,11 @@ impl HostDriver {
         // The story's rewards (S25): this game's player has each; every guest gets the same.
         for given in coop_engine::reward::take(e) {
             self.rewards += 1;
-            let outs = self.sync.live.reward(self.rewards, given.xp);
+            let gift = gift_of(given.what);
+            let outs = self.sync.live.reward(self.rewards, gift);
             self.stage_notes.push(format!(
-                "the story gave this game's player {} experience ({:08x}'s script): to {} guest(s) too",
-                given.xp,
+                "the story gave this game's player {} ({:08x}'s script): to {} guest(s) too",
+                describe(gift),
                 given.quest,
                 outs.len()
             ));
@@ -1046,6 +1071,8 @@ pub struct GuestDriver {
     pub healed_notes: Vec<String>,
     /// The experience the story gave this game's player through the host (S25).
     pub xp_given: u64,
+    /// The story's item rewards given to this game's player through the host (S25).
+    pub items_given: u32,
     healed_seen: BTreeSet<(u32, u8)>,
     /// The live ladder (players in the world); `None` leaves the session story-only.
     pub ladder: Option<ladder::Ladder>,
@@ -1113,6 +1140,7 @@ impl GuestDriver {
             relisted: 0,
             healed_notes: Vec::new(),
             xp_given: 0,
+            items_given: 0,
             healed_seen: BTreeSet::new(),
             ladder: None,
             fight: None, // fights
@@ -1135,10 +1163,15 @@ impl GuestDriver {
         let notices = std::mem::take(&mut self.sync.live.rules.notices);
         for n in notices {
             match n {
-                Notice::Reward { xp } if coop_engine::reward::give_xp(e, xp) => {
-                    self.xp_given += u64::from(xp);
+                Notice::Reward(gift) if coop_engine::reward::give(e, what_of(gift)) => {
+                    if let Gift::Xp(xp) = gift {
+                        self.xp_given += u64::from(xp);
+                    } else {
+                        self.items_given += 1;
+                    }
                     self.healed_notes.push(format!(
-                        "co-op guest: the story gave this game's player {xp} experience"
+                        "co-op guest: the story gave this game's player {}",
+                        describe(gift)
                     ));
                 }
                 other => self.sync.live.rules.notices.push(other),

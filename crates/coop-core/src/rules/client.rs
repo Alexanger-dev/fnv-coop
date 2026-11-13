@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use super::difficulty::{Mode, Scaling};
-use super::{CancelReason, RulesMsg, VoteKind};
+use super::{CancelReason, Gift, RulesMsg, VoteKind};
 use crate::ids::PlayerId;
 
 /// A prompt waiting for this player's answer.
@@ -56,11 +56,8 @@ pub enum Notice {
     Respawn,
     /// Everyone is down.
     Wipe,
-    /// The shared story rewarded the party: give the local player this much experience.
-    Reward {
-        /// Experience points.
-        xp: u32,
-    },
+    /// The shared story rewarded the party: give the local player the same.
+    Reward(Gift),
 }
 
 /// Rules state for one machine.
@@ -200,7 +197,7 @@ impl RulesClient {
                 }
             }
             RulesMsg::Wipe => self.notices.push(Notice::Wipe),
-            RulesMsg::Reward { xp, .. } => self.notices.push(Notice::Reward { xp }),
+            RulesMsg::Reward { gift, .. } => self.notices.push(Notice::Reward(gift)),
             RulesMsg::ScalingSet {
                 players,
                 mode,

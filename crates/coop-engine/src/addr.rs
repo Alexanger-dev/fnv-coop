@@ -102,6 +102,19 @@ pub const OBJECTIVE_SET_STATE: u32 = 0x005e_c5d0;
 /// on the player. It hands the amount to `CharacterProgression::RewardExperience` (`008d5100`),
 /// which adds it and shows the message.
 pub const PLAYER_REWARD_EXPERIENCE: u32 = 0x0094_fd10;
+/// `TESContainer`'s constructor (`thiscall`, container): an empty list of items. `AddItem`
+/// (`005b4be0`) builds one of 0x10 bytes on its stack.
+pub const CONTAINER_CONSTRUCT: u32 = 0x0048_1610;
+/// `TESContainer`'s destructor (`thiscall`, container).
+pub const CONTAINER_DESTRUCT: u32 = 0x0048_1680;
+/// Bytes a temporary container takes (as `AddItem`'s).
+pub const CONTAINER_SIZE: u32 = 0x10;
+/// Adds items to a container (`thiscall`, container, object, count, extra; `004818e0`).
+pub const CONTAINER_ADD: u32 = 0x0048_18e0;
+/// Hands a container's items to a reference (`thiscall`, container, reference, quiet;
+/// `004821a0`): what `AddItem` gives through, a leveled list already rolled into the container.
+/// Its list of `ContainerObject`s (count, object, extra) is inline at +4, `{item, next}` nodes.
+pub const CONTAINER_GIVE: u32 = 0x0048_21a0;
 /// The player's objective list: a `BSSimpleList` of `BGSQuestObjective *` whose first node is in
 /// the player at this offset (`0079bc30` answers `this + 0x6bc`; `mapmenu.rs` walks it for the
 /// Pip-Boy's quest page).

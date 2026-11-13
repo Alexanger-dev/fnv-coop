@@ -164,7 +164,22 @@ pub enum RulesMsg {
     Reward {
         /// The reward, as the host counts them (each is given to a player once).
         id: u32,
-        /// Experience points.
-        xp: u32,
+        /// What it is.
+        gift: Gift,
+    },
+}
+
+/// A reward the shared story gives a player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Gift {
+    /// Experience points (`RewardXP`).
+    Xp(u32),
+    /// Items (`Player.AddItem`; caps are an item): the item's form id and how many. A leveled
+    /// list is the item the host's game rolled.
+    Item {
+        /// The item's form id.
+        form: u32,
+        /// How many.
+        count: u32,
     },
 }

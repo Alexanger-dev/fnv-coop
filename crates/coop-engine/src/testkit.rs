@@ -56,6 +56,18 @@ const REWARD_SCRIPT: u32 = 0x0150_0700;
 pub(crate) const SCRIPT_REWARD_XP: u32 = 0x7c;
 /// The experience the player was given in all.
 const REWARD: u32 = RAN + 0x50;
+/// In any script's block: an item its body gives (`AddItem`; its form id, 0 for none), how many,
+/// and to whom (a reference's address; 0 for the player).
+pub(crate) const SCRIPT_ADD_ITEM: u32 = 0x68;
+/// In any script's block: a second item and its count in the same container (a form list's
+/// elements, as `AddItem` gives them), 0 for none.
+const SCRIPT_ADD_ITEM_TOO: u32 = 0x60;
+/// Items: the next free byte of the arena the containers' lists take, item forms from
+/// [`BAG_FORMS`], the player's inventory (item, count pairs) from [`BAG_INVENTORY`].
+const BAG: u32 = 0x0172_0000;
+const BAG_LEN: u32 = 0x4000;
+const BAG_FORMS: u32 = BAG + 0x2000;
+const BAG_INVENTORY: u32 = BAG + 0x3000;
 /// The form id of the object script [`Story::run_object_script_setting_stage`] runs.
 pub const SETTER_SCRIPT_ID: u32 = 0x0015_0001;
 /// The form id of the target's script [`Story::shoot_target`] runs (`VCG02TargetSCRIPT`'s).
@@ -348,6 +360,28 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
         }
         e.call(addr::REF_DISABLE, &args![a[2]]);
     }
+    let item_at = a[1].wrapping_add(SCRIPT_ADD_ITEM);
+    if a[1] != 0 && e.mem.is_mapped(item_at) && e.mem.u32(item_at) != 0 {
+        let (id, count) = (e.mem.u32(item_at), e.mem.u32(item_at + 4));
+        let player = match e.mem.u32(item_at + 8) {
+            0 => e.mem.u32(addr::PLAYER_SINGLETON),
+            to => to,
+        };
+        if let Some(item) = forms::form(e, id) {
+            // As `AddItem` does: a container of its own, handed to the player.
+            e.with_stack(addr::CONTAINER_SIZE, |e, c| {
+                e.call(addr::CONTAINER_CONSTRUCT, &args![c]);
+                e.call(addr::CONTAINER_ADD, &args![c, item, count, 0u32]);
+                let too = a[1] + SCRIPT_ADD_ITEM_TOO;
+                if let Some(second) = forms::form(e, e.mem.u32(too)) {
+                    let n = e.mem.u32(too + 4);
+                    e.call(addr::CONTAINER_ADD, &args![c, second, n, 0u32]);
+                }
+                e.call(addr::CONTAINER_GIVE, &args![c, player, 0u32]);
+                e.call(addr::CONTAINER_DESTRUCT, &args![c]);
+            });
+        }
+    }
     let xp_at = a[1].wrapping_add(SCRIPT_REWARD_XP);
     if a[1] != 0 && e.mem.is_mapped(xp_at) && e.mem.u32(xp_at) != 0 {
         let player = e.mem.u32(addr::PLAYER_SINGLETON);
@@ -612,6 +646,62 @@ impl Story {
             eax(u32::from(e.mem.u8(a[0] + addr::QUEST_CURRENT_STAGE_OFFSET)))
         });
         e.register(addr::SCRIPT_RUNNER_RUN, runner);
+        // A container: its list inline at +4 (`{item, next}` nodes, the items `{count, object,
+        // extra}`) in the bag's arena; handed to the player, its items go into the inventory.
+        e.map(BAG, BAG_LEN);
+        e.mem.set_u32(BAG, BAG + 0x10);
+        e.register(addr::CONTAINER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 4, 0);
+            e.mem.set_u32(a[0] + 8, 0);
+            Ret::default()
+        });
+        e.register(addr::CONTAINER_DESTRUCT, |_, _| Ret::default());
+        e.register(addr::CONTAINER_ADD, |e, a| {
+            let (c, object, count) = (a[0], a[1], a[2]);
+            let take = |e: &mut Engine, n: u32| {
+                let at = e.mem.u32(BAG);
+                assert!(at + n <= BAG_FORMS, "the test bag's arena is full");
+                e.mem.set_u32(BAG, at + n);
+                at
+            };
+            let item = take(e, 0xc);
+            e.mem.set_u32(item, count);
+            e.mem.set_u32(item + 4, object);
+            e.mem.set_u32(item + 8, 0);
+            let mut node = c + 4;
+            if e.mem.u32(node) != 0 {
+                while e.mem.u32(node + 4) != 0 {
+                    node = e.mem.u32(node + 4);
+                }
+                let fresh = take(e, 8);
+                e.mem.set_u32(fresh + 4, 0);
+                e.mem.set_u32(node + 4, fresh);
+                node = fresh;
+            }
+            e.mem.set_u32(node, item);
+            eax(item)
+        });
+        e.register(addr::CONTAINER_GIVE, |e, a| {
+            if a[1] != e.mem.u32(addr::PLAYER_SINGLETON) {
+                return Ret::default();
+            }
+            let mut node = a[0] + 4;
+            while node != 0 {
+                let item = e.mem.u32(node);
+                if item != 0 {
+                    let (count, object) = (e.mem.u32(item), e.mem.u32(item + 4));
+                    let mut slot = BAG_INVENTORY;
+                    while e.mem.u32(slot) != 0 && e.mem.u32(slot) != object {
+                        slot += 8;
+                    }
+                    e.mem.set_u32(slot, object);
+                    let had = e.mem.u32(slot + 4);
+                    e.mem.set_u32(slot + 4, had + count);
+                }
+                node = e.mem.u32(node + 4);
+            }
+            Ret::default()
+        });
         // `PlayerCharacter::RewardExperience`: the experience given, counted.
         e.register(addr::PLAYER_REWARD_EXPERIENCE, |e, a| {
             let total = e.mem.u32(REWARD);
@@ -918,6 +1008,65 @@ impl Story {
             .set_u32(REWARD_SCRIPT + addr::SCRIPT_OWNER_QUEST_OFFSET, owner);
         self.e.mem.set_u32(REWARD_SCRIPT + SCRIPT_REWARD_XP, xp);
         run(&mut self.e, REWARD_SCRIPT);
+    }
+
+    /// Makes an item form `id` of this story's data (an object a container can hold).
+    pub fn add_item_form(&mut self, id: u32) {
+        let n = self.e.mem.u32(BAG + 4);
+        self.e.mem.set_u32(BAG + 4, n + 1);
+        let form = BAG_FORMS + 0x20 * n;
+        self.e.mem.set_u32(form + addr::FORM_ID_OFFSET, id);
+        add_form(&mut self.e, id, form);
+    }
+
+    /// A script of `quest` (as [`Story::run_script_rewarding_xp`]) gives the player `count` of item
+    /// `item` (`Player.AddItem`).
+    pub fn run_script_giving_item(&mut self, quest: u32, item: u32, count: u32) {
+        self.run_script_giving_item_to(quest, item, count, 0);
+    }
+
+    /// As [`Story::run_script_giving_item`], to the reference at `to` (0: the player).
+    pub fn run_script_giving_item_to(&mut self, quest: u32, item: u32, count: u32, to: u32) {
+        self.e.mem.set_u32(REWARD_SCRIPT + SCRIPT_ADD_ITEM + 8, to);
+        self.e.mem.set_u32(REWARD_SCRIPT + SCRIPT_ADD_ITEM, item);
+        self.e
+            .mem
+            .set_u32(REWARD_SCRIPT + SCRIPT_ADD_ITEM + 4, count);
+        self.run_named_script_rewarding_xp(0, quest, 0);
+        self.e.mem.set_u32(REWARD_SCRIPT + SCRIPT_ADD_ITEM, 0);
+    }
+
+    /// A script of `quest` gives the player two items at once, in one container (as `AddItem` of
+    /// a form list does).
+    pub fn run_script_giving_two_items(
+        &mut self,
+        quest: u32,
+        first: (u32, u32),
+        second: (u32, u32),
+    ) {
+        self.e
+            .mem
+            .set_u32(REWARD_SCRIPT + SCRIPT_ADD_ITEM_TOO, second.0);
+        self.e
+            .mem
+            .set_u32(REWARD_SCRIPT + SCRIPT_ADD_ITEM_TOO + 4, second.1);
+        self.run_script_giving_item(quest, first.0, first.1);
+        self.e.mem.set_u32(REWARD_SCRIPT + SCRIPT_ADD_ITEM_TOO, 0);
+    }
+
+    /// How many of item `item` this game's player holds.
+    pub fn items(&mut self, item: u32) -> u32 {
+        let Some(form) = forms::form(&mut self.e, item) else {
+            return 0;
+        };
+        let mut slot = BAG_INVENTORY;
+        while self.e.mem.u32(slot) != 0 {
+            if self.e.mem.u32(slot) == form {
+                return self.e.mem.u32(slot + 4);
+            }
+            slot += 8;
+        }
+        0
     }
 
     /// The experience this game's player was given in all.

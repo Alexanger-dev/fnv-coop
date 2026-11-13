@@ -117,6 +117,14 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
+    // rewards: TESContainer's hand-over to a reference (`004821a0`, what `AddItem` gives through):
+    // items and caps the shared story gives in the host's game go to the guests' players too
+    // (docs/coop/SPECS.md S25).
+    Entry {
+        addr: 0x0048_21a0,
+        owners: COOP,
+        step: "C-11",
+    },
     // ScriptEventList::SetActionFlag: the game events of the script event masks.
     Entry {
         addr: 0x005a_c750,

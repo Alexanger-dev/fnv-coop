@@ -8,7 +8,7 @@ use super::policy::{PolicyTable, RewardLedger};
 use super::revive::{ReviveEvent, Reviver};
 use super::tether::{Tether, TetherEvent};
 use super::vote::{Proposal, VoteHost, VoteKind, VoteOutcome};
-use super::RulesMsg;
+use super::{Gift, RulesMsg};
 use crate::ids::PlayerId;
 use crate::interest::Audience;
 
@@ -157,7 +157,7 @@ impl RulesHost {
     /// The shared story gave a reward in the host's game, whose player has it already: every
     /// other player in the party gets the same, once (the rules' `reward: everyone`, which every
     /// row of the bundled table has). The messages to them.
-    pub fn reward(&mut self, id: u32, xp: u32) -> Vec<ROut> {
+    pub fn reward(&mut self, id: u32, gift: Gift) -> Vec<ROut> {
         let others: Vec<PlayerId> = self
             .party
             .iter()
@@ -169,7 +169,7 @@ impl RulesHost {
             .into_iter()
             .map(|p| ROut {
                 aud: Audience::To(p),
-                msg: RulesMsg::Reward { id, xp },
+                msg: RulesMsg::Reward { id, gift },
             })
             .collect()
     }
@@ -543,15 +543,23 @@ mod tests {
     #[test]
     fn a_story_reward_goes_to_every_guest_once() {
         let mut r = rules();
-        let o = r.reward(1, 50);
+        let o = r.reward(1, Gift::Xp(50));
         let to: Vec<Audience> = o.iter().map(|o| o.aud).collect();
         assert_eq!(to, vec![Audience::To(A), Audience::To(B)]);
-        assert!(o
-            .iter()
-            .all(|o| o.msg == RulesMsg::Reward { id: 1, xp: 50 }));
-        assert!(r.reward(1, 50).is_empty());
+        assert!(o.iter().all(|o| o.msg
+            == RulesMsg::Reward {
+                id: 1,
+                gift: Gift::Xp(50)
+            }));
+        assert!(r.reward(1, Gift::Xp(50)).is_empty());
         r.on_leave(B, 0);
-        let o = r.reward(2, 25);
+        let o = r.reward(
+            2,
+            Gift::Item {
+                form: 0xf,
+                count: 25,
+            },
+        );
         assert_eq!(o.len(), 1);
         assert_eq!(o[0].aud, Audience::To(A));
     }
