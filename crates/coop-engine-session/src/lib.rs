@@ -31,7 +31,7 @@ pub mod rest;
 pub mod social;
 pub mod talk;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use coop_core::avatar::{AvatarMsg, AvatarSender, Sample};
 use coop_core::compat;
@@ -101,6 +101,9 @@ pub const PACKAGE_TAG: u16 = 0x504b;
 /// Host: every quest's variables are read again once in this many collect passes (a variable set
 /// by a script leaves nothing in the journal).
 pub const VAR_SWEEP_EVERY: u32 = 8;
+
+/// Host: how long the actors of a scene this game plays have their lines run here (ms).
+pub const SCENE_ACTORS_MS: u64 = 120_000;
 
 pub fn package_field(package: u32) -> Field {
     Field::Custom {
@@ -258,6 +261,10 @@ pub struct HostDriver {
     quests: BTreeSet<u32>,
     /// Host: collect passes so far (the variable sweep's clock).
     collects: u32,
+    /// Host: the actors of the scenes started since the last step.
+    scene_started: Vec<u32>,
+    /// Host: the actors of the scenes this game plays, with when each began.
+    scene_actors: BTreeMap<u32, u64>,
     globals: GlobalWatch,
     /// The game clock's globals (hour, day, month, year, days passed): sent as the clock, not as
     /// story globals.
@@ -343,6 +350,8 @@ impl HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
             collects: 0,
+            scene_started: Vec::new(),
+            scene_actors: BTreeMap::new(),
             globals: GlobalWatch::new(global_ids),
             clock: Vec::new(),
             clock_sent_ms: None,
@@ -716,6 +725,7 @@ impl HostDriver {
         }
         // A conversation a script started between two actors: the guests' games play it too.
         for scene in commands::drain_scenes(e) {
+            self.scene_started.extend([scene.actor, scene.target]);
             let n = self.scenes.entry(scene.actor).or_insert(0);
             *n = n.wrapping_add(1);
             self.stage_notes.push(format!(
@@ -766,6 +776,14 @@ impl HostDriver {
         social::host_step(self, e, net, now_ms);
         self.enact_claims(e);
         self.collect(e);
+        // The actors of a scene this game plays: their lines run here even when a guest's game
+        // runs them (the scene is the host's, and its results the story's), for SCENE_ACTORS_MS.
+        for id in std::mem::take(&mut self.scene_started) {
+            self.scene_actors.insert(id, now_ms);
+        }
+        self.scene_actors
+            .retain(|_, t| now_ms.saturating_sub(*t) < SCENE_ACTORS_MS);
+        coop_engine::gate::set_scene_actors(e, self.scene_actors.keys().copied());
         self.write_clock(e, now_ms);
         // fights
         if let Some(f) = self.fight.as_mut() {

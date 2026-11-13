@@ -584,7 +584,8 @@ impl Fight {
                     .min_by(|a, b| a.1.total_cmp(&b.1))
                     .map(|(p, _)| p)
             };
-            let engaged = self.engaged.get(&s.id).copied().filter(|p| {
+            let was_engaged = self.engaged.get(&s.id).copied();
+            let engaged = was_engaged.filter(|p| {
                 if *p == PlayerId::HOST {
                     close_to_host.contains(&a)
                 } else {
@@ -599,6 +600,11 @@ impl Fight {
                     })
                 }
             });
+            // It ends when that player is no longer near it, or it is dead.
+            if was_engaged.is_some() && (engaged.is_none() || s.dead()) {
+                self.engaged.remove(&s.id);
+            }
+            let engaged = engaged.filter(|_| !s.dead());
             let pin = if !self.handoff || keeps_company {
                 Some(PlayerId::HOST)
             } else if engaged.is_some() {
@@ -791,14 +797,15 @@ impl Fight {
             }
             theirs.insert(id);
             let s = rec.state;
-            // Kept still here, its AI off: the guest's game runs it, and this game's copy must
-            // do none of its own doing meanwhile (PC run 25: led with its AI on, Sunny's copy
-            // here, far from this player and run at a low level, finished her sneak package and
-            // her conversation at once and set the stages past them, so the guest's copy never
-            // sneaked and its player was not told to).
+            // Led here to where the guest's game has it, its AI on, so that it walks animated
+            // and keeps its feet on the ground (PC run 29: kept still with its AI off, Sunny's
+            // copy sank into the floor and Joe Cobb's slid). Its own doing here is the gate's to
+            // skip (`gate::set_puppets`): the guest's game does it and proposes what it changes.
+            // In another space than the guest's (it went through a door there) it is not led:
+            // its own AI here takes it through the door after it.
             if fight::place_of(e, id).is_some()
                 && actors::actor(e, id).is_some_and(|a| fight::space_of(e, a) == s.cell.0)
-                && fight::still(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading)).is_some()
+                && fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading)).is_some()
             {
                 self.guest_run_moves += 1;
             }
@@ -807,6 +814,8 @@ impl Fight {
             let gained: Vec<u32> = theirs.difference(&self.theirs).copied().collect();
             let lost: Vec<u32> = self.theirs.difference(&theirs).copied().collect();
             for id in gained {
+                // An earlier build kept such a copy still with its AI off.
+                fight::release(e, id);
                 self.say(format!(
                     "co-op fights: actor {id:08x} is nearer a guest: that guest's game runs it now"
                 ));
@@ -820,6 +829,7 @@ impl Fight {
             }
             self.theirs = theirs;
         }
+        coop_engine::gate::set_puppets(e, self.theirs.iter().copied());
         if self.cap >= Cap::Damage {
             fight::set_ledgered(e, self.theirs.iter().copied());
         }

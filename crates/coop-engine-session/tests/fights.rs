@@ -603,7 +603,7 @@ fn a_guest_in_its_own_opening_is_handed_no_actor() {
     assert!(p.guest.set_stage(OPENING, 200));
     p.frames(80);
     assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
-    assert!(!p.host.actor_view(RAIDER).ai);
+    assert!(p.host.actor_view(RAIDER).ai && p.host_fight().theirs().contains(&RAIDER));
 }
 
 /// The same for the move to the host: a host that leaves first does not pull a guest out of its
@@ -1079,7 +1079,7 @@ fn the_nearest_players_game_runs_an_actor() {
     // package and her conversation at once and set the stages past them. The host's copy is kept
     // still, its AI off, and its package says nothing: the guest's copy picks its own, as the
     // guest's game has the story.
-    assert!(!p.host.actor_view(RAIDER).ai);
+    assert!(p.host.actor_view(RAIDER).ai && p.host_fight().theirs().contains(&RAIDER));
     p.host.set_own_package(RAIDER, LEAD_OUT);
     p.guest.set_own_package(RAIDER, STAY_IN);
     p.frames(80);
@@ -1153,7 +1153,7 @@ fn an_actor_is_run_by_the_game_of_the_player_it_spoke_with() {
     p.hd.fight.as_mut().unwrap().engage(RAIDER, guest);
     p.frames(60);
     assert!(owned(&p));
-    assert!(!p.host.actor_view(RAIDER).ai);
+    assert!(p.host.actor_view(RAIDER).ai && p.host_fight().theirs().contains(&RAIDER));
     // Spoken with by the host's player out of its game's full detail: it stays the guest's,
     // the nearer.
     p.host.set_near(RAIDER, false);
@@ -1180,6 +1180,46 @@ fn an_actor_is_run_by_the_game_of_the_player_it_spoke_with() {
     p.guest.move_player(HOUSE, [9000.0, 20.0, 0.0], 0.0);
     p.frames(60);
     assert!(!owned(&p));
+}
+
+/// PC run 25 and 29: the host's copy of an actor a guest's game runs walks with its AI on (kept
+/// still with its AI off it sank into the floor and slid), and what it would do on its own in
+/// the host's game is skipped: the guest's game does it and proposes the outcome. A scene the
+/// host plays, and a death, are the host's still.
+#[test]
+fn the_hosts_copy_of_an_actor_a_guest_runs_does_nothing_of_its_own() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(p.host_fight().theirs().contains(&RAIDER));
+    assert!(p.host.actor_view(RAIDER).ai);
+    let done = |p: &mut Pair, quest: u32, stage: u8| {
+        coop_engine::quest::record(&mut p.host.e, quest)
+            .unwrap()
+            .done
+            .contains(&stage)
+    };
+    // Its own script (a package's end, its object script): skipped here.
+    p.host.run_object_script_setting_stage(RAIDER, MQ, 20);
+    assert!(!done(&mut p, MQ, 20));
+    assert_eq!(coop_engine::gate::puppet_skips(&mut p.host.e), 1);
+    // In a scene this game plays: its lines run here.
+    coop_engine::gate::set_scene_actors(&mut p.host.e, [RAIDER]);
+    p.host.run_dialogue_result_setting_stage(RAIDER, MQ, 10);
+    assert!(done(&mut p, MQ, 10));
+    coop_engine::gate::set_scene_actors(&mut p.host.e, []);
+    // Another actor's script runs as ever.
+    p.host.place_actor(GECKO, HOUSE, [5000.0, 5000.0, 0.0], 0.5);
+    p.host.run_object_script_setting_stage(GECKO, MQ, 20);
+    assert!(done(&mut p, MQ, 20));
+    // Dead, its scripts run here (its death is the host's to run).
+    p.host.kill(RAIDER);
+    p.host.run_object_script_setting_stage(RAIDER, OPENING, 200);
+    assert!(done(&mut p, OPENING, 200));
 }
 
 /// PC run 23: a gecko's death script ran twice in the guest's game, and Sunny's quest counted two

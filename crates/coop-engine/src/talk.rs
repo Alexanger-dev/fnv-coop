@@ -102,6 +102,11 @@ pub fn set_busy(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
 }
 
 /// The events since the last call, in order.
+/// Whether this game is running a guest's line ([`enact`]) now.
+pub fn enacting(e: &mut Engine) -> bool {
+    e.ext_free::<Talk>().enacting.load(Ordering::SeqCst) > 0
+}
+
 pub fn take_events(e: &mut Engine) -> Vec<Event> {
     let t = e.ext_free::<Talk>();
     std::mem::take(&mut *t.events.lock().unwrap_or_else(PoisonError::into_inner))
