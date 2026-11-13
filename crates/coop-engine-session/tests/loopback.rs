@@ -1495,6 +1495,51 @@ fn a_guest_that_loads_a_save_proposes_nothing() {
     assert_same_game(&mut host, &mut guest);
 }
 
+/// Harness, 2026-11-13: the host's story was read once, at the main menu; after the host loaded
+/// its save, Sunny's quest was at stage 5 in its game and 0 in the story, and the guests were put
+/// back to 0. After a load the story is read again from the host's game.
+#[test]
+fn the_story_is_read_again_after_the_host_loads_a_save() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    // The save's state comes into the host's game with nothing in the journal.
+    let mut rec = coop_engine::quest::record(&mut host.e, MQ).unwrap();
+    assert!(!rec.done.contains(&20));
+    rec.stage = 20;
+    rec.done.push(20);
+    assert!(coop_engine::gate::applying(&mut host.e, |e| {
+        let ok = coop_engine::quest::apply(e, &rec);
+        let _ = coop_engine::drain(e);
+        ok
+    }));
+    host.load("Save 2");
+    frames(
+        60,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    assert!(coop_engine::quest::record(&mut guest.e, MQ)
+        .unwrap()
+        .done
+        .contains(&20));
+    assert_same_game(&mut host, &mut guest);
+}
+
 /// A guest whose game is merely behind the story (it joins with a game that already did things
 /// of its own) proposes nothing: the story is put into its game, not its game into the story.
 #[test]

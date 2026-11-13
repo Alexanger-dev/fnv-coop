@@ -261,6 +261,8 @@ pub struct HostDriver {
     quests: BTreeSet<u32>,
     /// Host: collect passes so far (the variable sweep's clock).
     collects: u32,
+    /// Host: the game's loads seen so far ([`coop_engine::saves::loads`]).
+    loads_seen: u64,
     /// Host: the actors of the scenes started since the last step.
     scene_started: Vec<u32>,
     /// Host: the actors of the scenes this game plays, with when each began.
@@ -350,6 +352,7 @@ impl HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
             collects: 0,
+            loads_seen: 0,
             scene_started: Vec::new(),
             scene_actors: BTreeMap::new(),
             globals: GlobalWatch::new(global_ids),
@@ -559,6 +562,44 @@ impl HostDriver {
         self.collect(e);
     }
 
+    /// After this game loaded a save: the story read again from the game (PC harness, 2026-11-13:
+    /// the story was read once at the main menu; after the host loaded its save, Sunny's quest
+    /// was at stage 5 in its game and 0 in the story, and the guests were put back to 0). A load
+    /// leaves nothing in the change journal, so every quest's record and variables, and the
+    /// state of every reference the story holds one of, are written as the game has them now.
+    fn reread_after_load(&mut self, e: &mut Engine) {
+        for id in self.quests.clone() {
+            self.write_quest(e, id);
+        }
+        let refs: Vec<u32> = self
+            .sync
+            .store
+            .iter()
+            .filter(|(_, en)| matches!(en.field, Field::RefDisabled { .. }))
+            .map(|(k, _)| k.form.0)
+            .collect();
+        for id in refs {
+            if let Some(disabled) = actors::disabled(e, id) {
+                self.sync.write(FormId(id), Field::RefDisabled { disabled });
+            }
+        }
+        // Likewise every actor the story holds the life of (one dead before the load may live).
+        let lives: Vec<u32> = self
+            .sync
+            .store
+            .iter()
+            .filter(|(_, en)| life_value(&en.field).is_some())
+            .map(|(k, _)| k.form.0)
+            .collect();
+        for id in lives {
+            if let Some(dead) = actors::dead(e, id) {
+                self.sync.write(FormId(id), life_field(dead));
+            }
+        }
+        self.stage_notes
+            .push("this game loaded a save: the story is read again from it".into());
+    }
+
     /// Writes quest `id`'s record and its script's variables into the replica.
     fn write_quest(&mut self, e: &mut Engine, id: u32) {
         if let Some(r) = quest::record(e, id) {
@@ -760,6 +801,14 @@ impl HostDriver {
     /// One step, between two of the game's frames: the guests' messages, this frame's changes,
     /// the sends, and every [`HostDriver::hash_every`] steps the hashes.
     pub fn step(&mut self, e: &mut Engine, net: &mut dyn Transport, now_ms: u64) {
+        // A save this game loaded: the story is read again from it.
+        let loads = coop_engine::saves::loads(e);
+        if loads != self.loads_seen {
+            self.loads_seen = loads;
+            if self.sync.tick_no().0 != 0 {
+                self.reread_after_load(e);
+            }
+        }
         self.sync.set_time_ms(now_ms);
         for (from, msg) in receive(net, &mut self.bad_packets) {
             for (to, reply) in self.sync.on_msg(from, msg) {
