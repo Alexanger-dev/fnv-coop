@@ -293,6 +293,18 @@ impl Story {
             .set_u32(script + crate::testkit::SCRIPT_REWARD_XP, xp);
     }
 
+    /// Gives info `id`'s result (said, or `end`) a `Player.AddItem item count` too.
+    pub fn set_info_item(&mut self, id: u32, end: bool, item: u32, count: u32) {
+        let info = self.info_at(id);
+        let script = info + INFO_SCRIPTS + 0x80 * u32::from(end);
+        self.e
+            .mem
+            .set_u32(script + crate::testkit::SCRIPT_ADD_ITEM, item);
+        self.e
+            .mem
+            .set_u32(script + crate::testkit::SCRIPT_ADD_ITEM + 4, count);
+    }
+
     /// Puts a placed reference into `cell`, with its 3D.
     pub fn place(&mut self, reference: u32, cell: u32) {
         let r = forms::form(&mut self.e, reference).expect("a reference of the story");

@@ -101,6 +101,10 @@ pub struct RulesHost {
     /// The host's friendly-fire choice, announced with the scaling (the
     /// combat vitals apply it).
     pub friendly_fire: bool,
+    /// Rewards a guest's game reported that the host's player is to get too
+    /// (the game drains them).
+    pub gifts_here: Vec<Gift>,
+    next_reward: u32,
     barriers: BTreeMap<u32, Barrier>,
     next_barrier: u32,
     party: Vec<PlayerId>,
@@ -122,6 +126,8 @@ impl RulesHost {
             in_combat: false,
             fast_travel_locked: false,
             friendly_fire: false,
+            gifts_here: Vec::new(),
+            next_reward: 0,
             barriers: BTreeMap::new(),
             next_barrier: 1,
             party: Vec::new(),
@@ -157,12 +163,20 @@ impl RulesHost {
     /// The shared story gave a reward in the host's game, whose player has it already: every
     /// other player in the party gets the same, once (the rules' `reward: everyone`, which every
     /// row of the bundled table has). The messages to them.
-    pub fn reward(&mut self, id: u32, gift: Gift) -> Vec<ROut> {
+    pub fn reward(&mut self, gift: Gift) -> Vec<ROut> {
+        self.reward_but(PlayerId::HOST, gift)
+    }
+
+    /// A reward the player `has` has already: every other player but the host gets it (the host's
+    /// game gives its own player what [`RulesHost::gifts_here`] holds).
+    fn reward_but(&mut self, has: PlayerId, gift: Gift) -> Vec<ROut> {
+        self.next_reward += 1;
+        let id = self.next_reward;
         let others: Vec<PlayerId> = self
             .party
             .iter()
             .copied()
-            .filter(|p| !p.is_host())
+            .filter(|p| !p.is_host() && *p != has)
             .collect();
         self.rewards
             .grant(id, &others)
@@ -498,6 +512,13 @@ impl RulesHost {
                 Some(e) => self.revive_out(e),
                 None => vec![],
             },
+            // A guest's game ran a line of the shared story outside a conversation (an NPC
+            // speaking up, as Sunny handing over her rifle) and its player got the reward: the
+            // host's player and every other guest get the same.
+            RulesMsg::Reward { gift, .. } => {
+                self.gifts_here.push(gift);
+                self.reward_but(from, gift)
+            }
             _ => vec![],
         }
     }
@@ -543,7 +564,7 @@ mod tests {
     #[test]
     fn a_story_reward_goes_to_every_guest_once() {
         let mut r = rules();
-        let o = r.reward(1, Gift::Xp(50));
+        let o = r.reward(Gift::Xp(50));
         let to: Vec<Audience> = o.iter().map(|o| o.aud).collect();
         assert_eq!(to, vec![Audience::To(A), Audience::To(B)]);
         assert!(o.iter().all(|o| o.msg
@@ -551,17 +572,42 @@ mod tests {
                 id: 1,
                 gift: Gift::Xp(50)
             }));
-        assert!(r.reward(1, Gift::Xp(50)).is_empty());
         r.on_leave(B, 0);
-        let o = r.reward(
-            2,
-            Gift::Item {
-                form: 0xf,
-                count: 25,
-            },
-        );
+        let o = r.reward(Gift::Item {
+            form: 0xf,
+            count: 25,
+        });
         assert_eq!(o.len(), 1);
         assert_eq!(o[0].aud, Audience::To(A));
+    }
+
+    /// A guest's game ran a story line outside a conversation and its player got the reward
+    /// (Sunny's rifle, PC run 30): the host's game gives its player the same, every other guest is
+    /// sent it, the guest that reported it is not; a player not in the party is not heard (as for
+    /// every rule).
+    #[test]
+    fn a_reward_a_guests_game_gave_goes_to_the_host_and_the_other_guests() {
+        let mut r = rules();
+        let rifle = Gift::Item {
+            form: 0x0007_ea24,
+            count: 1,
+        };
+        let o = r.on_msg(A, RulesMsg::Reward { id: 0, gift: rifle }, 0, &|_, _| None);
+        assert_eq!(r.gifts_here, vec![rifle]);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].aud, Audience::To(B));
+        assert!(matches!(o[0].msg, RulesMsg::Reward { gift, .. } if gift == rifle));
+        r.gifts_here.clear();
+        let stranger = PlayerId(9);
+        assert!(r
+            .on_msg(
+                stranger,
+                RulesMsg::Reward { id: 0, gift: rifle },
+                0,
+                &|_, _| None
+            )
+            .is_empty());
+        assert!(r.gifts_here.is_empty());
     }
 
     fn rules() -> RulesHost {

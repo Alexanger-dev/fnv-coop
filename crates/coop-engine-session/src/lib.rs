@@ -893,7 +893,7 @@ impl HostDriver {
         for given in coop_engine::reward::take(e) {
             self.rewards += 1;
             let gift = gift_of(given.what);
-            let outs = self.sync.live.reward(self.rewards, gift);
+            let outs = self.sync.live.reward(gift);
             self.stage_notes.push(format!(
                 "the story gave this game's player {} ({:08x}'s script): to {} guest(s) too",
                 describe(gift),
@@ -902,6 +902,16 @@ impl HostDriver {
             ));
             for (to, msg) in outs {
                 send(net, to, &msg, &mut self.send_failures);
+            }
+        }
+        // Rewards a guest's game gave its player from the story (a line an NPC said there outside
+        // the conversation): this game's player gets the same; the rules sent the other guests.
+        for gift in std::mem::take(&mut self.sync.live.rules.gifts_here) {
+            if coop_engine::reward::give(e, what_of(gift)) {
+                self.stage_notes.push(format!(
+                    "a guest's game gave its player {} from the story: this game's player too",
+                    describe(gift)
+                ));
             }
         }
         // The actors of a scene this game plays: their lines run here even when a guest's game
@@ -1159,7 +1169,23 @@ impl GuestDriver {
     /// scripts gated) and says hello; each takes the host's messages and applies what changed.
     /// The story's rewards the host sent (S25): this game's player gets each, the game's own
     /// way. One that cannot be given yet (no player) waits.
-    fn take_rewards(&mut self, e: &mut Engine) {
+    fn take_rewards(&mut self, e: &mut Engine, net: &mut dyn Transport) {
+        // The story's rewards this game gave its player (a line an NPC said here outside the
+        // conversation): the host's player and the other guests get the same.
+        for given in coop_engine::reward::take(e) {
+            let gift = gift_of(given.what);
+            self.healed_notes.push(format!(
+                "co-op guest: the story gave this game's player {} here ({:08x}'s line): sent to the host",
+                describe(gift),
+                given.quest
+            ));
+            send(
+                net,
+                PlayerId::HOST,
+                &Msg::Rules(coop_core::rules::RulesMsg::Reward { id: 0, gift }),
+                &mut self.send_failures,
+            );
+        }
         let notices = std::mem::take(&mut self.sync.live.rules.notices);
         for n in notices {
             match n {
@@ -1195,7 +1221,7 @@ impl GuestDriver {
                 send(net, PlayerId::HOST, &reply, &mut self.send_failures);
             }
         }
-        self.take_rewards(e);
+        self.take_rewards(e, net);
         if let Some(ladder) = self.ladder.as_mut() {
             let ids: Vec<PlayerId> = self.sync.live.remote.keys().copied().collect();
             let peers: Vec<(PlayerId, Sample)> = ids

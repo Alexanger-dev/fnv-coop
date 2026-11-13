@@ -215,6 +215,36 @@ fn a_guests_line_runs_once_on_the_host_and_the_others_see_it() {
     assert_eq!(w.guests[1].game.scripts_run(), 0);
 }
 
+/// PC run 30: Sunny hands over her rifle at the bottles by speaking up, outside the guest's
+/// conversation: the line ran in the guest's game, whose player alone got the rifle, and the host
+/// never met that line again. A story line's reward a guest's game gave its player goes to the
+/// host's player and every other guest once; the guest is not given it twice.
+#[test]
+fn a_reward_a_guests_npc_gave_outside_the_conversation_goes_to_every_player() {
+    const RIFLE: u32 = 0x0007_ea24;
+    let mut w = World::new(&["Sunny", "Chet"]);
+    w.host.add_item_form(RIFLE);
+    for g in &mut w.guests {
+        g.game.add_item_form(RIFLE);
+        g.game.set_info_reward_xp(SHARED_LINE, true, 10);
+    }
+    w.run(20);
+    // A line's result giving the rifle and 10 experience, said by Sunny in guest 1's game.
+    w.guests[0].game.set_info_item(SHARED_LINE, true, RIFLE, 1);
+    w.guests[0].game.say_as(SUNNY, SHARED_LINE, true);
+    w.run(10);
+    assert_eq!(w.host.items(RIFLE), 1);
+    assert_eq!(w.host.xp(), 10);
+    for (i, g) in w.guests.iter_mut().enumerate() {
+        assert_eq!(g.game.items(RIFLE), 1, "guest {i}");
+        assert_eq!(g.game.xp(), 10, "guest {i}");
+    }
+    w.run(40);
+    assert_eq!(w.host.items(RIFLE), 1);
+    assert_eq!(w.guests[0].game.items(RIFLE), 1);
+    assert_eq!(w.guests[1].game.items(RIFLE), 1);
+}
+
 #[test]
 fn a_line_whose_end_never_comes_is_finished_by_the_next_line_and_by_the_goodbye() {
     let mut w = World::new(&["Sunny"]);

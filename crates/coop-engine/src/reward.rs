@@ -10,6 +10,11 @@
 //! quest is one each player plays for themself ([`crate::gate::set_own_quests`]): its rewards are
 //! that player's. An object script with no quest runs in every game that has the object, so each
 //! game gives its own.
+//!
+//! A guest's game runs the story's lines an NPC says outside its player's conversation (Sunny
+//! handing over her rifle at the bottles): their rewards are noted there too, and the host gives
+//! its own player and the other guests the same. Its player's own conversation's results are held
+//! for the host and run there.
 
 use engine_core::extend::{Owner, WrapSlot};
 use engine_core::prelude::*;
@@ -50,7 +55,8 @@ struct Rewards {
     given: Mutex<Vec<Given>>,
 }
 
-/// Host: the story's rewards given since the last call, in order.
+/// The story's rewards given in this game since the last call, in order: on the host, for the
+/// guests; on a guest, for the host and the other guests.
 pub fn take(e: &mut Engine) -> Vec<Given> {
     std::mem::take(
         &mut *e
@@ -91,10 +97,13 @@ pub fn give(e: &mut Engine, what: What) -> bool {
 /// The story's quest of the script running now, when a reward given now is the story's (see the
 /// module); `None` otherwise.
 fn story_quest(e: &mut Engine) -> Option<u32> {
-    if gate::is_guest(e) {
+    let c = gate::cause(e)?;
+    // A guest's game runs no script of the story but a line an NPC says outside the player's
+    // conversation (Sunny handing over her rifle at the bottles, PC run 30): its reward is noted
+    // too. The story scripts the rules let a guest run itself act on its own player alone.
+    if gate::is_guest(e) && c.owner_quest != 0 {
         return None;
     }
-    let c = gate::cause(e)?;
     // A line's result script names no owner quest: its line's quest is the one.
     let quest = match c.owner_quest {
         0 => crate::talk::result_quest(e).unwrap_or(0),
@@ -191,7 +200,8 @@ mod tests {
 
     /// Not noted: a reward of a quest each player plays for themself, of an object script with no
     /// quest (every game that has the object runs it), one given while the host's state is applied,
-    /// and any on a guest. Each is given in its own game.
+    /// and on a guest one of a story script the rules let it run itself. Each is given in its own
+    /// game.
     #[test]
     fn other_experience_is_its_own_games() {
         let mut s = story();

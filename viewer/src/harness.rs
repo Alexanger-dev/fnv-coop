@@ -175,6 +175,32 @@ impl Harness {
                 self.wait_until = self.frame + rest.parse::<u64>().unwrap_or(0);
                 vec![]
             }
+            // Fast travel to a map marker reference, as the Pip-Boy map does: a position request
+            // whose fast-travel target (+0x30) is the marker (`PlayerCharacter::FastTravel`).
+            "travel" => match hex(rest.trim()).and_then(|id| coop_engine::forms::form(e, id)) {
+                Some(marker) => {
+                    let player = e.mem.u32(coop_engine::addr::PLAYER_SINGLETON);
+                    let request = e
+                        .call(
+                            coop_engine::addr::OPERATOR_NEW,
+                            &args![coop_engine::addr::POSITION_REQUEST_SIZE],
+                        )
+                        .u32();
+                    let request = e
+                        .call(
+                            coop_engine::addr::POSITION_REQUEST_CONSTRUCT,
+                            &args![request],
+                        )
+                        .u32();
+                    e.mem.set_u32(request + 0x30, marker);
+                    e.call(
+                        coop_engine::addr::REQUEST_POSITION_PLAYER,
+                        &args![player, request],
+                    );
+                    vec![format!("travel {}: asked", rest.trim())]
+                }
+                None => vec!["travel MARKERHEX".into()],
+            },
             "warp" => {
                 let p: Vec<&str> = rest.split_whitespace().collect();
                 let v: Vec<f32> = p.iter().skip(1).filter_map(|s| s.parse().ok()).collect();

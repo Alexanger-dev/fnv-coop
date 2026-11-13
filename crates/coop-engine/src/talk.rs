@@ -461,6 +461,31 @@ mod tests {
         assert_eq!(result_quest(&mut s.e), None);
     }
 
+    /// PC run 30: Sunny hands over her rifle at the bottles by speaking up, outside the guest's
+    /// conversation; the line's result ran in the guest's game, whose player alone got the rifle.
+    /// On a guest, a story line said outside its player's conversation is noted; its own
+    /// conversation's results are held for the host and give it nothing here.
+    #[test]
+    fn a_guests_story_line_said_outside_its_conversation_notes_its_reward() {
+        let mut s = story();
+        set_sharing(&mut s.e, true);
+        gate::set_guest(&mut s.e, true);
+        s.set_info_reward_xp(SHARED_LINE, true, 50);
+        s.say_as(NPC, SHARED_LINE, true);
+        assert_eq!(s.xp(), 50);
+        assert_eq!(
+            crate::reward::take(&mut s.e),
+            vec![crate::reward::Given {
+                quest: MQ,
+                what: crate::reward::What::Xp(50)
+            }]
+        );
+        assert!(s.talk_to(NPC));
+        s.say(SHARED_LINE, true);
+        assert_eq!(s.xp(), 50);
+        assert_eq!(crate::reward::take(&mut s.e), vec![]);
+    }
+
     #[test]
     fn a_guest_holds_the_shared_story_s_results_and_runs_its_own() {
         let mut s = story();
