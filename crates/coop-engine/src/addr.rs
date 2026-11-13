@@ -651,6 +651,9 @@ pub const ACTOR_START_CONVERSATION_SLOT: u32 = 0x280;
 /// reference to the target's cell or world space, at the target's place plus the offsets: the one
 /// function of the game that moves a reference from one space to another.
 pub const MOVE_TO_FUNCTION_BASE: u32 = 0x005c_cb20;
+/// `MobileObject::IsinDialogue` (`thiscall`, the actor; `009336c0`): its current package is a
+/// dialogue package (procedure type 0x1c), as a conversation a script started puts it in.
+pub const MOBILE_IS_IN_DIALOGUE: u32 = 0x0093_36c0;
 
 // Packages (docs/coop/SPECS.md S19).
 

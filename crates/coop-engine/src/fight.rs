@@ -483,6 +483,17 @@ pub fn lead(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32
     place_of(e, id)
 }
 
+/// Whether this game's actor `id` is in a conversation (its package a dialogue package: a scene a
+/// script started, or one with a player). False when it is not in this game now.
+pub fn in_dialogue(e: &mut Engine, id: u32) -> bool {
+    match actors::actor(e, id) {
+        Some(a) if e.is_registered(addr::MOBILE_IS_IN_DIALOGUE) => {
+            e.call(addr::MOBILE_IS_IN_DIALOGUE, &args![a]).bool()
+        }
+        _ => false,
+    }
+}
+
 /// Brings an actor that is in another space of this game into this game's player's space, at
 /// `pos` there: the game's own `MoveTo` to the player with the difference as offsets. For a copy
 /// the host's actor left behind by walking through a door. False when the actor or the player is

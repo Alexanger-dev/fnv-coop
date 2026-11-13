@@ -329,6 +329,13 @@ fn a_guests_hit_on_a_followed_actor_goes_through_the_host() {
     p.frames(3);
     assert!(close(p.guest.actor_view(RAIDER).pos, [40.0, 20.0, 0.0]));
     assert!(p.guest_fight().fight_leads > 0);
+    // A copy still in a conversation here when the host's fights is led into the fight all the
+    // same (the fight comes first; a conversation is left alone only out of one).
+    p.guest.set_in_dialogue(RAIDER, true);
+    p.host.move_actor(RAIDER, [60.0, 30.0, 0.0], 0.5);
+    p.frames(3);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [60.0, 30.0, 0.0]));
+    p.guest.set_in_dialogue(RAIDER, false);
     // What the copy's own AI does to this player is the host's to say.
     p.guest.hit(PLAYER, RAIDER, 20.0);
     assert_eq!(p.guest.hits_run(), 0);
@@ -788,6 +795,40 @@ fn a_followed_actor_keeps_its_ai_and_is_put_at_the_hosts_place_when_it_strays() 
     assert_eq!(p.guest_fight().nudges, 1);
 }
 
+/// PC run 30: Joe Cobb's scene played in both games; the guest's copy, still in its conversation
+/// when the host's was done, was put at the host's place and asked to take its leaving package,
+/// and cut his line to run off. A followed copy in a conversation here is left to it; once it is
+/// over it is followed again.
+#[test]
+fn a_followed_actor_in_a_conversation_here_is_left_to_it() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.guest.set_in_dialogue(RAIDER, true);
+    p.frames(80);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [900.0, 900.0, 0.0]));
+    assert_eq!(p.guest_fight().nudges, 0);
+    assert!(p.guest_fight().talks_left > 0);
+    // Over: followed again.
+    p.guest.set_in_dialogue(RAIDER, false);
+    p.frames(60);
+    assert_eq!(p.guest_fight().nudges, 1);
+    // A conversation that never moves on is left alone only so long: then followed again.
+    p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
+    p.guest.set_in_dialogue(RAIDER, true);
+    let frames = (fight::TALK_GRACE_MS / 50) as u32;
+    p.frames(frames - 20);
+    assert_eq!(p.guest_fight().nudges, 1);
+    p.frames(80);
+    assert_eq!(p.guest_fight().nudges, 2);
+    assert!(close(
+        p.guest.actor_view(RAIDER).pos,
+        p.host.actor_view(RAIDER).pos
+    ));
+}
+
 /// PC run 11, 2026-11-11: Victor was put back every two seconds, and Sunny walked back to the
 /// guest's own player each time. An actor its own game keeps taking elsewhere is led with the
 /// host's every frame for a while, its AI on, then followed again.
@@ -1076,6 +1117,17 @@ fn the_nearest_players_game_runs_an_actor() {
     p.guest.move_actor(RAIDER, [200.0, 120.0, 0.0], 1.0);
     p.frames(20);
     assert!(close(p.host.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));
+    // In a conversation in the host's game (a scene it plays, PC run 30), the host's copy is not
+    // led: it plays the scene where it is.
+    p.host.set_in_dialogue(RAIDER, true);
+    p.guest.move_actor(RAIDER, [260.0, 160.0, 0.0], 1.0);
+    p.frames(20);
+    assert!(close(p.host.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));
+    p.host.set_in_dialogue(RAIDER, false);
+    p.frames(20);
+    assert!(close(p.host.actor_view(RAIDER).pos, [260.0, 160.0, 0.0]));
+    p.guest.move_actor(RAIDER, [200.0, 120.0, 0.0], 1.0);
+    p.frames(20);
     assert!(p.gd.fight.as_ref().unwrap().owned_published > 0);
     // Its AI runs on the guest: it is not put back at the host's place.
     assert!(close(p.guest.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));

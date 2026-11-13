@@ -76,6 +76,8 @@ pub const SETTER_SCRIPT_ID: u32 = 0x0015_0001;
 pub const BOTTLE_SCRIPT_ID: u32 = 0x0010_a1ef;
 /// Where a reference's primitive is kept, in its own block (a trigger volume has one).
 const PRIMITIVE_OFFSET: u32 = 0xeb0;
+/// Where an actor's being in a conversation is kept, in its own block.
+const DIALOGUE_OFFSET: u32 = 0xec0;
 /// Where an actor's count of package evaluations is kept, in its own block.
 const EVALUATIONS_OFFSET: u32 = 0xe80;
 /// Where an actor's conversations are kept, in its own block: how many it started, then the
@@ -561,6 +563,10 @@ impl Story {
                 );
             }
             eax(1)
+        });
+        // An actor is in a conversation while a test says so.
+        e.register(addr::MOBILE_IS_IN_DIALOGUE, |e, a| {
+            eax(e.mem.u32(a[0] + DIALOGUE_OFFSET))
         });
         // A cell is loaded unless a test let it go. The game reads the cell: none is a fault.
         e.register(addr::CELL_IS_LOADED, |e, a| {
@@ -1215,6 +1221,12 @@ impl Story {
     /// Whether a placed reference is disabled (`None`: not in this game now).
     pub fn disabled(&mut self, reference: u32) -> Option<bool> {
         crate::actors::disabled(&mut self.e, reference)
+    }
+
+    /// Puts actor `id` in a conversation (its package a dialogue package), or takes it out.
+    pub fn set_in_dialogue(&mut self, id: u32, talking: bool) {
+        let a = crate::actors::actor(&mut self.e, id).expect("an actor of the story");
+        self.e.mem.set_u32(a + DIALOGUE_OFFSET, u32::from(talking));
     }
 
     /// Makes this game let cell `cell` go (no longer loaded; what is in it is not drawn), or load

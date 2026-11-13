@@ -62,6 +62,11 @@ pub const FOLLOW_DISTANCE: f32 = 200.0;
 pub const TAKEOVER_DRIFT: f32 = 1000.0;
 /// See [`FOLLOW_DISTANCE`].
 pub const FOLLOW_MS: u64 = 1500;
+/// How long a copy in a conversation in this game is left to it (not led, put back or asked to
+/// take the host's package): enough for a scene's lines (PC run 30: Joe Cobb and Trudy), not a
+/// conversation that never moves on (the harness: a scene replayed in the guest's game stood
+/// still with nobody speaking), after which it is followed again.
+pub const TALK_GRACE_MS: u64 = 30_000;
 
 /// A copy in another space than the host's actor is brought through at most this often.
 pub const BRING_EVERY_MS: u64 = 3000;
@@ -180,8 +185,12 @@ pub struct Fight {
     pub follow: bool,
     /// Guest: since when each actor has been that far off.
     far_since: BTreeMap<u32, u64>,
+    /// Since when each actor has been in a conversation in this game (see [`TALK_GRACE_MS`]).
+    talk_since: BTreeMap<u32, u64>,
     /// Guest: how many times an actor was put at the host's place.
     pub nudges: u32,
+    /// Guest: frames a followed actor was left alone because it was in a conversation here.
+    pub talks_left: u64,
     /// Guest: each actor's recent nudges (how many, and when the first of them was).
     nudged: BTreeMap<u32, (u32, u64)>,
     /// Guest: actors led frame by frame, and until when. One this game keeps taking elsewhere
@@ -334,7 +343,9 @@ impl Fight {
             first_holds: 0,
             follow: false,
             far_since: BTreeMap::new(),
+            talk_since: BTreeMap::new(),
             nudges: 0,
+            talks_left: 0,
             nudged: BTreeMap::new(),
             led_until: BTreeMap::new(),
             leads: 0,
@@ -486,7 +497,7 @@ impl Fight {
         if self.cap >= Cap::Damage {
             self.host_damage(e, sync, avatars, now_ms, &mut out);
         }
-        self.host_follow(e, sync);
+        self.host_follow(e, sync, now_ms);
         if self
             .published_ms
             .is_some_and(|t| now_ms.saturating_sub(t) < PUBLISH_EVERY_MS)
@@ -830,7 +841,7 @@ impl Fight {
     /// Host: the actors a guest's game runs are put, here, where that game has them, every frame,
     /// with the ledger's health; the hit wrap routes this player's hits on them through the
     /// ledger, and keeps theirs on this player (the guest's game says those).
-    fn host_follow(&mut self, e: &mut Engine, sync: &mut HostSync) {
+    fn host_follow(&mut self, e: &mut Engine, sync: &mut HostSync, now_ms: u64) {
         let mut theirs = BTreeSet::new();
         for id in self.tracked.keys().copied().collect::<Vec<_>>() {
             let Some(rec) = sync.live.actors.own.get(FormId(id)).copied() else {
@@ -847,8 +858,11 @@ impl Fight {
             // skip (`gate::set_puppets`): the guest's game does it and proposes what it changes.
             // In another space than the guest's (it went through a door there) it is not led:
             // its own AI here takes it through the door after it.
+            // In a conversation here (a scene this game plays, PC run 30: Joe Cobb), it is not led:
+            // the scene plays out where this game has it.
             if fight::place_of(e, id).is_some()
                 && actors::actor(e, id).is_some_and(|a| fight::space_of(e, a) == s.cell.0)
+                && !self.left_to_talk(e, id, now_ms)
                 && fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading)).is_some()
             {
                 self.guest_run_moves += 1;
@@ -1182,6 +1196,17 @@ impl Fight {
                     if self.cap >= Cap::Damage && fight::mend(e, id, f32::from(s.health)) {
                         holding.insert(id);
                     }
+                    // In a conversation here (a scene this game plays as the host's does, or one
+                    // with this game's player), it is left to it: neither put at the host's place
+                    // nor asked to take the host's package (PC run 30: Joe Cobb's copy cut his line
+                    // and ran off when the host's, done with the scene first, took his leaving
+                    // package). Once it is over it picks a package again, the host's.
+                    if s.flags & FLAG_COMBAT == 0 && self.left_to_talk(e, id, now_ms) {
+                        self.far_since.remove(&id);
+                        self.led_until.remove(&id);
+                        self.talks_left += 1;
+                        continue;
+                    }
                     self.ask_package(e, id, now_ms);
                     let to = s.pos.map(dequant_pos);
                     // In a shared fight the place matters more than the gait: an actor fighting on
@@ -1440,6 +1465,17 @@ impl Fight {
         }
         self.stamp(e, &mut sync.live.local);
         out
+    }
+
+    /// Whether this game's copy of actor `id` is left to a conversation it is in here: for
+    /// [`TALK_GRACE_MS`] from when it was first seen in it.
+    fn left_to_talk(&mut self, e: &mut Engine, id: u32, now_ms: u64) -> bool {
+        if !fight::in_dialogue(e, id) {
+            self.talk_since.remove(&id);
+            return false;
+        }
+        let since = *self.talk_since.entry(id).or_insert(now_ms);
+        now_ms.saturating_sub(since) < TALK_GRACE_MS
     }
 
     /// Asks this game's copy of actor `id` to pick its package again when it does not run the

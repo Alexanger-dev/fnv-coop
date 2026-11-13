@@ -437,6 +437,67 @@ impl Harness {
                     _ => vec![format!("{word} ITEMHEX N [ACTORHEX]")],
                 }
             }
+            // `drop ITEMHEX N`: drops N of the item from this player's inventory, as the Pip-Boy's
+            // drop does (`TESObjectREFR::RemoveItem`, vtable +0x17c, its drop flag set).
+            "drop" => {
+                let p: Vec<&str> = rest.split_whitespace().collect();
+                let player = e.mem.u32(coop_engine::addr::PLAYER_SINGLETON);
+                match (
+                    p.first()
+                        .and_then(|s| hex(s))
+                        .and_then(|i| coop_engine::forms::form(e, i)),
+                    p.get(1).and_then(|s| s.parse::<u32>().ok()),
+                ) {
+                    (Some(item), Some(n)) if player != 0 => {
+                        e.vcall(
+                            player,
+                            0x17c,
+                            &args![item, 0u32, n, 0u32, 1u32, 0u32, 0u32, 0u32, 1u32, 0u32],
+                        );
+                        vec![format!("drop {rest}: done")]
+                    }
+                    _ => vec!["drop ITEMHEX N".into()],
+                }
+            }
+            // `near ITEMHEX`: the references of that base in this player's cell (its list of
+            // references at +0xac, `{item, next}` nodes), with their ids, places and counts.
+            "near" => {
+                let base = hex(rest.trim()).unwrap_or(0);
+                let player = e.mem.u32(coop_engine::addr::PLAYER_SINGLETON);
+                let cell = if player != 0 {
+                    e.mem.u32(player + coop_engine::addr::REF_CELL_OFFSET)
+                } else {
+                    0
+                };
+                let mut found = Vec::new();
+                let mut node = if cell != 0 { cell + 0xac } else { 0 };
+                let mut n = 0;
+                while node != 0 && e.mem.is_mapped(node) && n < 20_000 {
+                    let r = e.mem.u32(node);
+                    if r != 0 && e.mem.is_mapped(r + 0x30) {
+                        let b = e.mem.u32(r + 0x20);
+                        if b != 0
+                            && e.mem.is_mapped(b + 0x10)
+                            && e.mem.u32(b + coop_engine::addr::FORM_ID_OFFSET) == base
+                        {
+                            let id = e.mem.u32(r + coop_engine::addr::FORM_ID_OFFSET);
+                            let pos = [0, 4, 8]
+                                .map(|o| e.mem.f32(r + coop_engine::addr::REF_POS_OFFSET + o));
+                            found.push(format!(
+                                "{id:08x} at ({:.0}, {:.0}, {:.0})",
+                                pos[0], pos[1], pos[2]
+                            ));
+                        }
+                    }
+                    node = e.mem.u32(node + 4);
+                    n += 1;
+                }
+                vec![format!(
+                    "near {rest}: {} found: {}",
+                    found.len(),
+                    found.join(", ")
+                )]
+            }
             "say" => vec![rest.to_string()],
             "menu" => vec![match coop_engine::talk::menu_npc(e) {
                 Some(npc) => format!("dialogue open with {npc:08x}"),
@@ -454,15 +515,25 @@ impl Harness {
                 )],
                 None => vec![format!("quest {rest}: not a quest")],
             },
-            "var" => match hex(rest).and_then(|id| coop_engine::vars::quest_vars(e, id)) {
-                Some(vs) => vec![format!(
-                    "quest {rest} variables: {:?}",
-                    vs.iter()
-                        .map(|(i, b)| (*i, f64::from_bits(*b)))
-                        .collect::<Vec<_>>()
-                )],
-                None => vec![format!("quest {rest}: no variables")],
-            },
+            // `var QUESTHEX [INDEX]`: every variable, or the one of that index (decimal).
+            "var" => {
+                let p: Vec<&str> = rest.split_whitespace().collect();
+                let only = p.get(1).and_then(|s| s.parse::<u32>().ok());
+                match p
+                    .first()
+                    .and_then(|s| hex(s))
+                    .and_then(|id| coop_engine::vars::quest_vars(e, id))
+                {
+                    Some(vs) => vec![format!(
+                        "quest {rest} variables: {:?}",
+                        vs.iter()
+                            .filter(|(i, _)| only.map_or(true, |o| o == *i))
+                            .map(|(i, b)| (*i, f64::from_bits(*b)))
+                            .collect::<Vec<_>>()
+                    )],
+                    None => vec![format!("quest {rest}: no variables")],
+                }
+            }
             // A quest variable set as `set QUEST.var to VALUE` stores it (the variable by its
             // index, in decimal): for a state the replay skipped (`bMetSunny`, set by a line of
             // the opening this replay does not play).
@@ -541,8 +612,11 @@ fn place(e: &mut Engine, id: u32) -> String {
     } else {
         0
     };
+    let talking = level >= 0 && coop_engine::fight::in_dialogue(e, id);
+    // `Actor::IsTalking` (`008a67f0`): saying a line now.
+    let saying = level >= 0 && e.call(0x008a_67f0, &args![a]).u32() & 0xff != 0;
     format!(
-        "{id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, dead {dead:?}, package {package:08x?}, ai {ai}, process level {level}, weapon drawn {drawn}",
+        "{id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, dead {dead:?}, package {package:08x?}, ai {ai}, process level {level}, weapon drawn {drawn}, in a conversation {talking}, saying {saying}",
         pos[0], pos[1], pos[2]
     )
 }
