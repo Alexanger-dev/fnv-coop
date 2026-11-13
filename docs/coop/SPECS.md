@@ -701,7 +701,9 @@ can gather and cook. A split pair is pooled by giving one item to the other play
   back by the host's own scripts. The wrap is at the objective state setter `005ec5d0`, step C-9.
   The guest's own taking back is applied as ever.
 - To do: giving an item to another player, done by the host as one step (taken from one, given to
-  the other, or neither). Quest items are allowed between players only.
+  the other, or neither). Quest items are allowed between players only. The owner decided
+  (2026-11-13): giving is one-way only, a player picks an item and an amount and hands it over,
+  with nothing asked in return; no trade window where both sides offer and confirm.
 - Rewards from host-only scripts (experience, caps, items): S25.
 
 ## S25: the story's experience, caps and items go to every player (implemented)
