@@ -1275,6 +1275,46 @@ fn a_guests_stage_is_done_by_the_host_and_another_drift_is_put_back() {
     assert!(notes.contains("proposed to the host"), "{notes}");
 }
 
+/// PC run 28, 2026-11-13: a dialogue line's result set a quest variable in the host's game
+/// (`bMetSunny`), which leaves nothing in the journal; the story kept the old value, and the
+/// guest's game was put back to it. A variable the host's game changes reaches the guests however
+/// it was changed.
+#[test]
+fn a_quest_variable_the_hosts_game_sets_without_the_journal_reaches_the_guest() {
+    let (mut host, mut hd, mut hostnet, mut guest, mut gd, mut gnet) = pair();
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    let index = coop_engine::vars::quest_vars(&mut host.e, MQ).unwrap()[0].0;
+    assert!(coop_engine::vars::set_quest_var(
+        &mut host.e,
+        MQ,
+        index,
+        1.0f64.to_bits()
+    ));
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut *hostnet,
+        &mut guest,
+        &mut gd,
+        &mut *gnet,
+    );
+    let var = |s: &mut Story| coop_engine::vars::quest_vars(&mut s.e, MQ).unwrap()[0].1;
+    assert_eq!(var(&mut guest), 1.0f64.to_bits());
+    assert_same_game(&mut host, &mut guest);
+}
+
 /// PC run 19, 2026-11-12: quests of the pre-order packs changed in the guest's game on their own
 /// (timers, references), with no cause in the journal, and were proposed every few seconds. A
 /// change with no cause is proposed only when an object script that names that quest ran in

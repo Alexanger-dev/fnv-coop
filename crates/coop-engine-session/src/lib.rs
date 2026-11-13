@@ -98,6 +98,10 @@ fn say_of(field: &Field) -> Option<(u8, u32)> {
 pub const PACKAGE_TAG: u16 = 0x504b;
 
 /// The field for an actor's package.
+/// Host: every quest's variables are read again once in this many collect passes (a variable set
+/// by a script leaves nothing in the journal).
+pub const VAR_SWEEP_EVERY: u32 = 8;
+
 pub fn package_field(package: u32) -> Field {
     Field::Custom {
         tag: PACKAGE_TAG,
@@ -252,6 +256,8 @@ pub struct HostDriver {
     /// coop-core's host sync: the replicated store, joins, deltas, hashes.
     pub sync: HostSync,
     quests: BTreeSet<u32>,
+    /// Host: collect passes so far (the variable sweep's clock).
+    collects: u32,
     globals: GlobalWatch,
     /// The game clock's globals (hour, day, month, year, days passed): sent as the clock, not as
     /// story globals.
@@ -336,6 +342,7 @@ impl HostDriver {
         HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
+            collects: 0,
             globals: GlobalWatch::new(global_ids),
             clock: Vec::new(),
             clock_sent_ms: None,
@@ -618,6 +625,22 @@ impl HostDriver {
             .collect();
         for id in quests {
             self.write_quest(e, id);
+        }
+        // A quest variable a script sets (`set Quest.var to ...`, a dialogue line's result) leaves
+        // nothing in the journal: every quest's variables are read again every few frames (PC
+        // run 28: the host's Sunny greeted its player and set `bMetSunny`, the story kept 0, the
+        // guest's own greeting was refused as already done, and its game was put back to 0, so
+        // its Sunny walked up to its player again and again).
+        self.collects = self.collects.wrapping_add(1);
+        if self.collects % VAR_SWEEP_EVERY == 0 {
+            for id in self.quests.clone() {
+                for (var, bits) in vars::quest_vars(e, id).unwrap_or_default() {
+                    if let Ok(index) = u16::try_from(var) {
+                        self.sync
+                            .write(FormId(id), Field::ScriptVar { index, bits });
+                    }
+                }
+            }
         }
         // A placed reference a script enabled or disabled (its form flags changed): its state as
         // it is now. Kept in the story from then on, so a later change back is sent too.
