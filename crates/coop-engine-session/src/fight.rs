@@ -215,6 +215,9 @@ pub struct Fight {
     brought: BTreeMap<u32, u64>,
     /// See [`Fight::brought`].
     pub brings: u32,
+    /// Guest: actors taken over from the host's game whose copy here was in another space and
+    /// was brought out to where the host's game had them.
+    pub takeover_brings: u32,
     /// Guest: actors not held because this game's copy is in another space than the host's.
     elsewhere: BTreeSet<u32>,
     /// Guest: actors whose host's copy has left this player's space while this game's has not.
@@ -346,6 +349,7 @@ impl Fight {
             packages_on: true,
             brought: BTreeMap::new(),
             brings: 0,
+            takeover_brings: 0,
             elsewhere: BTreeSet::new(),
             left_behind: BTreeSet::new(),
             handoff: true,
@@ -1315,7 +1319,25 @@ impl Fight {
                     .iter()
                     .find(|(f, _)| f.0 == *id)
                     .and_then(|(_, a)| a.state);
-                if let (Some(s), Some(here)) = (host_state, fight::place_of(e, *id)) {
+                let here_space = actors::actor(e, *id).map(|a| fight::space_of(e, a));
+                if let Some(s) = host_state.filter(|s| {
+                    here_space != Some(s.cell.0) && me.is_some_and(|l| l.cell == s.cell.0)
+                }) {
+                    // Its copy here is in another space than the host's actor, which is in this
+                    // player's (harness, 2026-11-13: Sunny walked from the saloon to her campfire
+                    // in the host's game and was handed to the guest there; the guest's copy, never
+                    // near anyone, was still in the saloon, where this game cannot run her near its
+                    // player, and both copies stood). It is brought out to the host's place, as a
+                    // followed copy is through a door.
+                    let to = s.pos.map(dequant_pos);
+                    if fight::bring(e, *id, to) {
+                        self.takeover_brings += 1;
+                        self.say(format!(
+                            "co-op fights: actor {id:08x} was in {:08x} here and is in {:08x} on the host: brought to ({:.0}, {:.0}, {:.0}) to be run here",
+                            here_space.unwrap_or(0), s.cell.0, to[0], to[1], to[2]
+                        ));
+                    }
+                } else if let (Some(s), Some(here)) = (host_state, fight::place_of(e, *id)) {
                     let to = s.pos.map(dequant_pos);
                     let off = (0..3)
                         .map(|i| (here[i] - to[i]).powi(2))

@@ -207,7 +207,23 @@ impl Harness {
                         e.vcall(menu, 0xc, &args![0u32, 0u32]);
                         vec!["dnext: clicked".into()]
                     }
-                    "dtopics" => vec![format!("{} topics", tiles.len())],
+                    // With the line being said: `MenuTopicManager::pCurrentTopic` (+0x70, +0x00)
+                    // and its `pInfo` (+0x18), a form id.
+                    "dtopics" => {
+                        let manager = e.mem.u32(menu + 0x70);
+                        let topic = if manager != 0 { e.mem.u32(manager) } else { 0 };
+                        let info = if topic != 0 {
+                            e.mem.u32(topic + 0x18)
+                        } else {
+                            0
+                        };
+                        let id = if info != 0 {
+                            e.mem.u32(info + coop_engine::addr::FORM_ID_OFFSET)
+                        } else {
+                            0
+                        };
+                        vec![format!("{} topics; saying info {id:08x}", tiles.len())]
+                    }
                     _ => match rest.parse::<usize>().ok().and_then(|n| tiles.get(n)) {
                         Some(&tile) => {
                             e.vcall(menu, 0xc, &args![0xffff_ffffu32, tile]);
@@ -326,6 +342,40 @@ impl Harness {
                     _ => vec!["count ITEMHEX [ACTORHEX]".into()],
                 }
             }
+            // Gives or takes N of ITEM from the player (or ACTOR) the way the crafting menu does
+            // (`007284f0`): `00574fa0(ref, item, 0, n)` to add, `TESObjectREFR::RemoveItem`
+            // (vtable +0x17c) to take.
+            "additem" | "removeitem" => {
+                let p: Vec<u32> = rest.split_whitespace().filter_map(hex).collect();
+                let who = p
+                    .get(2)
+                    .copied()
+                    .unwrap_or(coop_engine::actors::PLAYER_REF_ID);
+                let n = rest
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|s| s.parse::<u32>().ok());
+                match (
+                    p.first().and_then(|i| coop_engine::forms::form(e, *i)),
+                    n,
+                    coop_engine::actors::actor(e, who),
+                ) {
+                    (Some(item), Some(n), Some(a)) => {
+                        if word == "additem" {
+                            e.call(0x0057_4fa0, &args![a, item, 0u32, n]);
+                        } else {
+                            e.vcall(
+                                a,
+                                0x17c,
+                                &args![item, 0u32, n, 0u32, 0u32, 0u32, 0u32, 0u32, 1u32, 0u32],
+                            );
+                        }
+                        let now = e.call(0x0057_5610, &args![a, item]).u32() as i32;
+                        vec![format!("{word} {:08x} x{n} on {who:08x}: now {now}", p[0])]
+                    }
+                    _ => vec![format!("{word} ITEMHEX N [ACTORHEX]")],
+                }
+            }
             "say" => vec![rest.to_string()],
             "menu" => vec![match coop_engine::talk::menu_npc(e) {
                 Some(npc) => format!("dialogue open with {npc:08x}"),
@@ -352,6 +402,23 @@ impl Harness {
                 )],
                 None => vec![format!("quest {rest}: no variables")],
             },
+            // A quest variable set as `set QUEST.var to VALUE` stores it (the variable by its
+            // index, in decimal): for a state the replay skipped (`bMetSunny`, set by a line of
+            // the opening this replay does not play).
+            "setvar" => {
+                let p: Vec<&str> = rest.split_whitespace().collect();
+                match (
+                    p.first().and_then(|s| hex(s)),
+                    p.get(1).and_then(|s| s.parse::<u32>().ok()),
+                    p.get(2).and_then(|s| s.parse::<f64>().ok()),
+                ) {
+                    (Some(q), Some(var), Some(v)) => vec![format!(
+                        "setvar {rest}: {}",
+                        coop_engine::vars::set_quest_var(e, q, var, v.to_bits())
+                    )],
+                    _ => vec!["setvar QUESTHEX VARINDEX VALUE".into()],
+                }
+            }
             _ => vec![format!("unknown command {word}")],
         }
     }

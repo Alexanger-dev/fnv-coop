@@ -1277,6 +1277,93 @@ fn an_actor_a_guest_takes_over_goes_on_from_the_hosts_place() {
     assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
 }
 
+/// Harness, 2026-11-13: Sunny walked from the saloon to her campfire in the host's game and was
+/// handed to the guest there, out of the host's player's close list; the guest's copy, near no
+/// player all along, was still in the saloon, so neither game ran her and both copies stood. A
+/// copy taken over in another space than the host's actor (which is in the guest's player's) is
+/// brought out to the host's place.
+#[test]
+fn an_actor_a_guest_takes_over_in_another_space_is_brought_to_the_hosts_place() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    // Only the takeover moves the copy here (no following before it).
+    p.gd.fight.as_mut().unwrap().bring_on = false;
+    p.gd.fight.as_mut().unwrap().lead_on = false;
+    p.host.move_player(DESERT, [-60000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(DESERT, [-67000.0, -9000.0, 0.0], 0.0);
+    p.host
+        .place_actor(RAIDER, DESERT, [-67100.0, -9000.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    // The host's game let its cell go: it is the guest's to run.
+    let a = coop_engine::actors::actor(&mut p.host.e, RAIDER).unwrap();
+    p.host
+        .e
+        .mem
+        .set_u32(a + coop_engine::addr::REF_CELL_OFFSET, 0);
+    p.frames(80);
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    let g = p.guest.actor_view(RAIDER);
+    assert!(close(g.pos, [-67100.0, -9000.0, 0.0]), "{g:?}");
+    let copy = coop_engine::actors::actor(&mut p.guest.e, RAIDER).unwrap();
+    assert_eq!(coop_engine::fight::space_of(&mut p.guest.e, copy), MOJAVE);
+    assert_eq!(p.guest_fight().takeover_brings, 1);
+    // Not brought again once there.
+    p.frames(200);
+    assert_eq!(p.guest_fight().takeover_brings, 1);
+}
+
+/// A copy is brought out only into the space this player is in: one taken over while this
+/// player has gone into another space than the host's actor is not moved to that actor's
+/// coordinates in this player's space (PC run 10's fault: Sunny put at outdoor coordinates in
+/// the saloon).
+#[test]
+fn a_copy_taken_over_is_not_brought_into_a_space_the_hosts_actor_is_not_in() {
+    let mut p = Pair::with(Cap::Log, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.gd.fight.as_mut().unwrap().bring_on = false;
+    p.gd.fight.as_mut().unwrap().lead_on = false;
+    p.host.move_player(DESERT, [-60000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(DESERT, [-67000.0, -9000.0, 0.0], 0.0);
+    p.host
+        .place_actor(RAIDER, DESERT, [-67100.0, -9000.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, TOWN, [10.0, 20.0, 0.0], 0.5);
+    let a = coop_engine::actors::actor(&mut p.host.e, RAIDER).unwrap();
+    p.host
+        .e
+        .mem
+        .set_u32(a + coop_engine::addr::REF_CELL_OFFSET, 0);
+    // The host hands it over; before the guest's game takes it, its player goes indoors (the
+    // ladder stops before rung 3, which would move it back to the host).
+    let id = coop_core::ids::FormId(RAIDER);
+    let mut frames = 0;
+    loop {
+        p.t += 50;
+        p.hd.step(&mut p.host.e, &mut p.hnet, p.t);
+        let handed =
+            p.hd.sync
+                .live
+                .actors
+                .own
+                .get(id)
+                .is_some_and(|r| r.owner.is_some_and(|o| !o.is_host()));
+        if handed || frames > 200 {
+            break;
+        }
+        p.guest.run_quest_script();
+        p.gd.step(&mut p.guest.e, &mut p.gnet, p.t);
+        frames += 1;
+    }
+    assert!(!p.gd.sync.live.actors.owns(id));
+    p.guest.move_player(HOUSE, [300.0, 300.0, 0.0], 0.0);
+    p.guest.run_quest_script();
+    p.gd.step(&mut p.guest.e, &mut p.gnet, p.t);
+    assert!(p.gd.sync.live.actors.owns(id));
+    p.frames(1);
+    assert_eq!(p.guest_fight().takeover_brings, 0);
+    let copy = coop_engine::actors::actor(&mut p.guest.e, RAIDER).unwrap();
+    assert_eq!(coop_engine::fight::space_of(&mut p.guest.e, copy), TOWN);
+}
+
 /// PC run 23: a gecko's death script ran twice in the guest's game, and Sunny's quest counted two
 /// geckos with one left. A dead actor is never hurt or killed again.
 #[test]

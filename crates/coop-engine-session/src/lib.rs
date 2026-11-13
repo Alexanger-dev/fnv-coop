@@ -263,6 +263,8 @@ pub struct HostDriver {
     collects: u32,
     /// Host: the game's loads seen so far ([`coop_engine::saves::loads`]).
     loads_seen: u64,
+    /// Host: [`quest::guest_completions_kept`] at the last step.
+    kept_seen: u64,
     /// Host: the actors of the scenes started since the last step.
     scene_started: Vec<u32>,
     /// Host: the actors of the scenes this game plays, with when each began.
@@ -353,6 +355,7 @@ impl HostDriver {
             quests: quest_ids.into_iter().collect(),
             collects: 0,
             loads_seen: 0,
+            kept_seen: 0,
             scene_started: Vec::new(),
             scene_actors: BTreeMap::new(),
             globals: GlobalWatch::new(global_ids),
@@ -527,6 +530,9 @@ impl HostDriver {
                         // Not taken back by this game's own scripts, whose `Player` is the
                         // host's player alone (S24).
                         quest::note_guest_completed(e, id, number);
+                        self.stage_notes.push(format!(
+                            "objective {number} of {id:08x} completed by a guest: kept from this game's own scripts"
+                        ));
                     }
                     self.write_quest(e, id);
                     ok
@@ -821,6 +827,15 @@ impl HostDriver {
     /// One step, between two of the game's frames: the guests' messages, this frame's changes,
     /// the sends, and every [`HostDriver::hash_every`] steps the hashes.
     pub fn step(&mut self, e: &mut Engine, net: &mut dyn Transport, now_ms: u64) {
+        let kept = quest::guest_completions_kept(e);
+        // Said the first time, then once in 1000 (a quest script tries again every frame).
+        if kept / 1000 != self.kept_seen / 1000 || (self.kept_seen == 0 && kept > 0) {
+            self.stage_notes.push(format!(
+                "this game's own scripts were kept from taking back a guest's objective ({} times)",
+                kept
+            ));
+            self.kept_seen = kept;
+        }
         // A save this game loaded: the story is read again from it.
         let loads = coop_engine::saves::loads(e);
         if loads != self.loads_seen {
