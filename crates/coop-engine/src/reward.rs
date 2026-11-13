@@ -60,7 +60,11 @@ pub(crate) fn experience(e: &mut Engine, a: &[u32]) -> Ret {
     let xp = a.get(1).copied().unwrap_or(0);
     if xp != 0 && !gate::is_guest(e) {
         if let Some(c) = gate::cause(e) {
-            let quest = c.owner_quest;
+            // A line's result script names no owner quest: its line's quest is the one.
+            let quest = match c.owner_quest {
+                0 => crate::talk::result_quest(e).unwrap_or(0),
+                q => q,
+            };
             if quest != 0 && !gate::is_own_quest(e, quest) {
                 e.ext_free::<Rewards>()
                     .given

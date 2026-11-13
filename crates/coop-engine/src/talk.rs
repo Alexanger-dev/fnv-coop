@@ -73,6 +73,9 @@ pub struct Talk {
     held: AtomicU64,
     own: AtomicU64,
     unknown: AtomicU64,
+    /// The quests of the lines whose results are running now, innermost last (a line's result
+    /// script names no owner quest: its info's quest is the one).
+    results: Mutex<Vec<u32>>,
 }
 
 impl Talk {
@@ -267,6 +270,42 @@ pub fn near(e: &mut Engine, npc: u32) -> bool {
 
 /// The wrap at `0061f170`. Its words: the info, the index, the reference.
 pub(crate) fn run_result(e: &mut Engine, a: &[u32]) -> Ret {
+    let info = a.first().copied().unwrap_or(0);
+    let quest = if info == 0 { 0 } else { quest_of(e, info) };
+    let depth = {
+        let mut r = e
+            .ext_free::<Talk>()
+            .results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        r.push(quest);
+        r.len() - 1
+    };
+    // Unwound or not, the stack goes back to where it was.
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_result_shared(e, a)));
+    e.ext_free::<Talk>()
+        .results
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .truncate(depth);
+    match out {
+        Ok(r) => r,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+/// The quest of the line whose result is running now (the innermost), 0 for a line of no quest;
+/// `None` when no line's result runs.
+pub fn result_quest(e: &mut Engine) -> Option<u32> {
+    e.ext_free::<Talk>()
+        .results
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .last()
+        .copied()
+}
+
+fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
     let t = e.ext_free::<Talk>();
     if !t.sharing.load(Ordering::SeqCst) || t.enacting.load(Ordering::SeqCst) > 0 {
         return e.call_next(addr::INFO_RUN_RESULT, a);
@@ -390,6 +429,30 @@ mod tests {
             })
         );
         assert!(take_events(&mut s.e).is_empty());
+    }
+
+    /// S25 (harness, 2026-11-13): a line's result script names no owner quest, so Trudy's
+    /// `RewardXP 50` that ends VCG03 was not seen as the story's. The line's own quest is the one,
+    /// for this game's own conversation and for a guest's line the host runs.
+    #[test]
+    fn a_lines_experience_is_its_quests() {
+        let mut s = story();
+        set_sharing(&mut s.e, true);
+        s.set_info_reward_xp(SHARED_LINE, true, 50);
+        assert!(s.talk_to(NPC));
+        s.say(SHARED_LINE, true);
+        assert_eq!(
+            crate::reward::take(&mut s.e),
+            vec![crate::reward::Given { quest: MQ, xp: 50 }]
+        );
+        s.leave();
+        enact(&mut s.e, NPC, SHARED_LINE, true).unwrap();
+        assert_eq!(
+            crate::reward::take(&mut s.e),
+            vec![crate::reward::Given { quest: MQ, xp: 50 }]
+        );
+        assert_eq!(s.xp(), 100);
+        assert_eq!(result_quest(&mut s.e), None);
     }
 
     #[test]

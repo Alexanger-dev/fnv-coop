@@ -719,6 +719,8 @@ engine backend for experience.
   `RewardXP` command `005d5140` calls), step C-10. The amount is given as ever. While a story
   script runs (its owner quest is set: a stage's or a line's result, a quest's script) and that
   quest is not one each player plays for themself, the reward is noted (`coop_engine::reward`).
+  A line's result script names no owner quest: the quest of the line whose result runs
+  (`talk::result_quest`, kept by the `TESTopicInfo::RunResult` wrap) is the one.
   Not noted: an object script with no quest (each game that has the object runs it), anything while
   the host's state is applied, anything on a guest.
 - The host's driver numbers each noted reward and hands it to the rules (`RulesHost::reward`): every

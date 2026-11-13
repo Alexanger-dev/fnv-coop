@@ -49,10 +49,12 @@ const BOTTLE_SCRIPT: u32 = 0x0150_0600;
 /// An object script whose body is `Disable` on the reference it runs on (a trigger that spends
 /// itself).
 const SPEND_SCRIPT: u32 = 0x0150_0500;
-/// A script whose body is `RewardXP` (the amount at [`REWARD`]): a line's or a stage's result
-/// when it names an owner quest, an object script when it does not.
+/// A script whose body is `RewardXP`: a stage's result when it names an owner quest, an object
+/// script when it does not.
 const REWARD_SCRIPT: u32 = 0x0150_0700;
-/// The amount the reward script gives, then the experience the player was given in all.
+/// In any script's block: the experience its body gives the player (`RewardXP`), 0 for none.
+pub(crate) const SCRIPT_REWARD_XP: u32 = 0x7c;
+/// The experience the player was given in all.
 const REWARD: u32 = RAN + 0x50;
 /// The form id of the object script [`Story::run_object_script_setting_stage`] runs.
 pub const SETTER_SCRIPT_ID: u32 = 0x0015_0001;
@@ -346,9 +348,10 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
         }
         e.call(addr::REF_DISABLE, &args![a[2]]);
     }
-    if a[1] == REWARD_SCRIPT {
+    let xp_at = a[1].wrapping_add(SCRIPT_REWARD_XP);
+    if a[1] != 0 && e.mem.is_mapped(xp_at) && e.mem.u32(xp_at) != 0 {
         let player = e.mem.u32(addr::PLAYER_SINGLETON);
-        let xp = e.mem.u32(REWARD);
+        let xp = e.mem.u32(xp_at);
         e.call(addr::PLAYER_REWARD_EXPERIENCE, &args![player, xp]);
     }
     if a[1] == SETTER_SCRIPT {
@@ -611,8 +614,8 @@ impl Story {
         e.register(addr::SCRIPT_RUNNER_RUN, runner);
         // `PlayerCharacter::RewardExperience`: the experience given, counted.
         e.register(addr::PLAYER_REWARD_EXPERIENCE, |e, a| {
-            let total = e.mem.u32(REWARD + 4);
-            e.mem.set_u32(REWARD + 4, total + a[1]);
+            let total = e.mem.u32(REWARD);
+            e.mem.set_u32(REWARD, total + a[1]);
             Ret::default()
         });
         e.register(addr::SAVE_LOAD_ADD_CHANGE, |_, _| Ret::default());
@@ -913,13 +916,13 @@ impl Story {
         self.e
             .mem
             .set_u32(REWARD_SCRIPT + addr::SCRIPT_OWNER_QUEST_OFFSET, owner);
-        self.e.mem.set_u32(REWARD, xp);
+        self.e.mem.set_u32(REWARD_SCRIPT + SCRIPT_REWARD_XP, xp);
         run(&mut self.e, REWARD_SCRIPT);
     }
 
     /// The experience this game's player was given in all.
     pub fn xp(&self) -> u32 {
-        self.e.mem.u32(REWARD + 4)
+        self.e.mem.u32(REWARD)
     }
 
     /// A script tells an actor to evaluate its package (`evp`), as a stage's result script does.
