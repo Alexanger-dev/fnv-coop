@@ -483,23 +483,6 @@ pub fn lead(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32
     place_of(e, id)
 }
 
-/// Gives an actor back to this game's own running: its AI on and its package picked again from
-/// where it is now. False when it is not in this game now or is dead here.
-pub fn rethink(e: &mut Engine, id: u32) -> bool {
-    if place_of(e, id).is_none() {
-        return false;
-    }
-    let Some(a) = actors::actor(e, id) else {
-        return false;
-    };
-    e.mem
-        .set_u8(a.wrapping_add(addr::ACTOR_PROCESS_ME_OFFSET), 1);
-    if e.is_registered(addr::ACTOR_EVALUATE_PACKAGE) {
-        e.call(addr::ACTOR_EVALUATE_PACKAGE, &args![a, 0u32, 0u32]);
-    }
-    true
-}
-
 /// Brings an actor that is in another space of this game into this game's player's space, at
 /// `pos` there: the game's own `MoveTo` to the player with the difference as offsets. For a copy
 /// the host's actor left behind by walking through a door. False when the actor or the player is

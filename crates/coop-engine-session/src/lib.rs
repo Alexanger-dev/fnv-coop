@@ -456,7 +456,18 @@ impl HostDriver {
     /// objective only when this game has not got there. This game's own scripts run for it (a
     /// stage's result), and the story carries the outcome to every guest.
     fn enact_proposal(&mut self, e: &mut Engine, from: PlayerId, id: u32, p: Proposal) {
-        let done = match p {
+        // A line a stage's result has an actor say to the player while the guest's doing is done
+        // here was said in that guest's game already, where the stage was set (harness,
+        // 2026-11-13: Sunny's bark after the sneak, sent back to the guest, was said twice).
+        let earlier_says = commands::drain_says(e);
+        let done = self.enact_proposal_body(e, id, p);
+        let _ = commands::drain_says(e);
+        commands::put_back_says(e, earlier_says);
+        self.note_enacted(from, id, p, done);
+    }
+
+    fn enact_proposal_body(&mut self, e: &mut Engine, id: u32, p: Proposal) -> bool {
+        match p {
             Proposal::Var {
                 index,
                 before,
@@ -516,7 +527,10 @@ impl HostDriver {
                 }
                 _ => false,
             },
-        };
+        }
+    }
+
+    fn note_enacted(&mut self, from: PlayerId, id: u32, p: Proposal, done: bool) {
         if done {
             self.proposals_enacted += 1;
         } else {

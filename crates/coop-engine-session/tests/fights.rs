@@ -19,6 +19,9 @@ const HOUSE: u32 = 0x0010_5a00;
 const TOWN: u32 = 0x0010_5a01;
 /// A third place: the yard outside the opening's room.
 const YARD: u32 = 0x0010_5a02;
+/// An exterior cell of the world space `MOJAVE`.
+const DESERT: u32 = 0x0010_5a10;
+const MOJAVE: u32 = 0x0010_5a20;
 const RAIDER: u32 = 0x0010_4f25;
 const GECKO: u32 = 0x0010_4f26;
 const PLAYER: u32 = 0x14;
@@ -31,6 +34,7 @@ fn spec() -> StorySpec {
         quests: vec![(MQ, vec![10, 20]), (OPENING, vec![200])],
         globals: vec![(0x39, 0.0)],
         cells: vec![HOUSE, TOWN, YARD],
+        exteriors: vec![(DESERT, MOJAVE)],
         actors: vec![RAIDER, GECKO],
         packages: vec![LEAD_OUT, STAY_IN],
         ..StorySpec::default()
@@ -1220,6 +1224,38 @@ fn the_hosts_copy_of_an_actor_a_guest_runs_does_nothing_of_its_own() {
     p.host.kill(RAIDER);
     p.host.run_object_script_setting_stage(RAIDER, OPENING, 200);
     assert!(done(&mut p, OPENING, 200));
+}
+
+/// Harness, 2026-11-13: Sunny at the first well, far from the host's player in a part of the
+/// world its game had not loaded, had no space in the host's game (her cell let go), was never
+/// handed to the guest standing by her, and the host's game ran her sneak and her talk at once
+/// (stages 35, 40 and 45 together, as in PC run 25). Such an actor near a guest out in a world
+/// space is in that world space, and the guest's game runs it.
+#[test]
+fn an_actor_in_a_part_of_the_world_the_host_has_not_loaded_goes_to_the_guest_near_it() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(DESERT, [-60000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(DESERT, [-67000.0, -9000.0, 0.0], 0.0);
+    p.host
+        .place_actor(RAIDER, DESERT, [-67100.0, -9000.0, 0.0], 0.5);
+    p.guest
+        .place_actor(RAIDER, DESERT, [-67100.0, -9000.0, 0.0], 0.5);
+    // The host's game let its cell go.
+    let a = coop_engine::actors::actor(&mut p.host.e, RAIDER).unwrap();
+    p.host
+        .e
+        .mem
+        .set_u32(a + coop_engine::addr::REF_CELL_OFFSET, 0);
+    p.frames(80);
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    assert!(p.host_fight().theirs().contains(&RAIDER));
+    // Its own doing in the host's game is skipped.
+    p.host.run_object_script_setting_stage(RAIDER, MQ, 20);
+    assert!(!coop_engine::quest::record(&mut p.host.e, MQ)
+        .unwrap()
+        .done
+        .contains(&20));
 }
 
 /// PC run 23: a gecko's death script ran twice in the guest's game, and Sunny's quest counted two

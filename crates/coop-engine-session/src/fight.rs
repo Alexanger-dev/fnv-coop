@@ -505,6 +505,38 @@ impl Fight {
         } else {
             Vec::new()
         };
+        // An actor in a part of an open world this game has not loaded has no space here (its
+        // cell is let go; the game runs it at the lowest level): one standing within reach of a
+        // guest out in a world space is in that guest's world space (harness, 2026-11-13: Sunny
+        // at the first well, far from the host's player, had none, was never handed to the
+        // guest near her, and the host's game ran her sneak and her talk at once, setting
+        // stages 35, 40 and 45 together, as in PC run 25).
+        let worlds: Vec<(u32, [f32; 3])> = places
+            .iter()
+            .filter(|(_, sp, _)| {
+                coop_engine::forms::form(e, *sp).is_some_and(|f| {
+                    e.mem
+                        .u8(f.wrapping_add(coop_engine::addr::FORM_TYPE_OFFSET))
+                        != coop_engine::addr::FORM_TYPE_CELL
+                })
+            })
+            .map(|(_, sp, p)| (*sp, *p))
+            .collect();
+        let space_here = |e: &mut Engine, a: u32| -> u32 {
+            match fight::space_of(e, a) {
+                0 => {
+                    let pos = fight::place_of_ptr(e, a);
+                    worlds
+                        .iter()
+                        .find(|(_, p)| {
+                            (0..3).map(|i| (p[i] - pos[i]).powi(2)).sum::<f32>().sqrt()
+                                <= HANDOFF_RADIUS
+                        })
+                        .map_or(0, |(sp, _)| *sp)
+                }
+                sp => sp,
+            }
+        };
         let mut candidates = fight::near(e);
         // In the list now, and, for one a guest's game runs that the list left out at some time,
         // without a break for CLOSE_SETTLE_MS since (PC run 25: Sunny, at the edge of the host's
@@ -534,7 +566,7 @@ impl Fight {
                 if candidates.contains(&a) {
                     continue;
                 }
-                let (space, pos) = (fight::space_of(e, a), fight::place_of_ptr(e, a));
+                let (space, pos) = (space_here(e, a), fight::place_of_ptr(e, a));
                 let close = places.iter().any(|(_, sp, p)| {
                     *sp == space
                         && (0..3).map(|i| (p[i] - pos[i]).powi(2)).sum::<f32>().sqrt()
@@ -546,7 +578,10 @@ impl Fight {
             }
         }
         for a in candidates {
-            let s = fight::snap(e, a);
+            let mut s = fight::snap(e, a);
+            if s.space == 0 {
+                s.space = space_here(e, a);
+            }
             if !actors::shareable(s.id)
                 || s.space == 0
                 || avatars.iter().any(|(_, av)| *av == s.id)
@@ -821,8 +856,8 @@ impl Fight {
                 ));
             }
             for id in lost {
-                // This game runs it again, from where the guest's game left it.
-                fight::rethink(e, id);
+                // This game runs it again, from where the guest's game left it (its AI was on
+                // throughout).
                 self.say(format!(
                     "co-op fights: actor {id:08x} is the host's game's to run again"
                 ));
@@ -1257,8 +1292,11 @@ impl Fight {
                 .collect(),
             None => BTreeSet::new(),
         };
+        // (Not told to pick again when it becomes this game's: the harness found that a pick
+        // asked of the game at that moment left Sunny standing, never greeting this player; the
+        // game's own evaluation picks the same package from the shared story.)
         for id in &owned {
-            if !self.owned_before.contains(id) && fight::rethink(e, *id) {
+            if !self.owned_before.contains(id) {
                 self.say(format!(
                     "co-op fights: actor {id:08x} is this game's to run: it picks its own package"
                 ));

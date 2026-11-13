@@ -186,6 +186,107 @@ impl Harness {
                     _ => vec!["warp SPACEHEX X Y Z".into()],
                 }
             }
+            // The open dialogue: `dnext` clicks as on the shown text (on to the next screen);
+            // `dtopic N` clicks the list's Nth topic tile (0 the first); `dtopics` counts them.
+            "dnext" | "dtopic" | "dtopics" => {
+                let menu = e.mem.u32(coop_engine::addr::DIALOG_MENU_OPEN);
+                if menu == 0 {
+                    return vec!["no dialogue open".into()];
+                }
+                let mut tiles = Vec::new();
+                let mut node = menu + 0x40 + 4;
+                while node != 0 && tiles.len() < 32 {
+                    let item = e.mem.u32(node);
+                    if item != 0 {
+                        tiles.push(e.mem.u32(item));
+                    }
+                    node = e.mem.u32(node + 4);
+                }
+                match word {
+                    "dnext" => {
+                        e.vcall(menu, 0xc, &args![0u32, 0u32]);
+                        vec!["dnext: clicked".into()]
+                    }
+                    "dtopics" => vec![format!("{} topics", tiles.len())],
+                    _ => match rest.parse::<usize>().ok().and_then(|n| tiles.get(n)) {
+                        Some(&tile) => {
+                            e.vcall(menu, 0xc, &args![0xffff_ffffu32, tile]);
+                            vec![format!("dtopic {rest}: clicked")]
+                        }
+                        None => vec![format!("dtopic {rest}: {} topics", tiles.len())],
+                    },
+                }
+            }
+            "ref" => {
+                match hex(rest).and_then(|id| coop_engine::forms::form(e, id).map(|r| (id, r))) {
+                    Some((id, r)) => {
+                        let pos = coop_engine::fight::place_of_ptr(e, r);
+                        let space = coop_engine::fight::space_of(e, r);
+                        vec![format!(
+                            "ref {id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, disabled {:?}",
+                            pos[0],
+                            pos[1],
+                            pos[2],
+                            coop_engine::actors::disabled(e, id)
+                        )]
+                    }
+                    None => vec![format!("ref {rest}: not here")],
+                }
+            }
+            "global" => match hex(rest).and_then(|id| coop_engine::forms::global_value(e, id)) {
+                Some(v) => vec![format!("global {rest}: {v}")],
+                None => vec![format!("global {rest}: not a global")],
+            },
+            "input" => vec![format!(
+                "input devices (keyboard, acquired, buffer, waiting): {:?}; controls {:?}",
+                engine_platform::dinput::devices(e),
+                coop_engine::fight::controls(e)
+            )],
+            // Game calls without the console: a quest's stage set as `SetStage` does (its result
+            // runs), an actor's package evaluated as `evp` does, an actor killed by the player.
+            "stage" => {
+                let p: Vec<&str> = rest.split_whitespace().collect();
+                match (
+                    p.first().and_then(|s| hex(s)),
+                    p.get(1).and_then(|s| s.parse().ok()),
+                ) {
+                    (Some(q), Some(n)) => vec![format!(
+                        "stage {:08x} {n}: {}",
+                        q,
+                        coop_engine::forms::set_quest_stage(e, q, n)
+                    )],
+                    _ => vec!["stage QUESTHEX N".into()],
+                }
+            }
+            "evp" => match hex(rest) {
+                Some(id) => vec![format!(
+                    "evp {id:08x}: {}",
+                    coop_engine::commands::evaluate_package(e, id)
+                )],
+                None => vec!["evp HEX".into()],
+            },
+            "kill" => match hex(rest) {
+                Some(id) => vec![format!(
+                    "kill {id:08x}: {}",
+                    coop_engine::fight::kill_by(e, id, coop_engine::actors::PLAYER_REF_ID)
+                )],
+                None => vec!["kill HEX".into()],
+            },
+            // The player activates a reference (talks to an actor), as the activate key does
+            // (`TESObjectREFR::Activate`, `00573170`).
+            "activate" => {
+                match hex(rest).and_then(|id| coop_engine::forms::form(e, id).map(|r| (id, r))) {
+                    Some((id, r)) => {
+                        let player = e.mem.u32(coop_engine::addr::PLAYER_SINGLETON);
+                        let ok = e
+                            .call(0x0057_3170, &args![r, player, 0u32, 0u32, 1u32])
+                            .u32()
+                            & 0xff;
+                        vec![format!("activate {id:08x}: {ok}")]
+                    }
+                    None => vec![format!("activate {rest}: not here")],
+                }
+            }
             "say" => vec![rest.to_string()],
             "menu" => vec![match coop_engine::talk::menu_npc(e) {
                 Some(npc) => format!("dialogue open with {npc:08x}"),
@@ -258,8 +359,20 @@ fn place(e: &mut Engine, id: u32) -> String {
     let dead = coop_engine::actors::dead(e, id);
     let package = coop_engine::commands::current_package(e, id);
     let ai = e.mem.u8(a + coop_engine::addr::ACTOR_PROCESS_ME_OFFSET);
+    let level = if e.mem.u32(a + coop_engine::addr::ACTOR_PROCESS_OFFSET) != 0 {
+        e.call(coop_engine::addr::MOBILE_PROCESS_TYPE, &args![a])
+            .u32() as i32
+    } else {
+        -1
+    };
+    // `Actor::IsWeaponDrawn` (`008a16d0`).
+    let drawn = if level >= 0 {
+        e.call(0x008a_16d0, &args![a]).u32() & 0xff
+    } else {
+        0
+    };
     format!(
-        "{id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, dead {dead:?}, package {package:08x?}, ai {ai}",
+        "{id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, dead {dead:?}, package {package:08x?}, ai {ai}, process level {level}, weapon drawn {drawn}",
         pos[0], pos[1], pos[2]
     )
 }
