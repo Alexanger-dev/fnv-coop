@@ -1300,6 +1300,31 @@ impl Fight {
                 self.say(format!(
                     "co-op fights: actor {id:08x} is this game's to run: it picks its own package"
                 ));
+                // It goes on from where the host's game had it: this game's copy, run by nobody
+                // near while no player was near it, may have stayed behind (harness, 2026-11-13:
+                // the guest's Sunny stood at the first well on a stale package while the host's
+                // had walked on to the third; the guest's came back and took her over there).
+                let host_state = sync
+                    .live
+                    .actors
+                    .iter()
+                    .find(|(f, _)| f.0 == *id)
+                    .and_then(|(_, a)| a.state);
+                if let (Some(s), Some(here)) = (host_state, fight::place_of(e, *id)) {
+                    let to = s.pos.map(dequant_pos);
+                    let off = (0..3)
+                        .map(|i| (here[i] - to[i]).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    let same_space =
+                        actors::actor(e, *id).is_some_and(|a| fight::space_of(e, a) == s.cell.0);
+                    if same_space && off > FOLLOW_DISTANCE {
+                        fight::lead(e, *id, to, dequant_heading(s.heading));
+                        self.say(format!(
+                            "co-op fights: actor {id:08x} was {off:.0} units from where the host's game had it: put there"
+                        ));
+                    }
+                }
             }
         }
         self.owned_before = owned.iter().copied().collect();

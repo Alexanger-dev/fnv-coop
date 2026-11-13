@@ -1258,6 +1258,25 @@ fn an_actor_in_a_part_of_the_world_the_host_has_not_loaded_goes_to_the_guest_nea
         .contains(&20));
 }
 
+/// Harness, 2026-11-13: while no player was near Sunny, the guest's copy stood at the first well
+/// on a stale package and the host's walked on to the third; when the guest came near, its game
+/// took her over where its own copy stood. A copy taken over is first put where the host's game
+/// had the actor.
+#[test]
+fn an_actor_a_guest_takes_over_goes_on_from_the_hosts_place() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    // Only the takeover moves the copy here (no following before it).
+    p.gd.fight.as_mut().unwrap().lead_on = false;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [1500.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
+    assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
+}
+
 /// PC run 23: a gecko's death script ran twice in the guest's game, and Sunny's quest counted two
 /// geckos with one left. A dead actor is never hurt or killed again.
 #[test]
