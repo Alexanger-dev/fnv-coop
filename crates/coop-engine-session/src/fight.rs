@@ -55,6 +55,11 @@ use engine_core::Engine;
 /// Following (see [`Fight::follow`]): how far from the host's place an actor may be, in the
 /// game's units (about three metres), and for how long, before it is put there.
 pub const FOLLOW_DISTANCE: f32 = 200.0;
+
+/// How far a copy a guest's game takes over may be from where the host's game had it before it
+/// is put there (units): a copy that stayed behind while nobody was near, not one that walked a
+/// few steps of its own.
+pub const TAKEOVER_DRIFT: f32 = 1000.0;
 /// See [`FOLLOW_DISTANCE`].
 pub const FOLLOW_MS: u64 = 1500;
 
@@ -1318,7 +1323,7 @@ impl Fight {
                         .sqrt();
                     let same_space =
                         actors::actor(e, *id).is_some_and(|a| fight::space_of(e, a) == s.cell.0);
-                    if same_space && off > FOLLOW_DISTANCE {
+                    if same_space && off > TAKEOVER_DRIFT {
                         fight::lead(e, *id, to, dequant_heading(s.heading));
                         self.say(format!(
                             "co-op fights: actor {id:08x} was {off:.0} units from where the host's game had it: put there"
