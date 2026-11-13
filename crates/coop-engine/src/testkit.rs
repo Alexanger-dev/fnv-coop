@@ -49,6 +49,11 @@ const BOTTLE_SCRIPT: u32 = 0x0150_0600;
 /// An object script whose body is `Disable` on the reference it runs on (a trigger that spends
 /// itself).
 const SPEND_SCRIPT: u32 = 0x0150_0500;
+/// A script whose body is `RewardXP` (the amount at [`REWARD`]): a line's or a stage's result
+/// when it names an owner quest, an object script when it does not.
+const REWARD_SCRIPT: u32 = 0x0150_0700;
+/// The amount the reward script gives, then the experience the player was given in all.
+const REWARD: u32 = RAN + 0x50;
 /// The form id of the object script [`Story::run_object_script_setting_stage`] runs.
 pub const SETTER_SCRIPT_ID: u32 = 0x0015_0001;
 /// The form id of the target's script [`Story::shoot_target`] runs (`VCG02TargetSCRIPT`'s).
@@ -341,6 +346,11 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
         }
         e.call(addr::REF_DISABLE, &args![a[2]]);
     }
+    if a[1] == REWARD_SCRIPT {
+        let player = e.mem.u32(addr::PLAYER_SINGLETON);
+        let xp = e.mem.u32(REWARD);
+        e.call(addr::PLAYER_REWARD_EXPERIENCE, &args![player, xp]);
+    }
     if a[1] == SETTER_SCRIPT {
         let (quest, stage) = (e.mem.u32(SETTER + 4), e.mem.u32(SETTER + 8) as u8);
         forms::set_quest_stage(e, quest, stage);
@@ -599,6 +609,12 @@ impl Story {
             eax(u32::from(e.mem.u8(a[0] + addr::QUEST_CURRENT_STAGE_OFFSET)))
         });
         e.register(addr::SCRIPT_RUNNER_RUN, runner);
+        // `PlayerCharacter::RewardExperience`: the experience given, counted.
+        e.register(addr::PLAYER_REWARD_EXPERIENCE, |e, a| {
+            let total = e.mem.u32(REWARD + 4);
+            e.mem.set_u32(REWARD + 4, total + a[1]);
+            Ret::default()
+        });
         e.register(addr::SAVE_LOAD_ADD_CHANGE, |_, _| Ret::default());
         e.register(addr::SAVE_LOAD_RECORDS_CHANGE, |_, _| eax(1));
         e.register(addr::PLACE_AT_ME, place_at_me);
@@ -875,6 +891,35 @@ impl Story {
             addr::SCRIPT_RUNNER_RUN,
             &args![0u32, SETTER_SCRIPT, r, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
         );
+    }
+
+    /// A script of `quest` (a stage's or a line's result: no form id of its own, the quest its
+    /// owner) gives the player `xp` experience (`RewardXP`); `quest` 0: an object script with no
+    /// quest does.
+    pub fn run_script_rewarding_xp(&mut self, quest: u32, xp: u32) {
+        self.run_named_script_rewarding_xp(0, quest, xp);
+    }
+
+    /// As [`Story::run_script_rewarding_xp`], the script with form id `script` (a quest's script,
+    /// or a script the rules let a guest run itself).
+    pub fn run_named_script_rewarding_xp(&mut self, script: u32, quest: u32, xp: u32) {
+        self.e
+            .mem
+            .set_u32(REWARD_SCRIPT + addr::FORM_ID_OFFSET, script);
+        let owner = match quest {
+            0 => 0,
+            q => forms::quest(&mut self.e, q).expect("a quest of the story"),
+        };
+        self.e
+            .mem
+            .set_u32(REWARD_SCRIPT + addr::SCRIPT_OWNER_QUEST_OFFSET, owner);
+        self.e.mem.set_u32(REWARD, xp);
+        run(&mut self.e, REWARD_SCRIPT);
+    }
+
+    /// The experience this game's player was given in all.
+    pub fn xp(&self) -> u32 {
+        self.e.mem.u32(REWARD + 4)
     }
 
     /// A script tells an actor to evaluate its package (`evp`), as a stage's result script does.

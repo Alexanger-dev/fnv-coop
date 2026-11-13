@@ -30,6 +30,7 @@ pub mod gate;
 pub mod journal;
 pub mod live;
 pub mod quest;
+pub mod reward;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod vars;
@@ -91,6 +92,9 @@ pub fn install(e: &mut Engine) {
     }
     if e.is_registered(addr::OBJECTIVE_SET_STATE) {
         e.wrap(quest::OBJECTIVE_STATE, quest::objective_state);
+    }
+    if e.is_registered(addr::PLAYER_REWARD_EXPERIENCE) {
+        e.wrap(reward::EXPERIENCE, reward::experience);
     }
     let _ = e.ext_free::<commands::Commands>();
     // The gate's slot too, before the threads start.

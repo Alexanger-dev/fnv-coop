@@ -233,6 +233,14 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-4",
     },
+    // rewards: PlayerCharacter::RewardExperience (vtable +0x488, `RewardXP`'s call): experience
+    // the shared story gives in the host's game goes to the guests' players too
+    // (docs/coop/SPECS.md S25).
+    Entry {
+        addr: 0x0094_fd10,
+        owners: COOP,
+        step: "C-10",
+    },
     // DINPUT8 DirectInput8Create, its import slot: the keyboard and mouse devices put behind
     // xNVSE's (`Hook_DirectInput8Create_Init` writes this slot).
     Entry {

@@ -154,6 +154,26 @@ impl RulesHost {
         std::mem::take(&mut self.events)
     }
 
+    /// The shared story gave a reward in the host's game, whose player has it already: every
+    /// other player in the party gets the same, once (the rules' `reward: everyone`, which every
+    /// row of the bundled table has). The messages to them.
+    pub fn reward(&mut self, id: u32, xp: u32) -> Vec<ROut> {
+        let others: Vec<PlayerId> = self
+            .party
+            .iter()
+            .copied()
+            .filter(|p| !p.is_host())
+            .collect();
+        self.rewards
+            .grant(id, &others)
+            .into_iter()
+            .map(|p| ROut {
+                aud: Audience::To(p),
+                msg: RulesMsg::Reward { id, xp },
+            })
+            .collect()
+    }
+
     /// Players in the party.
     pub fn party(&self) -> &[PlayerId] {
         &self.party
@@ -517,6 +537,24 @@ mod tests {
     const H: PlayerId = PlayerId(0);
     const A: PlayerId = PlayerId(1);
     const B: PlayerId = PlayerId(2);
+
+    /// S25: a reward the shared story gave in the host's game goes to every other player once;
+    /// the host's player has it already, and a player who left is not sent it.
+    #[test]
+    fn a_story_reward_goes_to_every_guest_once() {
+        let mut r = rules();
+        let o = r.reward(1, 50);
+        let to: Vec<Audience> = o.iter().map(|o| o.aud).collect();
+        assert_eq!(to, vec![Audience::To(A), Audience::To(B)]);
+        assert!(o
+            .iter()
+            .all(|o| o.msg == RulesMsg::Reward { id: 1, xp: 50 }));
+        assert!(r.reward(1, 50).is_empty());
+        r.on_leave(B, 0);
+        let o = r.reward(2, 25);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].aud, Audience::To(A));
+    }
 
     fn rules() -> RulesHost {
         let mut r = RulesHost::new(Mode::CoopBalanced);

@@ -97,6 +97,11 @@ pub const OBJECTIVE_STATE_OFFSET: u32 = 0x20;
 /// to the player's list (`00952a20`), which is the list the Pip-Boy's quest page walks
 /// (`0079bc30`): an objective whose state is only written is not in the Pip-Boy.
 pub const OBJECTIVE_SET_STATE: u32 = 0x005e_c5d0;
+/// `PlayerCharacter::RewardExperience` (`thiscall`, player, amount; vtable +0x488;
+/// `playercharacter_p2.rs`, `fn_0094fd10`): what the script command `RewardXP` (`005d5140`) calls
+/// on the player. It hands the amount to `CharacterProgression::RewardExperience` (`008d5100`),
+/// which adds it and shows the message.
+pub const PLAYER_REWARD_EXPERIENCE: u32 = 0x0094_fd10;
 /// The player's objective list: a `BSSimpleList` of `BGSQuestObjective *` whose first node is in
 /// the player at this offset (`0079bc30` answers `this + 0x6bc`; `mapmenu.rs` walks it for the
 /// Pip-Boy's quest page).

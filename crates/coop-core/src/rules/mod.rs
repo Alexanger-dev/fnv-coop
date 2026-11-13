@@ -159,4 +159,12 @@ pub enum RulesMsg {
         /// The host's friendly-fire choice (the combat vitals apply it).
         friendly_fire: bool,
     },
+    /// Host: the shared story rewarded the party (its scripts run in the host's game only, whose
+    /// player has the reward already): this player's character gets the same.
+    Reward {
+        /// The reward, as the host counts them (each is given to a player once).
+        id: u32,
+        /// Experience points.
+        xp: u32,
+    },
 }

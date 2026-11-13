@@ -702,5 +702,29 @@ can gather and cook. A split pair is pooled by giving one item to the other play
   The guest's own taking back is applied as ever.
 - To do: giving an item to another player, done by the host as one step (taken from one, given to
   the other, or neither). Quest items are allowed between players only.
-- To do: rewards from host-only scripts (`RewardXP`, `Player.AddItem` in a stage's result) go to
-  the host's player alone.
+- Rewards from host-only scripts: experience is S25. Still to do: items and caps a stage's or a
+  line's result gives `Player` (`Player.AddItem`) go to the host's player alone.
+
+## S25: the story's experience goes to every player (implemented)
+
+Found in the harness on 2026-11-13 (VCG03): Trudy's line that ends Sunny's last tutorial gives
+`RewardXP 50`. Said to the guest, its result ran in the host's game (the guest's results are held
+for the host), and the host's player alone got the 50. Sunny's line that starts VCG03 gives 50 too.
+
+The rules already decide this: every row of the bundled table has `reward: everyone` (every player
+gets the full reward once; `RewardLedger` keeps who has which). This spec carries it out on the
+engine backend for experience.
+
+- The host's game wraps `PlayerCharacter::RewardExperience` (`0094fd10`, vtable +0x488, what the
+  `RewardXP` command `005d5140` calls), step C-10. The amount is given as ever. While a story
+  script runs (its owner quest is set: a stage's or a line's result, a quest's script) and that
+  quest is not one each player plays for themself, the reward is noted (`coop_engine::reward`).
+  Not noted: an object script with no quest (each game that has the object runs it), anything while
+  the host's state is applied, anything on a guest.
+- The host's driver numbers each noted reward and hands it to the rules (`RulesHost::reward`): every
+  other player in the party gets `RulesMsg::Reward { id, xp }` once (protocol 7).
+- A guest's driver gives its player the same through the game's own call (the message included);
+  one that cannot be given yet (no player) waits.
+- Open: a player who joins after a reward does not get it (the ledger can name what it misses;
+  claiming needs the player's identity across sessions). Caps and items are S24's to-do.
+

@@ -56,6 +56,11 @@ pub enum Notice {
     Respawn,
     /// Everyone is down.
     Wipe,
+    /// The shared story rewarded the party: give the local player this much experience.
+    Reward {
+        /// Experience points.
+        xp: u32,
+    },
 }
 
 /// Rules state for one machine.
@@ -195,6 +200,7 @@ impl RulesClient {
                 }
             }
             RulesMsg::Wipe => self.notices.push(Notice::Wipe),
+            RulesMsg::Reward { xp, .. } => self.notices.push(Notice::Reward { xp }),
             RulesMsg::ScalingSet {
                 players,
                 mode,

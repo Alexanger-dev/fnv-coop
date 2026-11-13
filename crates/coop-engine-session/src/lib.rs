@@ -38,6 +38,7 @@ use coop_core::compat;
 use coop_core::delta::StateStore;
 use coop_core::ids::{Epoch, FormId, PlayerId, Rev, Tick};
 use coop_core::proto::{self, Hello, Msg};
+use coop_core::rules::Notice;
 use coop_core::schema::Field;
 use coop_core::sync::{GuestLive, HostConfig, HostSync};
 use coop_core::sync::{GuestPhase, GuestSync};
@@ -282,6 +283,9 @@ pub struct HostDriver {
     says: std::collections::BTreeMap<u32, u8>,
     /// Stage changes of shared quests, for the log (taken by the caller).
     pub stage_notes: Vec<String>,
+    /// Host: the story's rewards this game's player got and the guests were sent (S25), each
+    /// one's number for the rules' ledger.
+    pub rewards: u32,
     /// Guests' death claims the host's game enacted.
     pub claims_enacted: u32,
     /// Guests' claims left alone: the actor is not in the host's game now, or is dead already.
@@ -365,6 +369,7 @@ impl HostDriver {
             scenes: std::collections::BTreeMap::new(),
             says: std::collections::BTreeMap::new(),
             stage_notes: Vec::new(),
+            rewards: 0,
             claims_enacted: 0,
             claims_dropped: 0,
             triggers_kept: 0,
@@ -860,6 +865,20 @@ impl HostDriver {
         social::host_step(self, e, net, now_ms);
         self.enact_claims(e);
         self.collect(e);
+        // The story's rewards (S25): this game's player has each; every guest gets the same.
+        for given in coop_engine::reward::take(e) {
+            self.rewards += 1;
+            let outs = self.sync.live.reward(self.rewards, given.xp);
+            self.stage_notes.push(format!(
+                "the story gave this game's player {} experience ({:08x}'s script): to {} guest(s) too",
+                given.xp,
+                given.quest,
+                outs.len()
+            ));
+            for (to, msg) in outs {
+                send(net, to, &msg, &mut self.send_failures);
+            }
+        }
         // The actors of a scene this game plays: their lines run here even when a guest's game
         // runs them (the scene is the host's, and its results the story's), for SCENE_ACTORS_MS.
         for id in std::mem::take(&mut self.scene_started) {
@@ -1025,6 +1044,8 @@ pub struct GuestDriver {
     /// The distinct entries healed (the first 40), for the log: what on this guest keeps changing
     /// shared state.
     pub healed_notes: Vec<String>,
+    /// The experience the story gave this game's player through the host (S25).
+    pub xp_given: u64,
     healed_seen: BTreeSet<(u32, u8)>,
     /// The live ladder (players in the world); `None` leaves the session story-only.
     pub ladder: Option<ladder::Ladder>,
@@ -1091,6 +1112,7 @@ impl GuestDriver {
             healed: 0,
             relisted: 0,
             healed_notes: Vec::new(),
+            xp_given: 0,
             healed_seen: BTreeSet::new(),
             ladder: None,
             fight: None, // fights
@@ -1107,6 +1129,23 @@ impl GuestDriver {
 
     /// One step, between two of the game's frames: the first makes this game a guest (its story
     /// scripts gated) and says hello; each takes the host's messages and applies what changed.
+    /// The story's rewards the host sent (S25): this game's player gets each, the game's own
+    /// way. One that cannot be given yet (no player) waits.
+    fn take_rewards(&mut self, e: &mut Engine) {
+        let notices = std::mem::take(&mut self.sync.live.rules.notices);
+        for n in notices {
+            match n {
+                Notice::Reward { xp } if coop_engine::reward::give_xp(e, xp) => {
+                    self.xp_given += u64::from(xp);
+                    self.healed_notes.push(format!(
+                        "co-op guest: the story gave this game's player {xp} experience"
+                    ));
+                }
+                other => self.sync.live.rules.notices.push(other),
+            }
+        }
+    }
+
     pub fn step(&mut self, e: &mut Engine, net: &mut dyn Transport, now_ms: u64) {
         self.sync.set_time_ms(now_ms);
         if !self.started {
@@ -1123,6 +1162,7 @@ impl GuestDriver {
                 send(net, PlayerId::HOST, &reply, &mut self.send_failures);
             }
         }
+        self.take_rewards(e);
         if let Some(ladder) = self.ladder.as_mut() {
             let ids: Vec<PlayerId> = self.sync.live.remote.keys().copied().collect();
             let peers: Vec<(PlayerId, Sample)> = ids

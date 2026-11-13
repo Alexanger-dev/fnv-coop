@@ -1646,3 +1646,56 @@ fn an_actor_a_hosts_script_tells_to_evaluate_its_package_is_told_on_the_guest() 
         hd.stage_notes
     );
 }
+
+/// S25 (harness, 2026-11-13): Trudy's line that ends Sunny's last tutorial gives `RewardXP 50`;
+/// said to the guest, it ran in the host's game, and the host's player alone got the 50. The
+/// story's experience on the host goes to each guest's player once; the guest's own run of a
+/// story script stays held back by the gate.
+#[test]
+fn the_storys_experience_goes_to_every_player() {
+    let net = LoopbackNet::new();
+    let mut hostnet = net.endpoint(PlayerId::HOST);
+    let mut gnet = net.endpoint(PlayerId(1));
+    let mut host = Story::new(&spec());
+    let mut hd = HostDriver::new(HostConfig::new(hello(), 1), quest_ids(), GLOBALS);
+    hd.start(&mut host.e);
+    let mut guest = guest_story();
+    let mut gd = GuestDriver::new(PlayerId(1), hello());
+    let mut t = 0;
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut hostnet,
+        &mut guest,
+        &mut gd,
+        &mut gnet,
+    );
+    host.run_script_rewarding_xp(MQ, 50);
+    guest.run_script_rewarding_xp(MQ, 50);
+    frames(
+        10,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut hostnet,
+        &mut guest,
+        &mut gd,
+        &mut gnet,
+    );
+    assert_eq!((host.xp(), guest.xp()), (50, 50));
+    assert_eq!((hd.rewards, gd.xp_given), (1, 50));
+    // Once: nothing more arrives later.
+    frames(
+        30,
+        &mut t,
+        &mut host,
+        &mut hd,
+        &mut hostnet,
+        &mut guest,
+        &mut gd,
+        &mut gnet,
+    );
+    assert_eq!(guest.xp(), 50);
+}

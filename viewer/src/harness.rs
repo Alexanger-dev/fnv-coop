@@ -207,21 +207,25 @@ impl Harness {
                         e.vcall(menu, 0xc, &args![0u32, 0u32]);
                         vec!["dnext: clicked".into()]
                     }
-                    // With the line being said: `MenuTopicManager::pCurrentTopic` (+0x70, +0x00)
-                    // and its `pInfo` (+0x18), a form id.
+                    // With the line being said: `MenuTopicManager::pCurrentTopic` (+0x70, +0x00),
+                    // a list node whose item is the `MenuTopic`, and its `pInfo` (+0x18). Each
+                    // pointer is checked before it is read (a wrong one stops the game).
                     "dtopics" => {
-                        let manager = e.mem.u32(menu + 0x70);
-                        let topic = if manager != 0 { e.mem.u32(manager) } else { 0 };
-                        let info = if topic != 0 {
-                            e.mem.u32(topic + 0x18)
-                        } else {
-                            0
+                        let read = |e: &mut Engine, at: u32| {
+                            if at != 0 && e.mem.is_mapped(at) && e.mem.is_mapped(at + 3) {
+                                e.mem.u32(at)
+                            } else {
+                                0
+                            }
                         };
-                        let id = if info != 0 {
-                            e.mem.u32(info + coop_engine::addr::FORM_ID_OFFSET)
-                        } else {
-                            0
-                        };
+                        let node = read(e, menu + 0x70);
+                        let node = read(e, node);
+                        let topic = read(e, node);
+                        let info = read(e, topic.wrapping_add(0x18) * (topic != 0) as u32);
+                        let id = read(
+                            e,
+                            info.wrapping_add(coop_engine::addr::FORM_ID_OFFSET) * (info != 0) as u32,
+                        );
                         vec![format!("{} topics; saying info {id:08x}", tiles.len())]
                     }
                     _ => match rest.parse::<usize>().ok().and_then(|n| tiles.get(n)) {
