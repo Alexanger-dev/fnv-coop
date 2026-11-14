@@ -40,6 +40,11 @@ pub struct ActorState {
     pub target: u32,
     /// Flag bits.
     pub flags: u16,
+    /// How many attacks the owner's game queued for the actor (wrapping; 0 before the first):
+    /// a copy replays one when this changes.
+    pub attack_seq: u8,
+    /// The animation group of the owner's last attack.
+    pub attack_group: u8,
 }
 
 /// Why a spawn or other request failed, on the wire.

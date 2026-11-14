@@ -506,6 +506,8 @@ fn a_host_who_would_die_is_revived_by_the_guest_next_to_them() {
 #[test]
 fn a_downed_player_nobody_comes_to_is_up_again_when_the_window_ends() {
     let mut p = in_a_fight("");
+    // (the host's game keeps the raider: what a guest's game runs hurts that guest there)
+    p.hd.fight.as_mut().unwrap().handoff = false;
     let avatar = p.guest_avatar();
     // The host walks far off in the same house.
     p.host.move_player(HOUSE, [9000.0, 9000.0, 0.0], 0.0);
@@ -553,6 +555,8 @@ fn without_the_revive_slice_a_player_at_no_health_dies() {
 #[test]
 fn the_sessions_end_gives_a_downed_player_its_controls_and_its_death_back() {
     let mut p = in_a_fight("");
+    // (the host's game keeps the raider: what a guest's game runs hurts that guest there)
+    p.hd.fight.as_mut().unwrap().handoff = false;
     let avatar = p.guest_avatar();
     p.host.move_player(HOUSE, [9000.0, 9000.0, 0.0], 0.0);
     p.frames(5);
@@ -1530,4 +1534,203 @@ fn a_copy_is_brought_a_few_times_at_most() {
         .lines
         .iter()
         .any(|l| l.contains("left to this game from now")));
+}
+
+impl Pair {
+    /// The host's avatar in the guest's game.
+    fn host_avatar(&self) -> u32 {
+        self.gd.ladder.as_ref().unwrap().avatar_ids()[0].1
+    }
+
+    /// A followed raider near the guest, run by the host's game (fights shared up to damage: no
+    /// threat director turning the host's raider).
+    fn followed() -> Pair {
+        let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+        p.gd.fight.as_mut().unwrap().follow = true;
+        p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+        p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+        p.guest.place_actor(RAIDER, HOUSE, [30.0, 20.0, 0.0], 0.5);
+        p.frames(40);
+        p
+    }
+}
+
+/// PC run 30 (the owner, 2026-11-14): an enemy faced one player while it shot the other. The
+/// guest's copy of an actor the host runs fights the target the host's actor fights (the host's
+/// avatar here when the host's actor fights the host), never its own choice; its own attacks are
+/// refused and the host's actor's attacks are replayed on it.
+#[test]
+fn a_guests_copy_fights_whom_the_hosts_actor_fights_and_attacks_when_it_attacks() {
+    let mut p = Pair::followed();
+    let (host_avatar, guest_avatar) = (p.host_avatar(), p.guest_avatar());
+    // Both games' raiders start a fight: the host's with the host, the copy with the guest.
+    p.host.set_combat(RAIDER, PLAYER);
+    p.guest.set_combat(RAIDER, PLAYER);
+    p.frames(3);
+    // The copy's group did not know the host's avatar: it was started on a fight with it.
+    assert_eq!(p.guest.actor_view(RAIDER).target, host_avatar);
+    assert_eq!(p.guest_fight().puppets.starts, 1);
+    // Its own choice of the guest is not taken.
+    p.guest.choose_target(RAIDER, PLAYER);
+    assert_eq!(p.guest.actor_view(RAIDER).target, host_avatar);
+    // Its own attack is refused; the host's raider's attack is replayed on it.
+    assert!(!p.guest.queue_attack(RAIDER, 0x20));
+    assert_eq!(p.guest.attacks_queued(RAIDER), 0);
+    assert!(p.host.queue_attack(RAIDER, 0x21));
+    p.frames(3);
+    assert_eq!(p.guest.attacks_queued(RAIDER), 1);
+    assert_eq!(p.guest.queued_group(RAIDER), 0x21);
+    assert_eq!(p.guest_fight().puppets.replays, 1);
+    // Once, however many states carry it.
+    p.frames(10);
+    assert_eq!(p.guest.attacks_queued(RAIDER), 1);
+    // The host's raider turns on the guest: so does the copy, on this game's own player.
+    p.host.finish_attack(RAIDER);
+    p.guest.finish_attack(RAIDER);
+    p.host.set_combat(RAIDER, guest_avatar);
+    p.frames(3);
+    assert_eq!(p.guest.actor_view(RAIDER).target, PLAYER);
+    assert_eq!(p.guest_fight().puppets.turns, 1);
+    assert!(p.host.queue_attack(RAIDER, 0x20));
+    p.frames(3);
+    assert_eq!(p.guest.attacks_queued(RAIDER), 2);
+    // The host's own raider is its own: its attacks and target are never touched.
+    assert_eq!(p.host.attacks_queued(RAIDER), 2);
+    assert_eq!(p.host.actor_view(RAIDER).target, guest_avatar);
+    p.story_is_whole();
+}
+
+/// D6, condition 2: a copy whose owner's actor fights nobody does not fight on here; it is given
+/// a moment, since the host's game takes up a fight a player begins here a little later.
+#[test]
+fn a_copy_whose_owner_stops_fighting_stops_too() {
+    let mut p = Pair::followed();
+    p.guest.set_combat(RAIDER, PLAYER);
+    let frames = (fight::CALM_AFTER_MS / 50) as u32;
+    p.frames(frames - 5);
+    assert!(p.guest.actor_view(RAIDER).in_combat);
+    // The host's raider takes the fight up: it goes on.
+    p.host.set_combat(RAIDER, p.guest_avatar());
+    p.frames(frames + 10);
+    assert!(p.guest.actor_view(RAIDER).in_combat);
+    assert_eq!(p.guest_fight().puppets.stops, 0);
+    // The host's raider is done: so is the copy, a moment later.
+    p.host.set_combat(RAIDER, 0);
+    p.frames(frames - 5);
+    assert!(p.guest.actor_view(RAIDER).in_combat);
+    p.frames(10);
+    assert!(!p.guest.actor_view(RAIDER).in_combat);
+    assert_eq!(p.guest_fight().puppets.stops, 1);
+    p.story_is_whole();
+}
+
+/// D6, condition 3: a copy in a conversation here is its own game's: its attacks are not
+/// refused; nor is a copy given back to its game when the host no longer runs the actor.
+#[test]
+fn a_copy_left_to_a_conversation_attacks_as_its_game_has_it() {
+    let mut p = Pair::followed();
+    assert!(!p.guest.queue_attack(RAIDER, 0x20));
+    p.guest.set_in_dialogue(RAIDER, true);
+    p.frames(2);
+    assert!(p.guest.queue_attack(RAIDER, 0x20));
+    assert_eq!(p.guest.attacks_queued(RAIDER), 1);
+    // Back to following: refused again.
+    p.guest.set_in_dialogue(RAIDER, false);
+    p.guest.finish_attack(RAIDER);
+    p.frames(2);
+    assert!(!p.guest.queue_attack(RAIDER, 0x20));
+    // Without shared fights a copy is its game's own.
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [30.0, 20.0, 0.0], 0.5);
+    p.frames(40);
+    assert!(p.guest.queue_attack(RAIDER, 0x20));
+}
+
+/// After a hand-off the host's copy of the actor a guest runs fights whom the guest's actor
+/// fights and replays its attacks, and what it does to the guest's avatar is not sent to the
+/// guest as well (the guest's game did that blow to its own player).
+#[test]
+fn the_hosts_copy_of_an_actor_a_guest_runs_fights_as_the_guests_actor_does() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(p.host_fight().theirs().contains(&RAIDER));
+    let guest_avatar = p.guest_avatar();
+    // The guest's raider fights the guest; the host's copy chose the host.
+    p.guest.set_combat(RAIDER, PLAYER);
+    p.host.set_combat(RAIDER, PLAYER);
+    p.frames(3);
+    assert_eq!(p.host.actor_view(RAIDER).target, guest_avatar);
+    assert!(!p.host.queue_attack(RAIDER, 0x20));
+    assert!(p.guest.queue_attack(RAIDER, 0x22));
+    p.frames(3);
+    assert_eq!(p.host.queued_group(RAIDER), 0x22);
+    assert_eq!(p.host_fight().puppets.replays, 1);
+    // Its replayed blow on the guest's avatar is not sent: the guest's raider hit the guest.
+    let before = p.guest.actor_view(PLAYER).health;
+    p.host.hit(guest_avatar, RAIDER, 25.0);
+    p.frames(3);
+    assert_eq!(p.guest.actor_view(PLAYER).health, before);
+    assert_eq!(p.host_fight().hurts_sent, 0);
+    assert_eq!(p.host_fight().theirs_hits_left, 1);
+    // The guest's game runs its raider as it has it: its target and attacks are its own.
+    assert_eq!(p.guest.actor_view(RAIDER).target, PLAYER);
+    assert_eq!(p.guest.attacks_queued(RAIDER), 1);
+}
+
+/// A copy whose game does not take up the fight it is asked to start (its group still does not
+/// know the owner's target) is asked again, but not every frame.
+#[test]
+fn a_copy_is_asked_to_take_up_its_owners_fight_at_most_every_second() {
+    let mut p = Pair::followed();
+    p.guest.set_deaf(RAIDER, true);
+    p.host.set_combat(RAIDER, PLAYER);
+    p.frames(3);
+    assert_eq!(p.guest_fight().puppets.starts, 1);
+    let frames = (fight::AIM_START_EVERY_MS / 50) as u32;
+    p.frames(frames - 5);
+    assert_eq!(p.guest_fight().puppets.starts, 1);
+    p.frames(6);
+    assert_eq!(p.guest_fight().puppets.starts, 2);
+    // Taken up: no more asking.
+    p.guest.set_deaf(RAIDER, false);
+    p.frames(2 * frames);
+    assert_eq!(p.guest.actor_view(RAIDER).target, p.host_avatar());
+    assert_eq!(p.guest_fight().puppets.starts, 3);
+}
+
+/// A copy whose owner's actor is in combat but has no target now (it lost the one it fought)
+/// fights on: only an owner out of combat ends the copy's fight.
+#[test]
+fn a_copy_whose_owner_searches_for_its_target_fights_on() {
+    let mut p = Pair::followed();
+    p.guest.set_combat(RAIDER, PLAYER);
+    p.host.set_searching(RAIDER);
+    p.frames(3 * (fight::CALM_AFTER_MS / 50) as u32);
+    assert!(p.guest.actor_view(RAIDER).in_combat);
+    assert_eq!(p.guest_fight().puppets.stops, 0);
+}
+
+/// With fights shared only as states, every game runs its own fights: the host's copy of an
+/// actor a guest runs attacks as the host's game has it.
+#[test]
+fn without_shared_damage_the_hosts_copy_of_a_guests_actor_is_its_own() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(p.host_fight().theirs().contains(&RAIDER));
+    p.host.set_combat(RAIDER, PLAYER);
+    p.frames(2);
+    assert!(p.host.queue_attack(RAIDER, 0x20));
 }

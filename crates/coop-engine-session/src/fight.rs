@@ -49,6 +49,7 @@ use coop_core::rules::{Notice, RulesMsg};
 use coop_core::sync::{GuestLive, GuestSync, HostSync};
 use coop_engine::addr::PLAYER_ALL_CONTROLS;
 use coop_engine::fight::{self, Role, Snap};
+use coop_engine::puppet::{self, Aim, Attack};
 use coop_engine::{actors, gate, live};
 use engine_core::Engine;
 
@@ -143,6 +144,63 @@ pub const SPARE_AGAIN_MS: u64 = 10_000;
 /// The player `ActorState::target` names, if it names one.
 pub fn target_player(target: u32) -> Option<PlayerId> {
     (target & 0xff00_0000 == PLAYER_TARGET_BASE).then_some(PlayerId(target as u8))
+}
+
+/// A copy whose combat group does not know its owner's target yet is asked to start a combat
+/// with it at most this often (ms).
+pub const AIM_START_EVERY_MS: u64 = 1_000;
+/// A copy that fights here while its owner's actor fights nobody stops after this long (ms): the
+/// owner's game may take a moment to take up a fight a player began here.
+pub const CALM_AFTER_MS: u64 = 2_000;
+
+/// The copies in this game of actors another game runs, shown doing what the owner's actor does
+/// (docs/coop/DECISIONS.md D6, stage B): fighting its target, attacking when it attacks.
+#[derive(Debug, Default)]
+pub struct Puppeting {
+    /// The owner's attack count last seen for each copy.
+    seen: BTreeMap<u32, u8>,
+    /// When each copy was last asked to start a combat with its owner's target.
+    started: BTreeMap<u32, u64>,
+    /// Since when each copy has fought here while its owner's actor fought nobody.
+    calm_since: BTreeMap<u32, u64>,
+    /// The copies named to the wraps this frame, each with its owner's target here.
+    copies: BTreeMap<u32, u32>,
+    /// Copies turned to their owner's target.
+    pub turns: u32,
+    /// Combats started so that a copy's group knows its owner's target.
+    pub starts: u32,
+    /// Combats of copies ended because their owner's actor fought nobody.
+    pub stops: u32,
+    /// The owner's attacks replayed on a copy.
+    pub replays: u32,
+    /// Replays the copy's game did not queue (its weapon, ammunition or animation).
+    pub replays_refused: u32,
+}
+
+impl Puppeting {
+    /// One phrase for the log.
+    pub fn status(&self) -> String {
+        format!(
+            "copies {}: turned to their owner's target {}, combats started {}, stopped {}, attacks replayed {} (not queued {})",
+            self.copies.len(),
+            self.turns,
+            self.starts,
+            self.stops,
+            self.replays,
+            self.replays_refused
+        )
+    }
+}
+
+/// The form id in this game of an actor state's target (`ActorState::target`): this game's
+/// player, another player's avatar, or the actor it names; 0 for none or a player without an
+/// avatar here.
+pub fn local_target(target: u32, me: PlayerId, avatars: &[(PlayerId, u32)]) -> u32 {
+    match target_player(target) {
+        Some(p) if p == me => actors::PLAYER_REF_ID,
+        Some(p) => avatars.iter().find(|(q, _)| *q == p).map_or(0, |a| a.1),
+        None => target,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -240,6 +298,9 @@ pub struct Fight {
     pub guest_run_moves: u64,
     /// Host: this player's hits on actors a guest runs, put into the ledger.
     pub hosts_hits_forwarded: u32,
+    /// Host: hits on a guest's avatar by the copy of an actor a guest runs, left to the guests'
+    /// games.
+    pub theirs_hits_left: u32,
     /// Host: the id of the last such hit.
     next_hit: u32,
     /// Guest: states sent of the actors this game runs.
@@ -299,6 +360,8 @@ pub struct Fight {
     pub ups: u32,
     /// Times everyone was down and this game's player died as the game does.
     pub wipes: u32,
+    /// The copies of actors another game runs.
+    pub puppets: Puppeting,
 }
 
 fn print_now(line: &str) {
@@ -367,6 +430,7 @@ impl Fight {
             theirs: BTreeSet::new(),
             guest_run_moves: 0,
             hosts_hits_forwarded: 0,
+            theirs_hits_left: 0,
             next_hit: 0,
             owned_published: 0,
             owned_damage_taken: 0,
@@ -396,6 +460,7 @@ impl Fight {
             downs: 0,
             ups: 0,
             wipes: 0,
+            puppets: Puppeting::default(),
         }
     }
 
@@ -454,7 +519,12 @@ impl Fight {
 
     /// An actor of the host's game as the state the ledger carries. A target that is a player
     /// (the host's own, or a guest's avatar) is named by the player.
-    fn state_of(s: &Snap, avatars: &[(PlayerId, u32)], me: PlayerId) -> ActorState {
+    fn state_of(
+        s: &Snap,
+        avatars: &[(PlayerId, u32)],
+        me: PlayerId,
+        attack: Option<Attack>,
+    ) -> ActorState {
         let target = if s.target == actors::PLAYER_REF_ID {
             PLAYER_TARGET_BASE + u32::from(me.0)
         } else if let Some((p, _)) = avatars
@@ -473,7 +543,93 @@ impl Fight {
             health: health16(s.health),
             target,
             flags: if s.in_combat { FLAG_COMBAT } else { 0 } | if s.dead() { FLAG_DEAD } else { 0 },
+            attack_seq: attack.map_or(0, |a| a.seq),
+            attack_group: attack.map_or(0, |a| a.group),
         }
+    }
+
+    /// One frame of copy `id` of an actor another game runs, whose state there is `s`: named to
+    /// the wraps with its owner's target, turned to that target (or started on a combat with it
+    /// when its group does not know it yet), stopped when it fights while its owner's actor has
+    /// not for [`CALM_AFTER_MS`], and given each new attack of the owner's. The callers name no
+    /// copy in another space than the owner's actor, nor one left to a conversation (D6,
+    /// condition 3): those are their own AI's.
+    fn puppet(
+        &mut self,
+        e: &mut Engine,
+        id: u32,
+        s: &ActorState,
+        me: PlayerId,
+        avatars: &[(PlayerId, u32)],
+        now_ms: u64,
+    ) {
+        // (the callers name only a living copy in the owner's actor's space)
+        let Some(here) = fight::snap_of(e, id) else {
+            return;
+        };
+        // (a guest publishes no state of a dead actor, and a guest's copy of a dead one is killed
+        // before it is named)
+        let fights = s.flags & FLAG_COMBAT != 0;
+        let lock = if fights {
+            local_target(s.target, me, avatars)
+        } else {
+            0
+        };
+        let p = &mut self.puppets;
+        p.copies.insert(id, lock);
+        // The wraps know its owner's target before anything below asks the game for a change.
+        puppet::set_copy(e, id, lock);
+        if lock != 0 {
+            p.calm_since.remove(&id);
+            match puppet::aim(e, id, lock) {
+                Aim::Turned => p.turns += 1,
+                Aim::NotFighting | Aim::Unknown => {
+                    let due = p
+                        .started
+                        .get(&id)
+                        .map_or(true, |t| now_ms.saturating_sub(*t) >= AIM_START_EVERY_MS);
+                    if due && fight::start_combat(e, id, lock) {
+                        p.started.insert(id, now_ms);
+                        p.starts += 1;
+                    }
+                }
+                Aim::Already | Aim::Missing => {}
+            }
+        } else if here.in_combat && !fights {
+            let since = *p.calm_since.entry(id).or_insert(now_ms);
+            if now_ms.saturating_sub(since) >= CALM_AFTER_MS && puppet::stop(e, id) {
+                p.calm_since.remove(&id);
+                p.stops += 1;
+            }
+        } else {
+            p.calm_since.remove(&id);
+        }
+        // A new attack of the owner's: replayed here. The first state seen of a copy only sets
+        // the count (its last attack is over).
+        let before = p.seen.insert(id, s.attack_seq);
+        if before.is_some_and(|b| b != s.attack_seq) {
+            if puppet::replay(e, id, s.attack_group) {
+                p.replays += 1;
+            } else {
+                p.replays_refused += 1;
+            }
+        }
+    }
+
+    /// Starts a frame of the copies: none named yet.
+    fn puppets_begin(&mut self) {
+        self.puppets.copies.clear();
+    }
+
+    /// Ends a frame of the copies: the wraps are told which they are (one no longer a copy is its
+    /// game's own again), and what is kept of the others is let go.
+    fn puppets_end(&mut self, e: &mut Engine) {
+        let p = &mut self.puppets;
+        puppet::set_copies(e, p.copies.iter().map(|(a, b)| (*a, *b)));
+        let copies = &p.copies;
+        p.seen.retain(|id, _| copies.contains_key(id));
+        p.started.retain(|id, _| copies.contains_key(id));
+        p.calm_since.retain(|id, _| copies.contains_key(id));
     }
 
     /// The host's frame, between two of the game's frames and before coop-core's tick: guests'
@@ -497,7 +653,7 @@ impl Fight {
         if self.cap >= Cap::Damage {
             self.host_damage(e, sync, avatars, now_ms, &mut out);
         }
-        self.host_follow(e, sync, now_ms);
+        self.host_follow(e, sync, avatars, now_ms);
         if self
             .published_ms
             .is_some_and(|t| now_ms.saturating_sub(t) < PUBLISH_EVERY_MS)
@@ -610,7 +766,7 @@ impl Fight {
                 continue;
             }
             let id = FormId(s.id);
-            let state = Self::state_of(&s, avatars, PlayerId::HOST);
+            let state = Self::state_of(&s, avatars, PlayerId::HOST, puppet::attack_of(e, s.id));
             if let std::collections::btree_map::Entry::Vacant(slot) = self.tracked.entry(s.id) {
                 sync.live.actors.register(id, state);
                 slot.insert(Tracked::default());
@@ -841,7 +997,14 @@ impl Fight {
     /// Host: the actors a guest's game runs are put, here, where that game has them, every frame,
     /// with the ledger's health; the hit wrap routes this player's hits on them through the
     /// ledger, and keeps theirs on this player (the guest's game says those).
-    fn host_follow(&mut self, e: &mut Engine, sync: &mut HostSync, now_ms: u64) {
+    fn host_follow(
+        &mut self,
+        e: &mut Engine,
+        sync: &mut HostSync,
+        avatars: &[(PlayerId, u32)],
+        now_ms: u64,
+    ) {
+        self.puppets_begin();
         let mut theirs = BTreeSet::new();
         for id in self.tracked.keys().copied().collect::<Vec<_>>() {
             let Some(rec) = sync.live.actors.own.get(FormId(id)).copied() else {
@@ -863,11 +1026,18 @@ impl Fight {
             if fight::place_of(e, id).is_some()
                 && actors::actor(e, id).is_some_and(|a| fight::space_of(e, a) == s.cell.0)
                 && !self.left_to_talk(e, id, now_ms)
-                && fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading)).is_some()
             {
-                self.guest_run_moves += 1;
+                if fight::lead(e, id, s.pos.map(dequant_pos), dequant_heading(s.heading)).is_some()
+                {
+                    self.guest_run_moves += 1;
+                }
+                // It fights whom the guest's actor fights, and attacks when that one does.
+                if self.cap >= Cap::Damage {
+                    self.puppet(e, id, &s, PlayerId::HOST, avatars, now_ms);
+                }
             }
         }
+        self.puppets_end(e);
         if theirs != self.theirs {
             let gained: Vec<u32> = theirs.difference(&self.theirs).copied().collect();
             let lost: Vec<u32> = self.theirs.difference(&theirs).copied().collect();
@@ -957,6 +1127,14 @@ impl Fight {
             };
             let amount = damage16(h.amount);
             if amount == 0 {
+                continue;
+            }
+            // An actor a guest's game runs: what it does to a guest's player is done in that
+            // player's own game (its hit there is that game's), never sent from here as well. Its
+            // copy here shows the guest's actor's attacks (D6), whose blows on an avatar would
+            // otherwise land twice.
+            if self.theirs.contains(&h.aggressor) {
+                self.theirs_hits_left += 1;
                 continue;
             }
             // The kind and the limb are not read from the game yet: a direct hit, no limb.
@@ -1096,6 +1274,7 @@ impl Fight {
         let me = live::local(e).filter(|l| l.loaded && !waiting);
         let mut holding = BTreeSet::new();
         let mut near_me = BTreeSet::new();
+        self.puppets_begin();
         if let Some(me) = me {
             let known: Vec<(u32, coop_core::actors::RemoteActor)> =
                 sync.live.actors.iter().map(|(f, a)| (f.0, *a)).collect();
@@ -1216,7 +1395,14 @@ impl Fight {
                         fight::lead(e, id, to, dequant_heading(s.heading));
                         self.far_since.remove(&id);
                         self.fight_leads += 1;
+                        // It fights whom the host's actor fights, and attacks when that one does.
+                        self.puppet(e, id, &s, sync.player, avatars, now_ms);
                         continue;
+                    }
+                    // Not fighting on the host: its own attacks are refused here too, and it stops
+                    // a fight of its own that the host's actor has not taken up.
+                    if self.cap >= Cap::Damage {
+                        self.puppet(e, id, &s, sync.player, avatars, now_ms);
                     }
                     // A copy whose package is aimed at the player may turn to this game's
                     // player while the host's turns to its own: it is given room, and never led.
@@ -1308,6 +1494,7 @@ impl Fight {
                 }
             }
         }
+        self.puppets_end(e);
         // Only the actors the host runs near this player keep a "far since" time: one that is
         // seen again later starts afresh.
         self.far_since.retain(|id, _| near_me.contains(id));
@@ -1431,7 +1618,7 @@ impl Fight {
                 if s.space == 0 {
                     continue;
                 }
-                let state = Self::state_of(&s, avatars, sync.player);
+                let state = Self::state_of(&s, avatars, sync.player, puppet::attack_of(e, *id));
                 if self.owned_last.get(id) == Some(&state) {
                     continue;
                 }
@@ -1756,7 +1943,7 @@ impl Fight {
     pub fn status(&self) -> String {
         if self.guest {
             format!(
-                "fights: put at the host's place {}, led {}, brought through a door {}, asked to take the host's package {}; holding {} actors, moves {}, AI woke {}, released {}, deaths {}, hits sent {}, hurts taken {}, down {} up {}",
+                "fights: put at the host's place {}, led {}, brought through a door {}, asked to take the host's package {}; holding {} actors, moves {}, AI woke {}, released {}, deaths {}, hits sent {}, hurts taken {}, down {} up {}; {}",
                 self.nudges,
                 self.leads,
                 self.brings,
@@ -1769,11 +1956,12 @@ impl Fight {
                 self.hits_sent,
                 self.hurts_taken,
                 self.downs,
-                self.ups
+                self.ups,
+                self.puppets.status()
             )
         } else {
             format!(
-                "fights: tracking {} actors, states sent {}, guests' hits applied {}, kills {}, hurts sent {}, retargets {}, down {} up {}",
+                "fights: tracking {} actors, states sent {}, guests' hits applied {}, kills {}, hurts sent {}, retargets {}, down {} up {}; {}",
                 self.tracked.len(),
                 self.published,
                 self.hits_applied,
@@ -1781,7 +1969,8 @@ impl Fight {
                 self.hurts_sent,
                 self.retargets,
                 self.downs,
-                self.ups
+                self.ups,
+                self.puppets.status()
             )
         }
     }

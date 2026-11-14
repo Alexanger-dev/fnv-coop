@@ -29,6 +29,7 @@ pub mod forms;
 pub mod gate;
 pub mod journal;
 pub mod live;
+pub mod puppet;
 pub mod quest;
 pub mod reward;
 #[cfg(any(test, feature = "testkit"))]
@@ -104,6 +105,8 @@ pub fn install(e: &mut Engine) {
     let _ = e.ext_free::<gate::Gate>();
     // fights: the hit wrap and its slot.
     fight::install(e);
+    // copies: their targets and attacks are their owners'.
+    puppet::install(e);
     // social
     social::install(e);
 }

@@ -498,6 +498,34 @@ impl Harness {
                     found.join(", ")
                 )]
             }
+            // `scene ACTOR TARGET TOPIC`: actor starts a conversation with target about topic as a
+            // replayed scene does (`commands::play_scene`, outside any gate), where both are.
+            "scene" => {
+                let p: Vec<u32> = rest.split_whitespace().filter_map(hex).collect();
+                match (p.first(), p.get(1), p.get(2)) {
+                    (Some(&actor), Some(&target), Some(&topic)) => {
+                        let place = |e: &mut Engine, id| coop_engine::fight::place_of(e, id);
+                        let (ap, tp) = (place(e, actor), place(e, target));
+                        let space = coop_engine::actors::actor(e, actor)
+                            .map_or(0, |a| coop_engine::fight::space_of(e, a));
+                        let scene = coop_engine::commands::Scene {
+                            actor,
+                            target,
+                            topic,
+                            locations: [0, 0],
+                            flags: [true, false],
+                            space,
+                            actor_pos: ap.unwrap_or([0.0; 3]),
+                            target_pos: tp.unwrap_or([0.0; 3]),
+                        };
+                        vec![format!(
+                            "scene {rest}: {:?}",
+                            coop_engine::commands::play_scene(e, &scene)
+                        )]
+                    }
+                    _ => vec!["scene ACTORHEX TARGETHEX TOPICHEX".into()],
+                }
+            }
             "say" => vec![rest.to_string()],
             "menu" => vec![match coop_engine::talk::menu_npc(e) {
                 Some(npc) => format!("dialogue open with {npc:08x}"),
@@ -615,9 +643,13 @@ fn place(e: &mut Engine, id: u32) -> String {
     let talking = level >= 0 && coop_engine::fight::in_dialogue(e, id);
     // `Actor::IsTalking` (`008a67f0`): saying a line now.
     let saying = level >= 0 && e.call(0x008a_67f0, &args![a]).u32() & 0xff != 0;
+    // Its fight: combat flag and target, the attack queued now, and the attacks this game noted.
+    let snap = coop_engine::fight::snap(e, a);
+    let queued = e.mem.u32(a + coop_engine::addr::ACTOR_QUEUED_ATTACK_OFFSET) & 0xff;
+    let attacks = coop_engine::puppet::attack_of(e, id).map_or(0, |n| n.seq);
     format!(
-        "{id:08x}: at ({:.0}, {:.0}, {:.0}) in {space:08x}, dead {dead:?}, package {package:08x?}, ai {ai}, process level {level}, weapon drawn {drawn}, in a conversation {talking}, saying {saying}",
-        pos[0], pos[1], pos[2]
+        "{id:08x}: at ({:.0}, {:.0}, {:.0}) heading {:.2} in {space:08x}, dead {dead:?}, package {package:08x?}, ai {ai}, process level {level}, weapon drawn {drawn}, in a conversation {talking}, saying {saying}, in combat {} target {:08x}, queued attack {queued:02x}, attacks noted {attacks}",
+        pos[0], pos[1], pos[2], snap.heading, snap.in_combat, snap.target
     )
 }
 

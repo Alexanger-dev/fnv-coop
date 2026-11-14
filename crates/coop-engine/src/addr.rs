@@ -483,6 +483,39 @@ pub const ACTOR_IN_COMBAT: u32 = 0x0049_3bb0;
 /// `script_get_combat_target_function`).
 pub const ACTOR_COMBAT_TARGET_SLOT: u32 = 0x42c;
 
+/// `Actor::QueueAttack` (`008935f0`, `actor_p3.rs`, `actor_queue_attack`): `thiscall` on the
+/// actor with the attack's animation group. A combat procedure's way to attack: it checks the
+/// weapon, the ammunition and the animation, then queues the group in `Actor::eQueuedattack`
+/// (true), which the actor's update starts (`Actor::StartAttack`, `00893a40`, every frame until
+/// the attack is over). The player starts its attack at once.
+pub const ACTOR_QUEUE_ATTACK: u32 = 0x0089_35f0;
+/// `Actor::eQueuedattack`: the attack group queued, `0xff` for none (`actor.rs`).
+pub const ACTOR_QUEUED_ATTACK_OFFSET: u32 = 0x110;
+/// No attack queued, in [`ACTOR_QUEUED_ATTACK_OFFSET`].
+pub const NO_QUEUED_ATTACK: u32 = 0xff;
+
+/// `Actor` virtual slot `0x428`: the actor's `CombatController`, or 0 out of combat
+/// (`actor_p3.rs`, `ACTOR_SLOT_428`; `combatgroup.rs`, the target choice).
+pub const ACTOR_COMBAT_CONTROLLER_SLOT: u32 = 0x428;
+/// `CombatController::pCombatGroup` (`combatcontroller.rs`, PC offsets).
+pub const CONTROLLER_GROUP_OFFSET: u32 = 0x80;
+/// `CombatController::pAttacker`: the actor it runs.
+pub const CONTROLLER_ATTACKER_OFFSET: u32 = 0xbc;
+/// `CombatController::pTarget`: the actor it fights now (what [`ACTOR_COMBAT_TARGET_SLOT`]
+/// answers).
+pub const CONTROLLER_TARGET_OFFSET: u32 = 0xc0;
+/// `CombatController`'s change of target (`00980830`, `combatcontroller.rs`, `fn_00980830`):
+/// `thiscall` on the controller with the new target (0 for none); every change of the
+/// controller's target goes through it (the group's choice `00986c60`, `StopCombat`, the
+/// update). The target counts of the group and of the target map follow the change.
+pub const CONTROLLER_SET_TARGET: u32 = 0x0098_0830;
+/// The `CombatTarget` a `CombatGroup` keeps for an actor, or 0 when the actor is not one of its
+/// targets (`009865d0`, `combatgroup.rs`, `fn_009865d0`): `thiscall` on the group.
+pub const GROUP_TARGET_OF: u32 = 0x0098_65d0;
+/// `Actor` virtual slot `0x434`: `Actor::StopCombat(bool)` (`lowprocess.rs`,
+/// `ACTOR_STOP_COMBAT_SLOT`, called with 0).
+pub const ACTOR_STOP_COMBAT_SLOT: u32 = 0x434;
+
 /// `Actor::pCurrentProcess`: the word at +0x68 (`leaf::word_at_68`, typed from `008d8520`).
 pub const ACTOR_PROCESS_OFFSET: u32 = 0x68;
 

@@ -219,6 +219,14 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-1",
     },
+    // Actor::QueueAttack (this, animation group): a combat procedure's attack. Co-op refuses a
+    // copy's own attacks and replays its owner's; it notes the attacks of every other actor
+    // (docs/coop/DECISIONS.md D6).
+    Entry {
+        addr: 0x0089_35f0,
+        owners: COOP,
+        step: "C-12",
+    },
     // Actor::HitMe (this, hit data, kind): every weapon hit on an actor. Co-op decides whose
     // game applies it in a shared fight (docs/coop/SPECS.md S13).
     Entry {
@@ -248,6 +256,13 @@ pub const WRAPS: &[Entry] = &[
         addr: 0x0094_fd10,
         owners: COOP,
         step: "C-10",
+    },
+    // CombatController's change of target (this, target): co-op gives a copy the target its
+    // owner's actor fights (docs/coop/DECISIONS.md D6).
+    Entry {
+        addr: 0x0098_0830,
+        owners: COOP,
+        step: "C-13",
     },
     // DINPUT8 DirectInput8Create, its import slot: the keyboard and mouse devices put behind
     // xNVSE's (`Hook_DirectInput8Create_Init` writes this slot).

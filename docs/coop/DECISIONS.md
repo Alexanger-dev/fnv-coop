@@ -247,3 +247,10 @@ gain so that the animation's root motion moves the copy.
 5. Before A: the path start (`009db090`) is wrapped for copies, the actor values that change speed are
    synced, and the weapon-drawn state is carried; a run over stairs and through a door keeps the error
    bounded with no snaps (harness).
+
+**Progress.** Batch 1 (target lock and attack replay) done 2026-11-14 (PLAN.md "D6 B1"). The group's
+choice (`00986c60`) is not wrapped: its answer only ever reaches the controller through the change of
+target (`00980830`), which is, so one wrap covers every path. Condition 4 as built: a replayed attack's
+hit is decided by the hit wrap as any hit of that actor is; on a guest a host-run copy's blows on its
+player are kept (the host sends the damage), and the host no longer sends the blows of a guest-run copy
+(the guest's game did them), so no blow lands twice.
