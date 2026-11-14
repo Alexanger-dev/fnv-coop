@@ -253,4 +253,8 @@ choice (`00986c60`) is not wrapped: its answer only ever reaches the controller 
 target (`00980830`), which is, so one wrap covers every path. Condition 4 as built: a replayed attack's
 hit is decided by the hit wrap as any hit of that actor is; on a guest a host-run copy's blows on its
 player are kept (the host sends the damage), and the host no longer sends the blows of a guest-run copy
-(the guest's game did them), so no blow lands twice.
+(the guest's game did them), so no blow lands twice. Batch 2 (the jitter buffer, the path and the gait) done
+2026-11-14 (PLAN.md "D6 B2"). As built: the copy is led along the buffered path while the owner's actor
+fights, moves or has just stopped, with the owner's movement flags forced on it (`008b3a20`), so its
+legs move as the owner's; once the owner's actor has stood 1.5 s it is its own AI's again (condition 3:
+sitting, idling, talking as its package has it), and a stray walks back rather than being put back.

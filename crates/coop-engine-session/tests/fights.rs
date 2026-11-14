@@ -771,32 +771,100 @@ fn a_scene_from_before_the_join_is_not_played() {
 }
 
 /// PC run 10, 2026-11-11: an actor held with its AI off kept the pose it had and stood in a
-/// floor. Followed instead, it keeps its own AI: near the host's place it is left alone; further
-/// off for a while it is put there once and goes on by itself.
+/// floor. Followed instead, it keeps its own AI. D6 (the owner, 2026-11-14: no teleports): it is
+/// put on the host's actor's path while that one moves or has only just stopped; once that one
+/// has stood a while it is left alone near it; further off for a while it walks back (no jump),
+/// and only one too far to walk is put there at once.
 #[test]
-fn a_followed_actor_keeps_its_ai_and_is_put_at_the_hosts_place_when_it_strays() {
+fn a_followed_actor_keeps_its_ai_and_walks_back_to_the_hosts_place_when_it_strays() {
     let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
     p.gd.fight.as_mut().unwrap().follow = true;
     p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
     p.guest.move_player(HOUSE, [0.0; 3], 0.0);
-    // Near the host's place: untouched.
     p.guest.place_actor(RAIDER, HOUSE, [60.0, 20.0, 0.0], 2.0);
     p.frames(60);
-    let g = p.guest.actor_view(RAIDER);
-    assert!(close(g.pos, [60.0, 20.0, 0.0]) && g.ai, "{g:?}");
-    assert_eq!(p.guest_fight().nudges, 0);
-    // Strayed, but not for long enough yet.
-    p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
-    p.frames(10);
-    assert!(close(p.guest.actor_view(RAIDER).pos, [900.0, 900.0, 0.0]));
-    // Long enough: put at the host's place, its AI still on, and not again while it is there.
-    p.frames(40);
     let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
     assert!(close(g.pos, h.pos) && g.ai, "{g:?} {h:?}");
+    // The host's actor has stood a while: the copy is its own AI's, its movement its own.
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
+    // Near the host's place: untouched.
+    p.guest.move_actor(RAIDER, [110.0, 20.0, 0.0], 2.0);
+    p.frames(40);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [110.0, 20.0, 0.0]));
+    assert_eq!(p.guest_fight().nudges, 0);
+    // Strayed, but not for long enough yet.
+    p.guest.move_actor(RAIDER, [610.0, 20.0, 0.0], 2.0);
+    p.frames(10);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [610.0, 20.0, 0.0]));
+    // Long enough: it walks back, a step at a time, its AI on.
+    p.frames(30);
+    let g = p.guest.actor_view(RAIDER);
+    assert!(g.pos[0] < 600.0 && g.pos[0] > 300.0 && g.ai, "{g:?}");
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0x101));
     assert_eq!(p.guest_fight().nudges, 1);
-    assert!(p.guest_fight().held().is_empty());
+    // Taken far off on its way (its own game moved it): put there at once.
+    p.guest.move_actor(RAIDER, [2000.0, 20.0, 0.0], 2.0);
+    p.frames(1);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos), "{g:?} {h:?}");
+    assert_eq!(p.guest_fight().following.snaps, 1);
+    p.frames(80);
+    let g = p.guest.actor_view(RAIDER);
+    assert!(g.pos[0] <= 110.0, "{g:?}");
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
     p.frames(60);
     assert_eq!(p.guest_fight().nudges, 1);
+    assert!(p.guest_fight().held().is_empty());
+    // Too far to walk: put there at once.
+    p.guest.move_actor(RAIDER, [2000.0, 20.0, 0.0], 2.0);
+    p.frames(2);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos), "{g:?} {h:?}");
+    assert_eq!(p.guest_fight().following.snaps, 2);
+}
+
+/// D6: while the host's actor walks, the copy goes along its path a little behind, smoothly,
+/// with its gait; off the path, it catches up rather than jumping.
+#[test]
+fn a_copy_goes_along_the_hosts_actors_path_with_its_gait() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [0.0, 0.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [400.0, 0.0, 0.0], 0.0);
+    p.frames(80);
+    // The host's raider runs north, 20 units a frame.
+    p.host.set_moves(RAIDER, 0x201);
+    let mut xs = Vec::new();
+    for i in 1..=40 {
+        p.host.move_actor(RAIDER, [0.0, 20.0 * i as f32, 0.0], 0.0);
+        p.frames(1);
+        xs.push(p.guest.actor_view(RAIDER).pos[1]);
+    }
+    // Running too, behind the host's by a little, and never by a jump.
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0x201));
+    let behind = 800.0 - xs[39];
+    assert!((20.0..=120.0).contains(&behind), "{behind}");
+    assert!(xs.windows(2).all(|w| (w[1] - w[0]).abs() <= 45.0), "{xs:?}");
+    // It stops: the copy stops where it did, standing, then is its own AI's again.
+    p.host.set_moves(RAIDER, 0);
+    p.frames(10);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos), "{g:?} {h:?}");
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0));
+    p.frames((fight::SETTLE_MS / 50) as u32 + 5);
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
+    // Taken off its path by its own AI, it catches up when the host's moves again.
+    p.guest.move_actor(RAIDER, [0.0, 1300.0, 0.0], 0.0);
+    p.host.move_actor(RAIDER, [0.0, 820.0, 0.0], 0.0);
+    p.host.set_moves(RAIDER, 0x101);
+    p.frames(3);
+    let g = p.guest.actor_view(RAIDER);
+    assert!(g.pos[1] > 900.0 && g.pos[1] < 1300.0, "{g:?}");
+    p.frames(20);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos), "{g:?} {h:?}");
+    assert_eq!(p.guest_fight().following.snaps, 0);
 }
 
 /// PC run 30: Joe Cobb's scene played in both games; the guest's copy, still in its conversation
@@ -809,62 +877,57 @@ fn a_followed_actor_in_a_conversation_here_is_left_to_it() {
     p.gd.fight.as_mut().unwrap().follow = true;
     p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
     p.guest.move_player(HOUSE, [0.0; 3], 0.0);
-    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.guest.place_actor(RAIDER, HOUSE, [610.0, 20.0, 0.0], 2.0);
     p.guest.set_in_dialogue(RAIDER, true);
     p.frames(80);
-    assert!(close(p.guest.actor_view(RAIDER).pos, [900.0, 900.0, 0.0]));
+    assert!(close(p.guest.actor_view(RAIDER).pos, [610.0, 20.0, 0.0]));
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
     assert_eq!(p.guest_fight().nudges, 0);
     assert!(p.guest_fight().talks_left > 0);
-    // Over: followed again.
+    // Over: followed again (it walks back).
     p.guest.set_in_dialogue(RAIDER, false);
     p.frames(60);
     assert_eq!(p.guest_fight().nudges, 1);
+    p.frames(80);
     // A conversation that never moves on is left alone only so long: then followed again.
-    p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
+    p.guest.move_actor(RAIDER, [610.0, 20.0, 0.0], 2.0);
     p.guest.set_in_dialogue(RAIDER, true);
     let frames = (fight::TALK_GRACE_MS / 50) as u32;
     p.frames(frames - 20);
     assert_eq!(p.guest_fight().nudges, 1);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [610.0, 20.0, 0.0]));
     p.frames(80);
     assert_eq!(p.guest_fight().nudges, 2);
-    assert!(close(
-        p.guest.actor_view(RAIDER).pos,
-        p.host.actor_view(RAIDER).pos
-    ));
 }
 
 /// PC run 11, 2026-11-11: Victor was put back every two seconds, and Sunny walked back to the
-/// guest's own player each time. An actor its own game keeps taking elsewhere is led with the
-/// host's every frame for a while, its AI on, then followed again.
+/// guest's own player each time. A copy its own game keeps taking elsewhere is kept standing
+/// where the host's actor stands for a while (it catches up there, no jump), then followed again.
 #[test]
-fn an_actor_that_keeps_straying_is_led_every_frame_for_a_while() {
+fn an_actor_that_keeps_straying_is_kept_where_the_hosts_is_for_a_while() {
     let mut p = Pair::new();
     p.gd.fight.as_mut().unwrap().follow = true;
     p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
     p.guest.move_player(HOUSE, [0.0; 3], 0.0);
-    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
-    // Its own game takes it away again each time it is put back: two nudges.
-    for _ in 0..2 {
-        p.frames(40);
-        assert!(close(
-            p.guest.actor_view(RAIDER).pos,
-            p.host.actor_view(RAIDER).pos
-        ));
-        p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
-    }
-    assert_eq!((p.guest_fight().nudges, p.guest_fight().leads), (2, 1));
-    // Led: back at the host's place within a frame, and it goes where the host's goes.
-    p.frames(1);
-    assert!(close(
-        p.guest.actor_view(RAIDER).pos,
-        p.host.actor_view(RAIDER).pos
-    ));
-    p.host.move_actor(RAIDER, [300.0, 20.0, 0.0], 0.5);
-    p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
-    p.frames(6);
+    p.guest.place_actor(RAIDER, HOUSE, [610.0, 20.0, 0.0], 2.0);
+    p.frames(60);
+    // Its own game takes it away again: it walks back once, then is kept there.
+    p.guest.move_actor(RAIDER, [610.0, 20.0, 0.0], 2.0);
+    p.frames(120);
+    assert_eq!((p.guest_fight().nudges, p.guest_fight().leads), (1, 0));
+    p.guest.move_actor(RAIDER, [610.0, 20.0, 0.0], 2.0);
+    p.frames(32);
+    assert_eq!((p.guest_fight().nudges, p.guest_fight().leads), (1, 1));
+    p.frames(15);
     let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
     assert!(close(g.pos, h.pos) && g.ai, "{g:?} {h:?}");
-    assert_eq!(p.guest_fight().nudges, 2);
+    // Kept: its own game cannot take it off, and it goes where the host's goes.
+    p.host.move_actor(RAIDER, [300.0, 20.0, 0.0], 0.5);
+    p.guest.move_actor(RAIDER, [330.0, 60.0, 0.0], 2.0);
+    p.frames(10);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos) && g.ai, "{g:?} {h:?}");
+    assert_eq!(p.guest_fight().following.snaps, 0);
     // After the while it is followed again: left where its own game has it, near the host's.
     p.frames(700);
     p.guest.move_actor(RAIDER, [350.0, 20.0, 0.0], 2.0);
@@ -1064,10 +1127,23 @@ fn a_copy_whose_package_is_aimed_at_the_player_is_given_it_and_room() {
     p.frames(200);
     assert!(close(p.guest.actor_view(RAIDER).pos, [510.0, 20.0, 0.0]));
     assert_eq!((p.guest_fight().nudges, p.guest_fight().leads), (0, 0));
+    // The host's walks off: this one is not taken along (it is about this game's player).
+    p.host.set_moves(RAIDER, 0x101);
+    p.host.move_actor(RAIDER, [10.0, 60.0, 0.0], 0.5);
+    p.frames(5);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [510.0, 20.0, 0.0]));
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
+    p.host.set_moves(RAIDER, 0);
+    // Further than its room, again and again: walked back each time, never kept there.
+    for _ in 0..3 {
+        p.guest.move_actor(RAIDER, [900.0, 60.0, 0.0], 0.5);
+        p.frames(160);
+    }
+    assert_eq!((p.guest_fight().nudges, p.guest_fight().leads), (3, 0));
     // Far off it is still put back.
     p.guest.move_actor(RAIDER, [2000.0, 20.0, 0.0], 0.5);
     p.frames(60);
-    assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
+    assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 60.0, 0.0]));
 }
 
 /// PC run 21, 2026-11-12: with the host's player at the saloon door, Sunny and the geckos near
@@ -1486,8 +1562,8 @@ fn with_scenes_off_every_game_runs_its_own_conversations() {
     assert_eq!((p.gd.scenes_played, p.gd.scenes_missed), (0, 0));
 }
 
-/// D5's condition 6 for following: each part has its switch. Plain following puts a strayed
-/// actor back and does nothing else: no leading, no bringing, no packages.
+/// D5's condition 6 for following: each part has its switch. Plain following walks a strayed
+/// actor back and does nothing else: no keeping it there, no bringing, no packages.
 #[test]
 fn plain_following_neither_leads_nor_brings_nor_gives_packages() {
     let mut p = Pair::new();
@@ -1505,9 +1581,10 @@ fn plain_following_neither_leads_nor_brings_nor_gives_packages() {
     p.guest.place_actor(GECKO, TOWN, [5.0, 5.0, 0.0], 0.0);
     p.host.set_own_package(RAIDER, LEAD_OUT);
     p.guest.set_own_package(RAIDER, STAY_IN);
+    p.frames(60);
     for _ in 0..3 {
-        p.frames(40);
-        p.guest.move_actor(RAIDER, [900.0, 900.0, 0.0], 2.0);
+        p.guest.move_actor(RAIDER, [610.0, 20.0, 0.0], 2.0);
+        p.frames(120);
     }
     let f = p.guest_fight();
     assert!(f.nudges >= 3, "{}", f.nudges);
@@ -1733,4 +1810,97 @@ fn without_shared_damage_the_hosts_copy_of_a_guests_actor_is_its_own() {
     p.host.set_combat(RAIDER, PLAYER);
     p.frames(2);
     assert!(p.host.queue_attack(RAIDER, 0x20));
+}
+
+/// The session's end gives every copy back to its game: its own attacks and its own movement.
+#[test]
+fn the_sessions_end_gives_the_copies_back_to_their_games() {
+    let mut p = Pair::followed();
+    p.host.set_moves(RAIDER, 0x101);
+    p.host.move_actor(RAIDER, [10.0, 60.0, 0.0], 0.5);
+    p.frames(3);
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0x101));
+    assert!(!p.guest.queue_attack(RAIDER, 0x20));
+    let mut f = p.gd.fight.take().unwrap();
+    f.close(&mut p.guest.e);
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
+    assert!(p.guest.queue_attack(RAIDER, 0x20));
+}
+
+/// After a hand-off the host's copy goes along the guest's actor's path with its gait; when the
+/// guest's game takes an actor over, its copy there has its own movement back.
+#[test]
+fn the_hosts_copy_goes_along_the_guests_actors_path_and_a_taken_over_copy_is_its_own() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    // Before the hand-off the guest's copy walks with the host's raider.
+    p.frames(2);
+    p.host.set_moves(RAIDER, 0x101);
+    p.host.move_actor(RAIDER, [10.0, 40.0, 0.0], 0.5);
+    p.frames(3);
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0x101));
+    p.host.set_moves(RAIDER, 0);
+    p.frames(80);
+    assert!(p.host_fight().theirs().contains(&RAIDER));
+    // The guest's game runs it now: its movement is its own there.
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
+    // The guest's raider runs: the host's copy runs along behind it.
+    p.guest.set_moves(RAIDER, 0x201);
+    for i in 1..=10 {
+        p.guest
+            .move_actor(RAIDER, [10.0, 40.0 + 20.0 * i as f32, 0.0], 0.5);
+        p.frames(1);
+    }
+    assert_eq!(p.host.forced_moves(RAIDER), Some(0x201));
+    let behind = p.guest.actor_view(RAIDER).pos[1] - p.host.actor_view(RAIDER).pos[1];
+    assert!((20.0..=120.0).contains(&behind), "{behind}");
+}
+
+/// In a fight the copy stays where the host's actor is, however long that one stands; its gait is
+/// asked of the game once, not every frame.
+#[test]
+fn a_fighting_copy_stays_where_the_hosts_actor_is() {
+    let mut p = Pair::followed();
+    p.host.set_combat(RAIDER, PLAYER);
+    p.host.set_moves(RAIDER, 0x201);
+    p.host.move_actor(RAIDER, [10.0, 60.0, 0.0], 0.5);
+    p.frames(10);
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0x201));
+    let asked = p.guest.forces(RAIDER);
+    p.frames(20);
+    assert_eq!(p.guest.forces(RAIDER), asked);
+    p.host.set_moves(RAIDER, 0);
+    p.frames((fight::SETTLE_MS / 50) as u32 + 20);
+    assert_eq!(p.guest.forces(RAIDER), asked + 1);
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0));
+    // Its own combat moves take it aside: it is back where the host's stands.
+    p.guest.move_actor(RAIDER, [110.0, 60.0, 0.0], 0.5);
+    p.frames(2);
+    let (h, g) = (p.host.actor_view(RAIDER), p.guest.actor_view(RAIDER));
+    assert!(close(g.pos, h.pos), "{g:?} {h:?}");
+}
+
+/// The host's threat director chooses targets for the host's own actors only: one a guest's game
+/// runs fights whom that game has it fight.
+#[test]
+fn the_threat_director_leaves_an_actor_a_guest_runs_alone() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(p.host_fight().theirs().contains(&RAIDER));
+    // The guest's raider goes for the host's avatar there, far off; the guest is nearer.
+    let host_avatar = p.host_avatar();
+    p.guest.set_combat(RAIDER, host_avatar);
+    p.host.set_combat(RAIDER, PLAYER);
+    p.frames(60);
+    assert_eq!(p.host.actor_view(RAIDER).target, PLAYER);
+    assert_eq!(p.host_fight().retargets, 0);
 }

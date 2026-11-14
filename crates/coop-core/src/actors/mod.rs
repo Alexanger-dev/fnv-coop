@@ -32,7 +32,8 @@ pub struct ActorState {
     pub pos: [i32; 3],
     /// Heading, full circle in 65536 steps.
     pub heading: u16,
-    /// Animation state id.
+    /// The actor's movement flags as its owner's game has them (`ActorMover::GetMoveMode`: its
+    /// direction bits, walking, running, sneaking): its copies show the same gait.
     pub anim: u16,
     /// Health points. On the host the damage ledger overrides this.
     pub health: u16,
@@ -45,6 +46,10 @@ pub struct ActorState {
     pub attack_seq: u8,
     /// The animation group of the owner's last attack.
     pub attack_group: u8,
+    /// When the owner's game took this state, on its own clock (ms, wrapping): its copies are
+    /// played back along the states by it. Not part of what makes two states differ: an owner
+    /// sends a state again only when something else changed.
+    pub ms: u32,
 }
 
 /// Why a spawn or other request failed, on the wire.

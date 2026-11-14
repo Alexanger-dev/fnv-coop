@@ -35,6 +35,14 @@ const QUEUES: u32 = 0x114;
 const NO_ATTACKS: u32 = 0x118;
 /// The byte that makes the actor's process ignore a start of combat.
 const DEAF: u32 = 0x119;
+/// The actor's movement flags (u16), the flags forced on it and whether they are.
+const MOVES: u32 = 0x11c;
+const FORCED: u32 = 0x120;
+const FORCED_ON: u32 = 0x124;
+/// How often the game was asked to force the actor's movement.
+const FORCES: u32 = 0x128;
+/// The actor's mover (only its being there is read).
+const MOVER: u32 = 0xd00;
 const ESSENTIAL: u32 = 0x208;
 const ATTACKER: u32 = 0x20c;
 const PROCESS: u32 = 0x300;
@@ -186,6 +194,8 @@ fn dress(e: &mut Engine, actor: u32) {
         actor + addr::ACTOR_QUEUED_ATTACK_OFFSET,
         addr::NO_QUEUED_ATTACK,
     );
+    e.mem
+        .set_u32(actor + addr::ACTOR_MOVER_OFFSET, actor + MOVER);
 }
 
 /// Called by `Story::new` once its forms are in the table and before co-op is installed.
@@ -256,6 +266,21 @@ pub(super) fn register(e: &mut Engine) {
     });
     e.register(addr::GROUP_TARGET_OF, group_target_of);
     e.register(addr::ACTOR_QUEUE_ATTACK, queue_attack);
+    e.register(addr::ACTOR_MOVE_FLAGS, |e, a| {
+        eax(u32::from(e.mem.u16(a[0] + MOVES)))
+    });
+    e.register(addr::ACTOR_FORCE_MOVE_MODE, |e, a| {
+        assert_ne!(e.mem.u32(a[0] + addr::ACTOR_MOVER_OFFSET), 0, "no mover");
+        e.mem.set_u32(a[0] + FORCED, a[1]);
+        e.mem.set_u8(a[0] + FORCED_ON, 1);
+        bump(e, a[0] + FORCES);
+        Ret::default()
+    });
+    e.register(addr::ACTOR_CLEAR_FORCED_MOVE_MODE, |e, a| {
+        assert_ne!(e.mem.u32(a[0] + addr::ACTOR_MOVER_OFFSET), 0, "no mover");
+        e.mem.set_u8(a[0] + FORCED_ON, 0);
+        Ret::default()
+    });
     e.register(addr::ACTOR_IN_COMBAT, |e, a| {
         eax(u32::from(e.mem.u8(a[0] + IN_COMBAT)))
     });
@@ -431,6 +456,30 @@ impl Story {
         self.e
             .mem
             .set_u32(a + addr::ACTOR_QUEUED_ATTACK_OFFSET, addr::NO_QUEUED_ATTACK);
+    }
+
+    /// Actor `id`'s own movement flags (as its mover has them).
+    pub fn set_moves(&mut self, id: u32, flags: u16) {
+        let a = self.actor_ptr(id);
+        self.e.mem.set_u16(a + MOVES, flags);
+    }
+
+    /// The movement flags forced on actor `id`, if any are.
+    pub fn forced_moves(&mut self, id: u32) -> Option<u16> {
+        let a = self.actor_ptr(id);
+        (self.e.mem.u8(a + FORCED_ON) != 0).then(|| self.e.mem.u32(a + FORCED) as u16)
+    }
+
+    /// How often the game was asked to force actor `id`'s movement.
+    pub fn forces(&mut self, id: u32) -> u32 {
+        let a = self.actor_ptr(id);
+        self.e.mem.u32(a + FORCES)
+    }
+
+    /// Actor `id` has no mover.
+    pub fn drop_mover(&mut self, id: u32) {
+        let a = self.actor_ptr(id);
+        self.e.mem.set_u32(a + addr::ACTOR_MOVER_OFFSET, 0);
     }
 
     /// Actor `id` is in combat with no target (it lost the one it fought and searches).

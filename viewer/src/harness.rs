@@ -526,6 +526,38 @@ impl Harness {
                     _ => vec!["scene ACTORHEX TARGETHEX TOPICHEX".into()],
                 }
             }
+            // `watch ACTOR FRAMES`: the actor's steps between frames for that many frames, then
+            // one line: how far it went, its largest step, how many were jumps.
+            "watch" => {
+                let mut p = rest.split_whitespace();
+                match (p.next().and_then(hex), p.next().and_then(|n| n.parse::<u32>().ok())) {
+                    (Some(id), Some(frames)) if frames > 0 => {
+                        lock(&WATCHES).push(Watch {
+                            id,
+                            left: frames,
+                            frames: 0,
+                            last: None,
+                            path: 0.0,
+                            largest: 0.0,
+                            jumps: 0,
+                        });
+                        vec![format!("watch {id:08x}: {frames} frames")]
+                    }
+                    _ => vec!["watch ACTORHEX FRAMES".into()],
+                }
+            }
+            // `fight ACTOR TARGET`: the actor starts a combat with the target (0x14: this game's
+            // player) as the `StartCombat` command does.
+            "fight" => {
+                let p: Vec<u32> = rest.split_whitespace().filter_map(hex).collect();
+                match (p.first(), p.get(1)) {
+                    (Some(&actor), Some(&target)) => vec![format!(
+                        "fight {rest}: {}",
+                        coop_engine::fight::start_combat(e, actor, target)
+                    )],
+                    _ => vec!["fight ACTORHEX TARGETHEX".into()],
+                }
+            }
             "say" => vec![rest.to_string()],
             "menu" => vec![match coop_engine::talk::menu_npc(e) {
                 Some(npc) => format!("dialogue open with {npc:08x}"),
@@ -591,6 +623,54 @@ static TO_MAIN: std::sync::Mutex<std::collections::VecDeque<String>> =
     std::sync::Mutex::new(std::collections::VecDeque::new());
 static FROM_MAIN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// An actor watched frame by frame (`watch`): its id, the frames left, its last place, how far it
+/// went, its largest step between two frames, and how many steps were longer than
+/// [`WATCH_JUMP`].
+struct Watch {
+    id: u32,
+    left: u32,
+    frames: u32,
+    last: Option<[f32; 3]>,
+    path: f32,
+    largest: f32,
+    jumps: u32,
+}
+
+/// A step between two frames longer than this is a jump (units; a run covers about 8 a frame).
+const WATCH_JUMP: f32 = 64.0;
+
+static WATCHES: std::sync::Mutex<Vec<Watch>> = std::sync::Mutex::new(Vec::new());
+
+/// One frame of the watches: each one's step; a watch done is reported.
+fn watch_frame(e: &mut Engine) {
+    let mut watches = lock(&WATCHES);
+    let mut out = Vec::new();
+    for w in watches.iter_mut() {
+        w.left = w.left.saturating_sub(1);
+        w.frames += 1;
+        let Some(a) = coop_engine::actors::actor(e, w.id) else {
+            continue;
+        };
+        let pos = coop_engine::fight::place_of_ptr(e, a);
+        if let Some(last) = w.last {
+            let step = (0..3).map(|i| (pos[i] - last[i]).powi(2)).sum::<f32>().sqrt();
+            w.path += step;
+            w.largest = w.largest.max(step);
+            w.jumps += u32::from(step > WATCH_JUMP);
+        }
+        w.last = Some(pos);
+        if w.left == 0 {
+            out.push(format!(
+                "watch {:08x}: {} frames, went {:.0} units, largest step {:.1}, steps over {WATCH_JUMP}: {}",
+                w.id, w.frames, w.path, w.largest, w.jumps
+            ));
+        }
+    }
+    watches.retain(|w| w.left > 0);
+    drop(watches);
+    lock(&FROM_MAIN).extend(out);
+}
+
 fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -602,6 +682,7 @@ pub fn install() {
 
 /// On the game's main thread at the end of a frame: the queued game commands.
 fn on_main(e: &mut Engine) {
+    watch_frame(e);
     let lines: Vec<String> = lock(&TO_MAIN).drain(..).collect();
     for line in lines {
         let mut h = Harness {

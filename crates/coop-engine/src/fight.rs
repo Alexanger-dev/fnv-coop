@@ -269,6 +269,8 @@ pub struct Snap {
     pub loaded: bool,
     /// `Actor::GetEssential`: the game does not let it die.
     pub essential: bool,
+    /// Its movement flags ([`addr::ACTOR_MOVE_FLAGS`]; 0 where the program has no such function).
+    pub moves: u16,
 }
 
 impl Snap {
@@ -366,6 +368,11 @@ pub fn snap(e: &mut Engine, actor: u32) -> Snap {
         target,
         loaded: e.mem.u32(actor.wrapping_add(addr::REF_LOADED_OFFSET)) != 0,
         essential: e.call(addr::ACTOR_GET_ESSENTIAL, &args![actor]).bool(),
+        moves: if e.is_registered(addr::ACTOR_MOVE_FLAGS) {
+            e.call(addr::ACTOR_MOVE_FLAGS, &args![actor]).u32() as u16
+        } else {
+            0
+        },
     }
 }
 

@@ -516,6 +516,22 @@ pub const GROUP_TARGET_OF: u32 = 0x0098_65d0;
 /// `ACTOR_STOP_COMBAT_SLOT`, called with 0).
 pub const ACTOR_STOP_COMBAT_SLOT: u32 = 0x434;
 
+/// The actor's movement flags (`008846e0`, `actor.rs`, `fn_008846e0`): the mover's
+/// `GetMoveMode` (virtual `+0x20`), 0 without a mover. Bits: `0x1` forward, `0x2` back, `0x4`
+/// left, `0x8` right, `0x100` walking, `0x200` running, `0x400` sneaking (`Actor::IsRunning`
+/// reads `0x200`).
+pub const ACTOR_MOVE_FLAGS: u32 = 0x0088_46e0;
+/// `Actor::ForceMoveMode` (`008b3a20`, `actor_p5.rs`): `thiscall` on the actor with the flags;
+/// the mover's virtual `+0xc`, which sets `uiForcedMoveMode` and `bForceMoveMode`. While forced,
+/// the mover plays those flags' movement animation and does not follow its own path
+/// (`ActorMover::IsPathing` is false). Calls through the actor's mover: an actor without one
+/// must not be asked.
+pub const ACTOR_FORCE_MOVE_MODE: u32 = 0x008b_3a20;
+/// `Actor::ClearForcedMoveMode` (`008b3a50`): the mover's virtual `+0x10`; its own path again.
+pub const ACTOR_CLEAR_FORCED_MOVE_MODE: u32 = 0x008b_3a50;
+/// `Actor::pActorMover` (`actor.rs`).
+pub const ACTOR_MOVER_OFFSET: u32 = 0x190;
+
 /// `Actor::pCurrentProcess`: the word at +0x68 (`leaf::word_at_68`, typed from `008d8520`).
 pub const ACTOR_PROCESS_OFFSET: u32 = 0x68;
 

@@ -264,6 +264,31 @@ pub fn replay(e: &mut Engine, id: u32, group: u8) -> bool {
     queued
 }
 
+/// Has copy `id` walk or run as its owner's actor does (`flags`: the owner's movement flags):
+/// the game's own `ForceMoveMode`, so its animation is that gait while the session puts it on
+/// the owner's path; 0 has it stand. False when it is not in this game now or has no mover.
+pub fn force_moves(e: &mut Engine, id: u32, flags: u16) -> bool {
+    match actors::actor(e, id) {
+        Some(a) if e.mem.u32(a.wrapping_add(addr::ACTOR_MOVER_OFFSET)) != 0 => {
+            e.call(addr::ACTOR_FORCE_MOVE_MODE, &args![a, u32::from(flags)]);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Gives copy `id` its own movement back (`ClearForcedMoveMode`). False when it is not in this
+/// game now or has no mover.
+pub fn free_moves(e: &mut Engine, id: u32) -> bool {
+    match actors::actor(e, id) {
+        Some(a) if e.mem.u32(a.wrapping_add(addr::ACTOR_MOVER_OFFSET)) != 0 => {
+            e.call(addr::ACTOR_CLEAR_FORCED_MOVE_MODE, &args![a]);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Ends copy `id`'s combat here (`Actor::StopCombat`), for a copy whose owner no longer fights.
 /// False when it is not in this game now.
 pub fn stop(e: &mut Engine, id: u32) -> bool {
@@ -438,6 +463,28 @@ mod tests {
         );
         assert_eq!(aim(&mut s.e, 0x0010_9999, RAIDER), Aim::Missing);
         assert_eq!(aim(&mut s.e, RAIDER, 0x0010_9999), Aim::Missing);
+    }
+
+    #[test]
+    fn a_copy_is_given_its_owners_gait_and_its_own_back() {
+        let mut s = story();
+        s.set_moves(RAIDER, 0x201);
+        assert_eq!(
+            crate::fight::snap_of(&mut s.e, RAIDER).unwrap().moves,
+            0x201
+        );
+        assert!(force_moves(&mut s.e, GECKO, 0x101));
+        assert_eq!(s.forced_moves(GECKO), Some(0x101));
+        assert!(force_moves(&mut s.e, GECKO, 0));
+        assert_eq!(s.forced_moves(GECKO), Some(0));
+        assert!(free_moves(&mut s.e, GECKO));
+        assert_eq!(s.forced_moves(GECKO), None);
+        // No mover (or not here): nothing asked of the game.
+        s.drop_mover(GECKO);
+        assert!(!force_moves(&mut s.e, GECKO, 0x101));
+        assert!(!free_moves(&mut s.e, GECKO));
+        assert_eq!(s.forced_moves(GECKO), None);
+        assert!(!force_moves(&mut s.e, 0x0010_9999, 0x101));
     }
 
     #[test]

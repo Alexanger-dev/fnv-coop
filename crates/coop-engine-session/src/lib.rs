@@ -30,6 +30,7 @@ pub mod party;
 pub mod rest;
 pub mod social;
 pub mod talk;
+pub mod track;
 
 use std::collections::{BTreeMap, BTreeSet};
 
