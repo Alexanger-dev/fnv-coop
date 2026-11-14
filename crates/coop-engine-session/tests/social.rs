@@ -314,6 +314,41 @@ fn a_line_of_the_players_own_quest_stays_in_that_players_game() {
     assert!(w.host.messages().is_empty());
 }
 
+/// The owner, 2026-11-14: both players sat for Doc Mitchell's questions; he asked the host's and
+/// stared at the guest until the host was done. While a player's own opening runs (OWN's stage 9
+/// not done in its game), its conversations are its own: the host's conversation with the NPC does
+/// not keep it from the guest, and the guest's lines go to nobody; once the opening is done, an NPC
+/// is in one conversation at a time again.
+#[test]
+fn in_their_own_openings_both_players_talk_to_the_same_npc_at_once() {
+    let mut w = World::new(&["Sunny"]);
+    w.hd.social.talker.opening = Some((OWN, 9));
+    w.guests[0].driver.social.talker.opening = Some((OWN, 9));
+    w.run(20);
+    assert!(w.host.talk_to(SUNNY));
+    w.host.say(PLAIN_LINE, false);
+    w.run(10);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.run(10);
+    assert_eq!(w.guests[0].driver.social.talker.blocked, 0);
+    assert_eq!(w.hd.sync.live.dialogue.open_sessions(), 0);
+    assert!(w.guests[0].driver.social.talker.opening_lines > 0);
+    assert!(w.hd.social.talker.opening_lines > 0);
+    w.guests[0].game.leave();
+    w.host.leave();
+    // Both openings done: one conversation at a time.
+    forms::set_quest_stage(&mut w.host.e, OWN, 9);
+    forms::set_quest_stage(&mut w.guests[0].game.e, OWN, 9);
+    w.run(10);
+    assert!(w.host.talk_to(SUNNY));
+    w.host.say(PLAIN_LINE, false);
+    w.run(10);
+    assert!(!w.guests[0].game.talk_to(SUNNY));
+    w.run(2);
+    assert_eq!(w.guests[0].driver.social.talker.blocked, 1);
+}
+
 #[test]
 fn an_npc_is_in_one_conversation_at_a_time() {
     let mut w = World::new(&["Sunny", "Chet"]);

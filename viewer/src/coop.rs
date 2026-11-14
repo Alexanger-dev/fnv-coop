@@ -484,6 +484,8 @@ impl Coop {
                 lines.push(line);
                 let (on, line) = Self::social_on();
                 host.social_on = on;
+                // Each player's opening is its own, its conversations too (Doc Mitchell's).
+                host.social.talker.opening = opening_quest(&plugins);
                 lines.push(line);
                 (Endpoint::host(b, token, cfg), Role::Host(Box::new(host)))
             }
@@ -573,6 +575,7 @@ impl Coop {
                             // social
                             g.social.party.key = session::party::key_of(&self.social.name);
                             g.social.party.own_quests = self.social.own_quests.clone();
+                            g.social.talker.opening = opening_quest(&self.plugins);
                             *slot = Some(Box::new(g));
                         }
                         // Joined again after losing the host: resume from what this guest has.

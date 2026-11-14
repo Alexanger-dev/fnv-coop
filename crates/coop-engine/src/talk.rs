@@ -69,6 +69,8 @@ pub struct Talk {
     /// conversation.
     enacting: AtomicU32,
     busy: RwLock<BTreeSet<u32>>,
+    /// This player's own opening runs: its conversations are its own (see [`set_own_opening`]).
+    opening: AtomicBool,
     events: Mutex<Vec<Event>>,
     held: AtomicU64,
     own: AtomicU64,
@@ -99,6 +101,16 @@ pub fn sharing(e: &mut Engine) -> bool {
 
 /// Names the references other players are talking to: a conversation with one of them does not
 /// start here.
+/// Says whether this player's own opening runs in this game (Doc Mitchell's house, a quest each
+/// player plays for itself). Its conversations are then its own, whoever it talks to: on a guest
+/// a line of the shared story is run here, not held for the host, and no NPC is refused as
+/// another player's (the owner, 2026-11-14: both players sat for Doc Mitchell's questions; he
+/// asked the host's and stared at the guest until the host was done). Each game has its own Doc
+/// Mitchell for it.
+pub fn set_own_opening(e: &mut Engine, on: bool) {
+    e.ext_free::<Talk>().opening.store(on, Ordering::SeqCst);
+}
+
 pub fn set_busy(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
     let t = e.ext_free::<Talk>();
     *t.busy.write().unwrap_or_else(PoisonError::into_inner) = ids.into_iter().collect();
@@ -320,7 +332,8 @@ fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
     let npc = e.mem.u32(speaker.wrapping_add(addr::FORM_ID_OFFSET));
     let id = e.mem.u32(info.wrapping_add(addr::FORM_ID_OFFSET));
     let quest = quest_of(e, info);
-    let held = gate::is_guest(e) && quest != 0 && !gate::is_own_quest(e, quest);
+    let opening = e.ext_free::<Talk>().opening.load(Ordering::SeqCst);
+    let held = gate::is_guest(e) && quest != 0 && !gate::is_own_quest(e, quest) && !opening;
     let t = e.ext_free::<Talk>();
     match (held, quest) {
         (true, _) => t.held.fetch_add(1, Ordering::SeqCst),
@@ -344,7 +357,11 @@ fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
 pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
     let speaker = a.first().copied().unwrap_or(0);
     let t = e.ext_free::<Talk>();
-    if speaker != 0 && t.sharing.load(Ordering::SeqCst) && menu_speaker(e).is_none() {
+    if speaker != 0
+        && t.sharing.load(Ordering::SeqCst)
+        && !t.opening.load(Ordering::SeqCst)
+        && menu_speaker(e).is_none()
+    {
         let npc = e.mem.u32(speaker.wrapping_add(addr::FORM_ID_OFFSET));
         let t = e.ext_free::<Talk>();
         if t.busy
@@ -569,6 +586,36 @@ mod tests {
         set_sharing(&mut s.e, false);
         set_busy(&mut s.e, [NPC]);
         assert!(s.talk_to(NPC));
+    }
+
+    /// The owner, 2026-11-14: both players sat for Doc Mitchell's questions; he asked the host's
+    /// and stared at the guest until the host was done (the host's conversation made him busy for
+    /// the guest). While this player's own opening runs its conversations are its own: no NPC is
+    /// refused it, and on a guest a line of the shared story runs here instead of being held.
+    #[test]
+    fn in_its_own_opening_a_players_conversations_are_its_own() {
+        let mut s = story();
+        gate::set_guest(&mut s.e, true);
+        gate::set_own_quests(&mut s.e, [OWN]);
+        set_sharing(&mut s.e, true);
+        set_busy(&mut s.e, [NPC]);
+        set_own_opening(&mut s.e, true);
+        assert!(s.talk_to(NPC));
+        s.say(SHARED_LINE, false);
+        assert_eq!(forms::quest_stage(&mut s.e, MQ), Some(10));
+        let held: Vec<bool> = take_events(&mut s.e)
+            .into_iter()
+            .map(|ev| matches!(ev, Event::Said { held: true, .. }))
+            .collect();
+        assert_eq!(held, [false]);
+        assert!(close_menu(&mut s.e));
+        // The opening over: refused again, and held again.
+        set_own_opening(&mut s.e, false);
+        assert!(!s.talk_to(NPC));
+        set_busy(&mut s.e, []);
+        assert!(s.talk_to(NPC));
+        s.say(SHARED_LINE, true);
+        assert_eq!(forms::quest_stage(&mut s.e, MQ), Some(10));
     }
 
     #[test]
