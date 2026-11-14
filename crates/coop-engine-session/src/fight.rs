@@ -760,6 +760,12 @@ impl Fight {
         // unless it is so far that only a jump makes sense.
         let to = if off > SNAP_DIST {
             self.following.snaps += 1;
+            if self.following.snaps <= 60 {
+                self.say(format!(
+                    "co-op fights: actor {id:08x} was {off:.0} units from its owner's path: put on it at ({:.0}, {:.0}, {:.0})",
+                    place.pos[0], place.pos[1], place.pos[2]
+                ));
+            }
             place.pos
         } else if off > CATCH_DIST {
             let step = CATCH_SPEED * self.following.dt_ms as f32 / 1000.0;
