@@ -526,6 +526,29 @@ impl Harness {
                     _ => vec!["scene ACTORHEX TARGETHEX TOPICHEX".into()],
                 }
             }
+            // `npcs`: every actor the game runs at full detail around its player, with its place,
+            // space and fight, in one line (`id x y z space combat dead;` each).
+            "npcs" => {
+                let mut out = Vec::new();
+                for a in coop_engine::fight::near(e) {
+                    let id = e.mem.u32(a + coop_engine::addr::FORM_ID_OFFSET);
+                    if id == coop_engine::actors::PLAYER_REF_ID {
+                        continue;
+                    }
+                    let s = coop_engine::fight::snap(e, a);
+                    let pos = coop_engine::fight::place_of_ptr(e, a);
+                    out.push(format!(
+                        "{id:08x} {:.0} {:.0} {:.0} {:08x} {} {}",
+                        pos[0],
+                        pos[1],
+                        pos[2],
+                        coop_engine::fight::space_of(e, a),
+                        u8::from(s.in_combat),
+                        u8::from(s.dead())
+                    ));
+                }
+                vec![format!("npcs {}: {}", out.len(), out.join("; "))]
+            }
             // `watch ACTOR FRAMES`: the actor's steps between frames for that many frames, then
             // one line: how far it went, its largest step, how many were jumps.
             "watch" => {
