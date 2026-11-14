@@ -211,3 +211,39 @@ would go to the wrong person are silent. A per-script "host runs it" stays as th
    (headless test: a host command and a local trigger together play once).
 6. Proposals and scene commands have separate switches; with both off the story channel behaves as in run 5.
 
+
+## D6 (2026-11-14): every character the same in both games
+
+**Asked by the owner** after PC run 30: no teleports, no actor facing one player while shooting the
+other, no actor lagging in one game while smooth in the other; every character synced. The owner asked
+for a planner and a committee of three, two votes to win.
+
+**What the code did.** One game owns each actor and publishes its state about 20 times a second (place,
+heading, health, combat target, flags; the animation field unused). The other games' copies kept their
+own AI: their own package and movement, their own combat target (often their own player) and their own
+attacks; they were moved to the newest sample (`SetPos`, no interpolation) and teleported after straying
+1.5 s. Switching a copy's AI off stops its animation and character controller altogether (`bProcessMe`;
+the frozen pose of PC run 10, the sinking of run 29).
+
+**Options (planner).** A: an animated puppet: AI on, its decisions silenced by wraps (the mover forced to
+the owner's move flags so the animation's own root motion moves it; target choice and `SetTarget` locked
+to the owner's target, mapped; its own `QueueAttack` refused and the owner's attacks replayed), a 100 ms
+jitter buffer on the owner's clock, gentle position correction, teleports only for true discontinuities.
+B: the same target lock, attack replay and jitter buffer, with the copy moved to the buffered place every
+frame and the move flags used only to pick the animation (a strict subset of A). C: steer the copy with
+the game's own pathing (path rebuilds stutter and lag).
+
+**Decision: B then A, 3 votes to 0.** B first (target lock and attack replay fix the worst sight, the
+buffer the lag and the teleports), measured in the two-game harness; then A by lowering the correction
+gain so that the animation's root motion moves the copy.
+
+**Binding conditions (from the votes).**
+1. The wraps touch copies only: an actor its own game owns is never affected (tests on both sides).
+2. A refused attack or target never leaves a copy's combat stuck (a copy whose owner stops fighting
+   stops too).
+3. The puppet set does not cover an actor that is sitting, talking, in a scene or in another space: it
+   is left to its own AI (and its package) while the owner reports it still or busy.
+4. A replayed attack deals no damage in the copy's game; damage stays the host's.
+5. Before A: the path start (`009db090`) is wrapped for copies, the actor values that change speed are
+   synced, and the weapon-drawn state is carried; a run over stairs and through a door keeps the error
+   bounded with no snaps (harness).
