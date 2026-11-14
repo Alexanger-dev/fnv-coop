@@ -90,6 +90,16 @@ pub enum ActorMsg {
         /// Damage points.
         amount: u16,
     },
+    /// A game's copy of the actor went for that game's own player while the owner's actor
+    /// fights nobody (each game's actors notice only its own player): the owner's game is asked
+    /// to have it fight that player. Sent by that player's game; the host passes it to the
+    /// owner.
+    Engage {
+        /// Actor.
+        actor: FormId,
+        /// The player it went for (the sender's own).
+        player: PlayerId,
+    },
     /// Host: damage applied.
     Damaged {
         /// Victim.

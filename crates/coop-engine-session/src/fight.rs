@@ -154,6 +154,9 @@ pub const AIM_START_EVERY_MS: u64 = 1_000;
 /// A copy that fights here while its owner's actor fights nobody stops after this long (ms): the
 /// owner's game may take a moment to take up a fight a player began here.
 pub const CALM_AFTER_MS: u64 = 2_000;
+/// A copy that went for this game's player asks its owner's game to take the fight up at most
+/// this often (ms).
+pub const ENGAGE_EVERY_MS: u64 = 2_000;
 
 /// The copies in this game of actors another game runs, shown doing what the owner's actor does
 /// (docs/coop/DECISIONS.md D6, stage B): fighting its target, attacking when it attacks.
@@ -177,19 +180,30 @@ pub struct Puppeting {
     pub replays: u32,
     /// Replays the copy's game did not queue (its weapon, ammunition or animation).
     pub replays_refused: u32,
+    /// Copies that went for this game's player while their owner's actor fought nobody, this
+    /// frame: the owner's game is asked to take that fight up.
+    engage: Vec<u32>,
+    /// When each copy last asked so.
+    asked: BTreeMap<u32, u64>,
+    /// Such asks sent.
+    pub asks: u32,
+    /// Fights this game's actors took up for another game's copy.
+    pub taken_up: u32,
 }
 
 impl Puppeting {
     /// One phrase for the log.
     pub fn status(&self) -> String {
         format!(
-            "copies {}: turned to their owner's target {}, combats started {}, stopped {}, attacks replayed {} (not queued {})",
+            "copies {}: turned to their owner's target {}, combats started {}, stopped {}, attacks replayed {} (not queued {}), fights asked of the owner {}, taken up for a copy {}",
             self.copies.len(),
             self.turns,
             self.starts,
             self.stops,
             self.replays,
-            self.replays_refused
+            self.replays_refused,
+            self.asks,
+            self.taken_up
         )
     }
 }
@@ -667,6 +681,18 @@ impl Fight {
                 Aim::Already | Aim::Missing => {}
             }
         } else if here.in_combat && !fights {
+            // It went for this game's own player: each game's actors notice only that game's
+            // player (the others are avatars), so the owner's game is asked to have its actor
+            // fight this player (harness, 2026-11-14: the geckos a guest's game ran stood while
+            // their copies in the host's game went for the host). Unless it does, the copy stops.
+            let due = p
+                .asked
+                .get(&id)
+                .map_or(true, |t| now_ms.saturating_sub(*t) >= ENGAGE_EVERY_MS);
+            if here.target == actors::PLAYER_REF_ID && due && self.cap >= Cap::Threat {
+                p.asked.insert(id, now_ms);
+                p.engage.push(id);
+            }
             let since = *p.calm_since.entry(id).or_insert(now_ms);
             if now_ms.saturating_sub(since) >= CALM_AFTER_MS && puppet::stop(e, id) {
                 p.calm_since.remove(&id);
@@ -901,6 +927,18 @@ impl Fight {
         p.seen.retain(|id, _| copies.contains_key(id));
         p.started.retain(|id, _| copies.contains_key(id));
         p.calm_since.retain(|id, _| copies.contains_key(id));
+        p.asked.retain(|id, _| copies.contains_key(id));
+    }
+
+    /// Has this game's actor `actor` fight `player` for another game's copy that went for that
+    /// player, unless it fights already (`player` is named in this game: its own player or an
+    /// avatar).
+    fn take_up(&mut self, e: &mut Engine, actor: u32, target: u32) {
+        // (a player without an avatar here is 0: no form, no fight)
+        let idle = fight::snap_of(e, actor).is_some_and(|s| !s.in_combat && !s.dead());
+        if idle && fight::start_combat(e, actor, target) {
+            self.puppets.taken_up += 1;
+        }
     }
 
     /// The host's frame, between two of the game's frames and before coop-core's tick: guests'
@@ -925,6 +963,32 @@ impl Fight {
             self.host_damage(e, sync, avatars, now_ms, &mut out);
         }
         self.host_follow(e, sync, avatars, now_ms);
+        // A copy here of an actor a guest runs went for the host: that guest's game is asked to
+        // have its actor fight the host. A guest's copy of one of the host's went for that
+        // guest: the host's game has it fight that guest's avatar.
+        for id in std::mem::take(&mut self.puppets.engage) {
+            let owner = sync.live.actors.own.get(FormId(id)).and_then(|r| r.owner);
+            if let Some(owner) = owner.filter(|o| *o != PlayerId::HOST) {
+                out.push((
+                    owner,
+                    Msg::Actor(ActorMsg::Engage {
+                        actor: FormId(id),
+                        player: PlayerId::HOST,
+                    }),
+                ));
+                self.puppets.asks += 1;
+            }
+        }
+        for (actor, player) in std::mem::take(&mut sync.live.actors.engages) {
+            // (the host passes one for an actor a guest runs to that guest)
+            if self.cap >= Cap::Threat {
+                let target = avatars
+                    .iter()
+                    .find(|(p, _)| *p == player)
+                    .map_or(0, |a| a.1);
+                self.take_up(e, actor.0, target);
+            }
+        }
         if self
             .published_ms
             .is_some_and(|t| now_ms.saturating_sub(t) < PUBLISH_EVERY_MS)
@@ -1907,6 +1971,26 @@ impl Fight {
         if holding != self.held {
             fight::set_held(e, holding.iter().copied());
             self.held = holding;
+        }
+        // A copy here went for this player: the game that runs the actor is asked to take the
+        // fight up; another game's copy of an actor this game runs went for its player: this
+        // game's actor fights that player's avatar.
+        for id in std::mem::take(&mut self.puppets.engage) {
+            out.push(Msg::Actor(ActorMsg::Engage {
+                actor: FormId(id),
+                player: sync.player,
+            }));
+            self.puppets.asks += 1;
+        }
+        for (actor, player) in std::mem::take(&mut sync.live.actors.engages) {
+            if self.cap >= Cap::Threat {
+                let target = local_target(
+                    PLAYER_TARGET_BASE + u32::from(player.0),
+                    sync.player,
+                    avatars,
+                );
+                self.take_up(e, actor.0, target);
+            }
         }
         if self.cap >= Cap::Damage {
             self.guest_damage(e, sync, avatars, &mut out);

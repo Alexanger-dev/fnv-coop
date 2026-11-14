@@ -1918,3 +1918,83 @@ fn with_the_threat_slice_every_avatar_can_be_fought() {
     assert!(!p.host.ghost(guest_avatar));
     assert!(!p.guest.ghost(host_avatar));
 }
+
+/// Each game's actors notice only its own player (the others are avatars there). A guest's copy
+/// of an actor the host runs that goes for the guest has the host's actor fight the guest's
+/// avatar: in both games it fights the guest.
+#[test]
+fn a_guests_copy_that_goes_for_the_guest_has_the_hosts_actor_fight_the_guest() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [30.0, 20.0, 0.0], 0.5);
+    p.frames(40);
+    // Going for another actor asks nothing.
+    p.guest.place_actor(GECKO, HOUSE, [60.0, 20.0, 0.0], 0.5);
+    p.guest.set_combat(RAIDER, GECKO);
+    p.frames(6);
+    assert_eq!(p.guest_fight().puppets.asks, 0);
+    p.guest.set_combat(RAIDER, PLAYER);
+    p.frames(6);
+    assert_eq!(p.host.actor_view(RAIDER).target, p.guest_avatar());
+    assert_eq!(p.guest.actor_view(RAIDER).target, PLAYER);
+    assert_eq!(
+        (
+            p.guest_fight().puppets.asks,
+            p.host_fight().puppets.taken_up
+        ),
+        (1, 1)
+    );
+    p.frames(3 * (fight::CALM_AFTER_MS / 50) as u32);
+    assert!(p.guest.actor_view(RAIDER).in_combat);
+    assert_eq!(p.guest_fight().puppets.stops, 0);
+    p.story_is_whole();
+}
+
+/// After a hand-off, the host's copy of the guest's actor that goes for the host has the guest's
+/// actor fight the host's avatar (harness, 2026-11-14: the guest's geckos stood while their copies
+/// went for the host and were stopped again and again).
+#[test]
+fn the_hosts_copy_that_goes_for_the_host_has_the_guests_actor_fight_the_host() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(80);
+    assert!(p.host_fight().theirs().contains(&RAIDER));
+    p.host.set_combat(RAIDER, PLAYER);
+    p.frames(6);
+    assert_eq!(p.guest.actor_view(RAIDER).target, p.host_avatar());
+    assert_eq!(p.host.actor_view(RAIDER).target, PLAYER);
+    assert_eq!(
+        (
+            p.host_fight().puppets.asks,
+            p.guest_fight().puppets.taken_up
+        ),
+        (1, 1)
+    );
+    p.frames(3 * (fight::CALM_AFTER_MS / 50) as u32);
+    assert!(p.host.actor_view(RAIDER).in_combat);
+    assert_eq!(p.host_fight().puppets.stops, 0);
+}
+
+/// Without the threat slice no game's actor is turned on a player for another game's copy: the
+/// copy stops.
+#[test]
+fn without_the_threat_slice_a_copys_own_fight_is_not_taken_up() {
+    let mut p = Pair::followed();
+    p.guest.set_combat(RAIDER, PLAYER);
+    p.frames(3 * (fight::CALM_AFTER_MS / 50) as u32);
+    assert!(!p.host.actor_view(RAIDER).in_combat);
+    assert!(!p.guest.actor_view(RAIDER).in_combat);
+    assert_eq!(
+        (
+            p.guest_fight().puppets.asks,
+            p.host_fight().puppets.taken_up
+        ),
+        (0, 0)
+    );
+}
