@@ -443,6 +443,8 @@ fn without_the_threat_slice_avatars_stay_ghosts_and_nobody_is_redirected() {
     let mut p = in_a_fight("damage");
     let avatar = p.guest_avatar();
     assert!(p.host.ghost(avatar));
+    let host_avatar = p.host_avatar();
+    assert!(p.guest.ghost(host_avatar));
     p.host.set_health(RAIDER, 2000.0);
     p.host.set_combat(RAIDER, PLAYER);
     for _ in 0..6 {
@@ -1903,4 +1905,16 @@ fn the_threat_director_leaves_an_actor_a_guest_runs_alone() {
     p.frames(60);
     assert_eq!(p.host.actor_view(RAIDER).target, PLAYER);
     assert_eq!(p.host_fight().retargets, 0);
+}
+
+/// With the threat slice every game's actors may fight every player: the host's avatar in a
+/// guest's game is not a ghost either (that game runs the actors near its player after a
+/// hand-off).
+#[test]
+fn with_the_threat_slice_every_avatar_can_be_fought() {
+    let p = in_a_fight("");
+    let (host_avatar, guest_avatar) = (p.host_avatar(), p.guest_avatar());
+    let mut p = p;
+    assert!(!p.host.ghost(guest_avatar));
+    assert!(!p.guest.ghost(host_avatar));
 }

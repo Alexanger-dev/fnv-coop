@@ -22,7 +22,8 @@
 //! that is fighting a player, the player it attends to; when that is another player than the
 //! game's own choice the host's game is asked to start that combat (the body of `StartCombat`),
 //! against the guest's avatar or the host's player. An actor fighting someone who is not a
-//! player is left alone. Avatars on the host stop being ghosts so that they can be fought.
+//! player is left alone. Avatars stop being ghosts so that they can be fought (on a guest too: its
+//! game runs the actors near its player after a hand-off).
 //!
 //! **Downed and revive.** In a session a player does not die at once: the game's kill of its
 //! own player is held, the player is left with 1 health and no controls, and the machine tells
@@ -566,14 +567,17 @@ impl Fight {
         }
     }
 
-    /// Tells the hit wrap which references are players' avatars, when that changed. On a host
-    /// that lets its actors fight guests, a new avatar stops being a ghost.
+    /// Tells the hit wrap which references are players' avatars, when that changed. Where actors
+    /// may fight every player, a new avatar stops being a ghost: on the host, and on a guest too,
+    /// whose game runs the actors near its player after a hand-off (harness, 2026-11-14: the
+    /// geckos a guest's game ran never went for the host's avatar there, a ghost, while their
+    /// copies in the host's game went for the host and were stopped over and over).
     fn know_avatars(&mut self, e: &mut Engine, avatars: &[(PlayerId, u32)]) {
         let ids: BTreeSet<u32> = avatars.iter().map(|a| a.1).collect();
         if ids == self.avatars {
             return;
         }
-        if !self.guest && self.cap >= Cap::Threat {
+        if self.cap >= Cap::Threat {
             for id in ids.difference(&self.avatars) {
                 fight::set_ghost(e, *id, false);
             }
