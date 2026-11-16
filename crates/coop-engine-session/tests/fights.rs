@@ -31,7 +31,7 @@ const STAY_IN: u32 = 0x0010_6a02;
 
 fn spec() -> StorySpec {
     StorySpec {
-        quests: vec![(MQ, vec![10, 20]), (OPENING, vec![200])],
+        quests: vec![(MQ, vec![10, 20, 30]), (OPENING, vec![200])],
         globals: vec![(0x39, 0.0)],
         cells: vec![HOUSE, TOWN, YARD],
         exteriors: vec![(DESERT, MOJAVE)],
@@ -1388,6 +1388,24 @@ fn the_hosts_copy_of_an_actor_a_guest_runs_does_nothing_of_its_own() {
     p.host.place_actor(GECKO, HOUSE, [5000.0, 5000.0, 0.0], 0.5);
     p.host.run_object_script_setting_stage(GECKO, MQ, 20);
     assert!(done(&mut p, MQ, 20));
+    // The owner, 2026-11-16: the host's player talks to it; its line's result is this
+    // player's own and runs here (the guest's game never says that line).
+    const LINE: u32 = 0x0010_7a01;
+    p.host
+        .add_info(LINE, MQ, "See? You're getting the hang of it.", "");
+    p.host.set_info_result(LINE, false, MQ, 30);
+    assert!(p.host.talk_to(RAIDER));
+    p.host.say(LINE, false);
+    assert!(done(&mut p, MQ, 30));
+    assert_eq!(coop_engine::gate::puppet_skips(&mut p.host.e), 1);
+    // Its own script meanwhile (no line's result) is still skipped.
+    p.host.run_object_script_setting_stage(RAIDER, OPENING, 200);
+    assert!(!done(&mut p, OPENING, 200));
+    assert_eq!(coop_engine::gate::puppet_skips(&mut p.host.e), 2);
+    p.host.leave();
+    // Its line outside a conversation with this player is still the guest's game's.
+    p.host.say_as(RAIDER, LINE, false);
+    assert_eq!(coop_engine::gate::puppet_skips(&mut p.host.e), 3);
     // Dead, its scripts run here (its death is the host's to run).
     p.host.kill(RAIDER);
     p.host.run_object_script_setting_stage(RAIDER, OPENING, 200);

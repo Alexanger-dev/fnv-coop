@@ -334,6 +334,12 @@ pub(crate) fn run_result(e: &mut Engine, a: &[u32]) -> Ret {
     }
 }
 
+/// Whether a line's result is running now on `reference` (a pointer) in this player's own
+/// conversation: a result runs and `reference` is the open dialogue menu's speaker.
+pub(crate) fn own_result_on(e: &mut Engine, reference: u32) -> bool {
+    result_quest(e).is_some() && menu_speaker(e) == Some(reference)
+}
+
 /// The quest of the line whose result is running now (the innermost), 0 for a line of no quest;
 /// `None` when no line's result runs.
 pub fn result_quest(e: &mut Engine) -> Option<u32> {
@@ -352,6 +358,19 @@ fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
     }
     let word = |i: usize| a.get(i).copied().unwrap_or(0);
     let (info, index, speaker) = (word(0), word(1), word(2));
+    if std::env::var_os("NV_COOP_TALK_LOG").is_some() && info != 0 {
+        let id = e.mem.u32(info.wrapping_add(addr::FORM_ID_OFFSET));
+        let who = if speaker == 0 {
+            0
+        } else {
+            e.mem.u32(speaker.wrapping_add(addr::FORM_ID_OFFSET))
+        };
+        eprintln!(
+            "co-op talk: result of line {id:08x} (part {index}) for {who:08x}, menu speaker {}, said before {}",
+            menu_speaker(e) == Some(speaker),
+            e.mem.u8(info + addr::INFO_SAID_OFFSET)
+        );
+    }
     // Only the player's own conversation: the open menu's speaker. Other lines (NPCs talking to
     // each other, combat shouts) are each game's own.
     if info == 0 || speaker == 0 || menu_speaker(e) != Some(speaker) {
@@ -406,6 +425,18 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
         && menu_speaker(e).is_none()
     {
         let npc = e.mem.u32(speaker.wrapping_add(addr::FORM_ID_OFFSET));
+        if std::env::var_os("NV_COOP_TALK_LOG").is_some() {
+            let (copy, greets) = (crate::puppet::is_copy(e, npc), greets(e, speaker));
+            let busy = e
+                .ext_free::<Talk>()
+                .busy
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(&npc);
+            eprintln!(
+                "co-op talk: conversation with {npc:08x} asked of the game: a copy {copy}, came to greet {greets}, busy {busy}"
+            );
+        }
         if crate::puppet::is_copy(e, npc) && greets(e, speaker) {
             unqueue(e, speaker);
             e.ext_free::<Talk>().push(Event::NotGreeted { npc });

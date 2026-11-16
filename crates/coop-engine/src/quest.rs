@@ -442,6 +442,17 @@ pub(crate) fn objective_state(e: &mut Engine, a: &[u32]) -> Ret {
         a.first().copied().unwrap_or(0),
         a.get(1).copied().unwrap_or(0),
     );
+    if o != 0 && std::env::var_os("NV_COOP_TALK_LOG").is_some() {
+        let q = e.mem.u32(o.wrapping_add(addr::OBJECTIVE_QUEST_OFFSET));
+        eprintln!(
+            "co-op talk: objective {} of {:08x}: {} to {state} (applying {}, result of a line {:?})",
+            e.mem.u32(o.wrapping_add(addr::OBJECTIVE_INDEX_OFFSET)),
+            if q != 0 { e.mem.u32(q.wrapping_add(addr::FORM_ID_OFFSET)) } else { 0 },
+            e.mem.u32(o.wrapping_add(addr::OBJECTIVE_STATE_OFFSET)),
+            gate::is_applying(e),
+            crate::talk::result_quest(e)
+        );
+    }
     if o != 0 && !gate::is_guest(e) && !gate::is_applying(e) && state & 2 == 0 {
         let now = e.mem.u32(o.wrapping_add(addr::OBJECTIVE_STATE_OFFSET));
         let q = e.mem.u32(o.wrapping_add(addr::OBJECTIVE_QUEST_OFFSET));

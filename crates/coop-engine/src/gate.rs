@@ -90,6 +90,11 @@ pub fn puppet_skips(e: &mut Engine) -> u64 {
 }
 
 /// Host: whether a script run on `reference` (a pointer, 0 for none) is skipped as a puppet's.
+/// The result of a line in this player's own conversation with it is never skipped: that line
+/// was said here, to this player, and the guest's game never says it (the owner, 2026-11-16:
+/// the host talked to Sunny at the first well while the guest's game ran her; her line's result,
+/// `SetObjectiveCompleted VCG02 40`, was skipped, the line is said once, and she waited at the
+/// well for good whoever spoke to her).
 fn puppets_own(e: &mut Engine, reference: u32) -> bool {
     if reference == 0 {
         return false;
@@ -106,7 +111,10 @@ fn puppets_own(e: &mut Engine, reference: u32) -> bool {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .contains(&id);
-    puppet && !crate::talk::enacting(e) && crate::actors::dead(e, id) == Some(false)
+    puppet
+        && !crate::talk::enacting(e)
+        && !crate::talk::own_result_on(e, reference)
+        && crate::actors::dead(e, id) == Some(false)
 }
 
 /// A script that is running: what a change made meanwhile is put down to.

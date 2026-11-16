@@ -768,6 +768,11 @@ impl Harness {
                 None => vec![format!("flags {rest}: not here")],
             },
             "say" => vec![rest.to_string()],
+            // `said INFOHEX`: whether the game has that line marked as said.
+            "said" => match hex(rest) {
+                Some(id) => vec![format!("said {rest}: {}", coop_engine::talk::said(e, id))],
+                None => vec!["said INFOHEX".into()],
+            },
             "menu" => vec![match coop_engine::talk::menu_npc(e) {
                 Some(npc) => format!("dialogue open with {npc:08x}"),
                 None => "no dialogue open".into(),
