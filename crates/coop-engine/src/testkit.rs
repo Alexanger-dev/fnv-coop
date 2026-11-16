@@ -91,7 +91,7 @@ pub const BOTTLE_SCRIPT_ID: u32 = 0x0010_a1ef;
 /// Where a reference's primitive is kept, in its own block (a trigger volume has one).
 const PRIMITIVE_OFFSET: u32 = 0xeb0;
 /// Where an actor's being in a conversation is kept, in its own block.
-const DIALOGUE_OFFSET: u32 = 0xec0;
+pub(crate) const DIALOGUE_OFFSET: u32 = 0xec0;
 /// Where an actor's count of package evaluations is kept, in its own block.
 const EVALUATIONS_OFFSET: u32 = 0xe80;
 /// Where an actor's conversations are kept, in its own block: how many it started, then the
@@ -626,6 +626,11 @@ impl Story {
             let at = a[0] + EVALUATIONS_OFFSET;
             let n = e.mem.u32(at);
             e.mem.set_u32(at, n + 1);
+            // A conversation is kept by an evaluation, with a reset of the AI or without (the
+            // game's own end of it is the actor's slot 0x288).
+            if e.mem.u32(a[0] + DIALOGUE_OFFSET) != 0 {
+                return Ret::default();
+            }
             let picked = e
                 .call(addr::PACKAGE_LIST_FIND_CURRENT, &args![0u32, a[0]])
                 .u32();
@@ -1261,6 +1266,11 @@ impl Story {
     pub fn set_in_dialogue(&mut self, id: u32, talking: bool) {
         let a = crate::actors::actor(&mut self.e, id).expect("an actor of the story");
         self.e.mem.set_u32(a + DIALOGUE_OFFSET, u32::from(talking));
+    }
+
+    /// Whether actor `id` is in a conversation now.
+    pub fn in_dialogue(&mut self, id: u32) -> bool {
+        crate::fight::in_dialogue(&mut self.e, id)
     }
 
     /// Makes this game let cell `cell` go (no longer loaded; what is in it is not drawn), or load

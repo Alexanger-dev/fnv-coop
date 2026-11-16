@@ -323,6 +323,8 @@ pub struct Fight {
     pub follow: bool,
     /// Guest: since when each actor has been that far off.
     far_since: BTreeMap<u32, u64>,
+    /// Guest: conversations here ended because they were over on the host (see `ask_package`).
+    pub talks_ended: u64,
     /// Since when each actor has been in a conversation in this game (see [`TALK_GRACE_MS`]).
     talk_since: BTreeMap<u32, u64>,
     /// How many times a copy was sent walking back to where its owner's actor is.
@@ -501,6 +503,7 @@ impl Fight {
             talk_since: BTreeMap::new(),
             nudges: 0,
             talks_left: 0,
+            talks_ended: 0,
             packages: BTreeMap::new(),
             watched: BTreeSet::new(),
             package_asked: BTreeMap::new(),
@@ -2172,6 +2175,17 @@ impl Fight {
     /// Asks this game's copy of actor `id` to pick its package again when it does not run the
     /// one the host's runs.
     fn ask_package(&mut self, e: &mut Engine, id: u32, now_ms: u64) {
+        // In a conversation with this game's player, or one here still in its grace (a scene
+        // this game plays as the host's does, PC run 30): left to it.
+        if coop_engine::talk::menu_npc(e) == Some(id) || self.left_to_talk(e, id, now_ms) {
+            return;
+        }
+        // In a conversation here past its grace, the host's actor on a package of its own: the
+        // conversation never moved on here (harness, 2026-11-16: the guest's copy of Joe Cobb
+        // started his scene, said no line, and stood in the saloon for good while the host's
+        // left town). A pick of a package, even with a reset of the AI, keeps it in it; it is
+        // ended as the game ends a conversation whose lines ran out, then picks the host's.
+        let stuck = fight::in_dialogue(e, id);
         // Not running the host's package (an interrupt ended, a cell loaded): told
         // to pick again, without a reset of its AI, at most every few seconds and a
         // few times for one package (it may be one this copy cannot run).
@@ -2195,7 +2209,19 @@ impl Fight {
                 } else if n < PACKAGE_ASKS_AT_MOST {
                     self.package_tries.insert(id, (wanted, n + 1));
                     self.package_asks += 1;
-                    gate::applying(e, |e| coop_engine::commands::repick_package(e, id));
+                    if stuck {
+                        self.talks_ended += 1;
+                        self.say(format!(
+                            "co-op packages: actor {id:08x} has been in a conversation here for {}s that is over on the host: ended, to take the host's package {wanted:08x}",
+                            TALK_GRACE_MS / 1000
+                        ));
+                    }
+                    gate::applying(e, |e| {
+                        if stuck {
+                            coop_engine::commands::end_conversation(e, id);
+                        }
+                        coop_engine::commands::repick_package(e, id)
+                    });
                     if n + 1 == PACKAGE_ASKS_AT_MOST {
                         self.say(format!(
                             "co-op packages: actor {id:08x} does not take the host's package {wanted:08x} (it runs {:08x}): no longer asked",

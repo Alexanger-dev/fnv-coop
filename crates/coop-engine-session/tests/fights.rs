@@ -940,6 +940,45 @@ fn a_followed_actor_in_a_conversation_here_is_left_to_it() {
     assert!(close(g.pos, h.pos), "{g:?} {h:?}");
 }
 
+/// Harness, 2026-11-16: the guest's copy of Joe Cobb started his scene, said no line, and stood
+/// in the saloon for good, in his conversation, while the host's had walked out and left town (a
+/// pick of the host's package without a reset of the AI keeps a conversation). Past its grace,
+/// the host's actor on a package of its own, the conversation here is ended as `evp` ends one
+/// and the copy takes the host's package; one with this game's player is never ended.
+#[test]
+fn a_conversation_here_that_is_over_on_the_host_is_ended_after_its_grace() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.host.set_own_package(RAIDER, STAY_IN);
+    p.guest.set_own_package(RAIDER, STAY_IN);
+    p.frames(40);
+    // The scene here: in a conversation. The host's is done with it and walks out.
+    p.guest.set_in_dialogue(RAIDER, true);
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.host.place_actor(RAIDER, TOWN, [10.0, 20.0, 0.0], 0.5);
+    let grace = (fight::TALK_GRACE_MS / 50) as u32;
+    p.frames(grace - 20);
+    assert!(p.guest.in_dialogue(RAIDER));
+    assert_eq!(p.guest.package(RAIDER), STAY_IN);
+    assert_eq!(p.guest_fight().talks_ended, 0);
+    p.frames(80);
+    assert!(!p.guest.in_dialogue(RAIDER));
+    assert_eq!(p.guest.package(RAIDER), LEAD_OUT);
+    assert_eq!(p.guest_fight().talks_ended, 1);
+    // With this game's player, never.
+    p.host.set_own_package(RAIDER, STAY_IN);
+    p.host.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.frames(40);
+    assert!(p.guest.talk_to(RAIDER));
+    p.guest.set_in_dialogue(RAIDER, true);
+    p.host.set_own_package(RAIDER, LEAD_OUT);
+    p.frames(3 * grace);
+    assert!(p.guest.in_dialogue(RAIDER));
+    assert_eq!(p.guest_fight().talks_ended, 1);
+}
+
 /// D7 (PC run 31: Sunny stood by her campfire in the host's game and further off in the guest's,
 /// where her copy, left to its own AI, had picked its own spot; committee 3-0): a copy stands where
 /// the host's actor stands, however long that one stays, standing; taken off it by its own game,

@@ -65,6 +65,7 @@ const START_COMBAT_FN: u32 = 0x0130_0060;
 const CONTROLLER_FN: u32 = 0x0130_0070;
 const STOP_COMBAT_FN: u32 = 0x0130_0080;
 const NODE_FN: u32 = 0x0130_0090;
+const END_DIALOGUE_FN: u32 = 0x0130_00b0;
 /// Counters: real `HitMe` runs, starts of combat.
 const HITS: u32 = RAN + 32;
 const COMBATS: u32 = RAN + 36;
@@ -224,6 +225,7 @@ pub(super) fn register(e: &mut Engine) {
         (addr::ACTOR_COMBAT_CONTROLLER_SLOT, CONTROLLER_FN),
         (addr::ACTOR_STOP_COMBAT_SLOT, STOP_COMBAT_FN),
         (addr::REF_GET_3D_SLOT, NODE_FN),
+        (addr::ACTOR_END_DIALOGUE_SLOT, END_DIALOGUE_FN),
         (addr::REF_IS_MOBILE_SLOT, super::IS_MOBILE_FN),
         (addr::ACTOR_SLOT_214, super::NOTHING_FN),
         (
@@ -274,6 +276,11 @@ pub(super) fn register(e: &mut Engine) {
     e.register(STOP_COMBAT_FN, |e, a| {
         e.mem.set_u8(a[0] + IN_COMBAT, 0);
         e.mem.set_u32(a[0] + TARGET, 0);
+        Ret::default()
+    });
+    // The game's end of a conversation: the actor is in none.
+    e.register(END_DIALOGUE_FN, |e, a| {
+        e.mem.set_u32(a[0] + super::DIALOGUE_OFFSET, 0);
         Ret::default()
     });
     // Its 3D: the actor itself stands in for the node, unless the test took it away.

@@ -729,6 +729,19 @@ pub fn repick_package(e: &mut Engine, id: u32) -> bool {
     true
 }
 
+/// Ends actor `id`'s conversation in this game as the game ends one whose lines ran out (the
+/// actor's slot 0x288). False when it is not in this game now or in no conversation.
+pub fn end_conversation(e: &mut Engine, id: u32) -> bool {
+    if !crate::fight::in_dialogue(e, id) {
+        return false;
+    }
+    let Some(a) = actors::actor(e, id) else {
+        return false;
+    };
+    e.vcall(a, addr::ACTOR_END_DIALOGUE_SLOT, &args![]);
+    true
+}
+
 pub fn evaluate_package(e: &mut Engine, id: u32) -> bool {
     let Some(a) = actors::actor(e, id) else {
         return false;

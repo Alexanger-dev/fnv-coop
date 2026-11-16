@@ -1513,3 +1513,7 @@ pub const QUEUED_MENU_DIALOGUE: u32 = 4;
 pub const INFO_MARK_SAID: u32 = 0x0061_f220;
 /// See [`INFO_MARK_SAID`].
 pub const INFO_SAID_OFFSET: u32 = 0x22;
+/// An actor's virtual slot +0x288: its conversation ends, as `MiddleHighProcess::ProcessDialogue`
+/// (`0091fbb0`) ends one whose lines ran out, and as a conversation whose target is gone is ended
+/// (`ProcessLists`): the dialogue package is let go and the actor picks a package again.
+pub const ACTOR_END_DIALOGUE_SLOT: u32 = 0x288;
