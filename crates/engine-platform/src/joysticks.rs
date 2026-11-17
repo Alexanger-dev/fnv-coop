@@ -54,6 +54,57 @@ const FORMAT_SIZE: u32 = 0x18;
 const OBJECT_FORMAT_SIZE: u32 = 0x10;
 /// The largest state and object count provided (the game's format: 0x50 bytes).
 const MAX_DATA_SIZE: u32 = 0x1000;
+/// `c_dfDIJoystick`: absolute axes, a `DIJOYSTATE` (0x50 bytes), 44 objects.
+const DIDF_ABSAXIS: u32 = 1;
+const JOYSTATE_SIZE: u32 = 0x50;
+const JOYSTICK_OBJECTS: u32 = 44;
+
+/// A DirectInput object type GUID: `{A36D02xx-C9F3-11CF-BFC7-444553540000}` with `low` its first
+/// byte (`GUID_XAxis` 0xe0 .. `GUID_POV` 0xf2).
+fn object_guid(low: u8) -> [u8; 16] {
+    [
+        low, 0x02, 0x6d, 0xa3, 0xf3, 0xc9, 0xcf, 0x11, 0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54, 0x00,
+        0x00,
+    ]
+}
+
+/// `c_dfDIJoystick`'s objects (`dinput8.lib`): the axes X, Y, Z, Rx, Ry, Rz and two sliders, four
+/// POVs and 32 buttons, each optional and of any instance, at their `DIJOYSTATE` offsets.
+fn standard_joystick_objects() -> Vec<ObjectFormat> {
+    const AXIS: u32 = 0x80ff_ff03;
+    const POV: u32 = 0x80ff_ff10;
+    const BUTTON: u32 = 0x80ff_ff0c;
+    let mut out = Vec::with_capacity(JOYSTICK_OBJECTS as usize);
+    // X, Y, Z, Rx, Ry, Rz, slider, slider.
+    for (i, low) in [0xe0, 0xe1, 0xe2, 0xf4, 0xf5, 0xe3, 0xe4, 0xe4]
+        .into_iter()
+        .enumerate()
+    {
+        out.push(ObjectFormat {
+            guid: Some(object_guid(low)),
+            offset: 4 * i as u32,
+            kind: AXIS,
+            flags: 0,
+        });
+    }
+    for i in 0..4 {
+        out.push(ObjectFormat {
+            guid: Some(object_guid(0xf2)),
+            offset: 0x20 + 4 * i,
+            kind: POV,
+            flags: 0,
+        });
+    }
+    for i in 0..32 {
+        out.push(ObjectFormat {
+            guid: None,
+            offset: 0x30 + i,
+            kind: BUTTON,
+            flags: 0,
+        });
+    }
+    out
+}
 const MAX_OBJECTS: u32 = 0x100;
 /// `SetCooperativeLevel` flags.
 const DISCL_EXCLUSIVE: u32 = 1;
@@ -363,6 +414,25 @@ fn set_data_format(e: &mut Engine, this: Ptr, format: Ptr) -> u32 {
         "IDirectInputDevice8A::SetDataFormat on a joystick: {data_size:#x} bytes, {count} objects \
          is not provided"
     );
+    // `c_dfDIJoystick` is linked into the game's code section (its objects at `00ee7f20`), which a
+    // Steam copy of the game keeps encrypted: not mapped here. That format is a fixed one, so
+    // when its objects cannot be read and the header is its own, its objects are the standard
+    // ones (the owner's PC, 2026-11-17: with a controller plugged in, the game stopped in frame 0
+    // reading them).
+    if !e.mem.is_mapped(objects) {
+        if (flags, data_size, count) != (DIDF_ABSAXIS, JOYSTATE_SIZE, JOYSTICK_OBJECTS) {
+            return DIERR_INVALIDPARAM;
+        }
+        return set_format(
+            e,
+            this,
+            DataFormat {
+                flags,
+                data_size,
+                objects: standard_joystick_objects(),
+            },
+        );
+    }
     let objects = (0..count)
         .map(|i| {
             let o = objects + OBJECT_FORMAT_SIZE * i;
@@ -384,6 +454,11 @@ fn set_data_format(e: &mut Engine, this: Ptr, format: Ptr) -> u32 {
         data_size,
         objects,
     };
+    set_format(e, this, format)
+}
+
+fn set_format(e: &mut Engine, this: Ptr, format: DataFormat) -> u32 {
+    let data_size = format.data_size;
     let d = device(e, this);
     let answer = d.system.set_data_format(&format);
     if answer & 0x8000_0000 == 0 {
@@ -942,6 +1017,51 @@ mod tests {
             e.mem.bytes(0x1a00, INSTANCE_SIZE as u32),
             instance(0x55, 0x0115, "Pad")
         );
+    }
+
+    /// A Steam copy of the game: `c_dfDIJoystick`'s objects are in its encrypted code section
+    /// (`00ee7f20`), not mapped. The format is the standard one's: its standard objects go to
+    /// the system device. Another header with objects that cannot be read is refused.
+    #[test]
+    fn the_standard_joystick_format_with_its_objects_unreadable_is_the_standard_one() {
+        let (fake, mut e, di) = setup(Seat::Any { background: false });
+        e.mem.write(0x1010, &[0x55; 16]);
+        assert_eq!(e.vcall(di, 0xc, &[0x1010, 0x1104, 0]).u32(), DI_OK);
+        let j = e.mem.u32(0x1104);
+        for (k, w) in [0x18u32, 0x10, 1, 0x50, 44, 0x00ee_7f20].iter().enumerate() {
+            e.mem.set_u32(0x1200 + 4 * k as u32, *w);
+        }
+        assert_eq!(e.vcall(j, 0x2c, &[0x1200]).u32(), DI_OK);
+        let format = fake.machine().sticks[1].format.clone().expect("a format");
+        assert_eq!((format.flags, format.data_size), (1, 0x50));
+        let o = &format.objects;
+        assert_eq!(o.len(), 44);
+        // X: GUID_XAxis {A36D02E0-C9F3-11CF-BFC7-444553540000} at 0; Rz (A36D02E3) at 0x14.
+        assert_eq!(
+            o[0].guid,
+            Some([
+                0xe0, 0x02, 0x6d, 0xa3, 0xf3, 0xc9, 0xcf, 0x11, 0xbf, 0xc7, 0x44, 0x45, 0x53, 0x54,
+                0, 0
+            ])
+        );
+        assert_eq!((o[0].offset, o[0].kind), (0, 0x80ff_ff03));
+        assert_eq!((o[5].guid.unwrap()[0], o[5].offset), (0xe3, 0x14));
+        assert_eq!((o[7].guid.unwrap()[0], o[7].offset), (0xe4, 0x1c));
+        // POVs, then the buttons (no GUID).
+        assert_eq!(
+            (o[8].guid.unwrap()[0], o[8].offset, o[8].kind),
+            (0xf2, 0x20, 0x80ff_ff10)
+        );
+        assert_eq!(
+            (o[12].guid, o[12].offset, o[12].kind),
+            (None, 0x30, 0x80ff_ff0c)
+        );
+        assert_eq!(o[43].offset, 0x4f);
+        // Another shape: refused, nothing passed on.
+        e.mem.set_u32(0x1210, 45);
+        fake.machine().sticks[1].format = None;
+        assert_eq!(e.vcall(j, 0x2c, &[0x1200]).u32(), DIERR_INVALIDPARAM);
+        assert_eq!(fake.machine().sticks[1].format, None);
     }
 
     /// The game's whole use of a joystick, as `00a24830` and `Controls::Poll` make it: create
