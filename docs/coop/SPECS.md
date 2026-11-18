@@ -1487,3 +1487,44 @@ sights flag is sent instead), the first-person animation (never read), and the s
 repository has some of their names in `crates/nvse/src/names.rs` only, with no body, and has no
 `jip` crate; the vanilla commands in `crates/engine-fallout-script` have none of them, so the
 menu's and the save loader's calls are used instead).
+
+## S42: shared conversations with votes (agreed 2026-11-18; not started in code)
+
+The owner's idea, reviewed by a council of three (gameplay, engine, sync; 3-0 "good, with
+changes") and agreed with those changes:
+
+- Every player near the NPC is in the same conversation: one window, every line heard, so a
+  player new to the game knows what it is about. A player far away, in combat, loading or fast
+  travelling is not in it (may join by walking up); a player who leaves mid-conversation drops out.
+- The options are the union of each player's own: each game checks its own player's conditions
+  (low Intelligence lines, skill and speech checks) and sends the infos its player may say. An
+  option only one player has is labelled with that player's name, e.g. `ICE CREAM! (Alex)`, and
+  is judged with that player's stats: that player's game resolves the reply (the skill check, the
+  response info chosen by conditions on its own player) and says which info was chosen.
+- Only choices that matter are voted on: a line that ends the conversation, moves or fails a
+  quest, starts a fight, or gives or takes items or caps (Sunny's [END TUTORIAL] or "Sure, I'll
+  come with you"). Other lines (questions that come back to the same list) are picked by either
+  player at once, for both.
+- A vote: the click shows `1/2 Votes` (`1/3`, `2/3` with three players) on that option and the
+  conversation waits; each player sees the others' picks and can switch. All present players on
+  one option: `Chosen`, and it runs. Still split after a few seconds, or someone silent for about
+  45 s: the player who started the conversation decides. Only the host declares `Chosen`; nothing
+  runs before it.
+- The result runs once, in the host's game (as now, `talk::enact`); what it gives (items, caps,
+  XP) goes to every player in the conversation through the reward path. No game but the
+  resolver runs the result script; copies of the NPC never start a conversation of their own in
+  the other games (a copy stuck in a conversation was the Joe Cobb fault, 2026-11-16).
+- Limits: a line that opens another menu (barter, repair, the companion wheel) opens it for one
+  player, the one whose option it was.
+
+Engine places (found 2026-11-18): `DialogMenu::DoClick` `007624f0` (a click on topic index `n`:
+`0083e430` selects it, then the speech challenge `DoSpeechChallengeCheck` or the skill check, the
+goodbye state, `ProcessCurrentTopic`, `LoadNextScreen`) is where a vote holds the click;
+`DialogMenu::LoadTopicsList` `007638b0` (one list item per topic of the topic manager
+`pTopicManager`, `FirstTopic`/`NextTopic`, the prompt and skill/speech text formatted there) is
+where the other players' options and the labels and vote counts go. `DialogMenu::Create`
+`00761a20` and `TESTopicInfo::RunResult` `0061f170` are wrapped already (S16).
+
+Order of work (each step testable on the PCs): 1. the shared window (the other players see and
+hear the conversation, read only); 2. the merged, labelled option list; 3. votes on the lines
+that matter, with the tie and timeout rules; 4. rewards to every player in the conversation.
