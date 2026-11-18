@@ -251,19 +251,26 @@ pub fn watch_line(e: &mut Engine, npc: u32, info: u32) -> Outcome {
     Outcome::Window
 }
 
-/// Closes the watching window (the game's `DialogMenu::Close`) and forgets the conversation;
-/// true when a window was open.
+/// Closes the watching window as `DoIdle` closes one (`Close`, then the fade-out: state 4, its
+/// time from zero, which removes the menu once faded) and forgets the conversation; true when a
+/// window was open. Its goodbye state is cleared first, so `Close` runs no line's result and adds
+/// no topics here. (PC run 34: `Close` alone left the menu open and unseen, the player held in
+/// dialogue, Sunny's copy waiting at the saloon door until the console's `CloseAllMenus`.)
 pub fn end_watch(e: &mut Engine) -> bool {
     let npc = state(e, std::mem::take).npc;
     if npc == 0 {
         return false;
     }
     let actor = actors::actor(e, npc);
-    if actor.is_some() && open_speaker(e) == actor {
-        e.call(addr::DIALOG_MENU_CLOSE, &[]);
-        return true;
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if actor.is_none() || open_speaker(e) != actor {
+        return false;
     }
-    false
+    e.mem.set_u32(menu + addr::DIALOG_MENU_GOODBYE_OFFSET, 0);
+    e.call(addr::DIALOG_MENU_CLOSE, &[]);
+    e.mem.set_f32(menu + addr::DIALOG_MENU_ELAPSED_OFFSET, 0.0);
+    e.mem.set_u32(menu + addr::DIALOG_MENU_STATE_OFFSET, 4);
+    true
 }
 
 /// Once a frame: a window the player closed is noted, and the conversation's later lines are
@@ -524,8 +531,15 @@ mod tests {
             e.call(addr::INFO_RUN_RESULT, &args![greeting, 0u32, a[0]]);
             eax(MENU + 0x10)
         });
+        // The game's Close: the speaker's dialogue stopped, the stored line's end result run with
+        // a goodbye state 2 or 3; the menu stays open (DoIdle's fade-out, state 4, removes it).
         e.register(addr::DIALOG_MENU_CLOSE, |e, _| {
-            e.mem.set_u32(addr::DIALOG_MENU_OPEN, 0);
+            let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+            if matches!(e.mem.u32(menu + addr::DIALOG_MENU_GOODBYE_OFFSET), 2 | 3) {
+                let speaker = e.mem.u32(menu + addr::DIALOG_MENU_SPEAKER_OFFSET);
+                let info = e.mem.u32(addr::DIALOG_LAST_INFO);
+                e.call(addr::INFO_RUN_RESULT, &args![info, 1u32, speaker]);
+            }
             Ret::default()
         });
         e.register(addr::INFO_RUN_RESULT, |e, _| {
@@ -588,8 +602,11 @@ mod tests {
             let at = a[0] + addr::DIALOG_MENU_STATE_OFFSET;
             let speaker = e.mem.u32(a[0] + addr::DIALOG_MENU_SPEAKER_OFFSET);
             let done = e.mem.u8(speaker + addr::REF_LINE_DONE_OFFSET) != 0;
+            let elapsed = a[0] + addr::DIALOG_MENU_ELAPSED_OFFSET;
             match e.mem.u32(at) {
                 0 => {
+                    // Faded in (its time grown to the fade's length).
+                    e.mem.set_f32(elapsed, 0.5);
                     let s = e
                         .call(addr::DIALOG_MENU_LOAD_NEXT_SCREEN, &args![a[0], 0u32])
                         .u32();
@@ -607,6 +624,14 @@ mod tests {
                         .call(addr::DIALOG_MENU_LOAD_NEXT_SCREEN, &args![a[0], 0u32])
                         .u32();
                     e.mem.set_u32(at, s);
+                }
+                // Fading out for half a second (a quarter a frame), then gone.
+                4 => {
+                    let t = e.mem.f32(elapsed) + 0.25;
+                    e.mem.set_f32(elapsed, t);
+                    if t >= 0.5 {
+                        e.mem.set_u32(addr::DIALOG_MENU_OPEN, 0);
+                    }
                 }
                 _ => {}
             }
@@ -724,16 +749,27 @@ mod tests {
         let mut e = world();
         e.mem.set_u32(GREETING, INFOS[0]);
         watch_line(&mut e, NPC, IDS[0]);
+        idle(&mut e, 1);
+        // A goodbye line: the game's Close would run its end result.
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_GOODBYE_OFFSET, 2);
         assert!(end_watch(&mut e));
+        assert_eq!(e.mem.u32(RESULTS), 0, "no result run by the close");
+        // Fading out from the start, then gone.
+        assert_eq!(e.mem.u32(MENU + addr::DIALOG_MENU_STATE_OFFSET), 4);
+        idle(&mut e, 1);
+        assert_eq!(e.mem.u32(addr::DIALOG_MENU_OPEN), MENU, "still fading");
+        idle(&mut e, 1);
         assert_eq!(e.mem.u32(addr::DIALOG_MENU_OPEN), 0);
         assert_eq!(watching(&mut e), None);
         assert!(!end_watch(&mut e));
         idle(&mut e, 1);
         assert_eq!(counts(&mut e).2, 0, "closed by co-op, not left");
-        // Opened again, then closed by the player.
+        // Opened again, then closed by the player (the game's Close and fade).
         assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
         e.call(addr::DIALOG_MENU_CLOSE, &[]);
-        step(&mut e);
+        e.mem.set_f32(MENU + addr::DIALOG_MENU_ELAPSED_OFFSET, 0.0);
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 4);
+        idle(&mut e, 2);
         assert_eq!(counts(&mut e).2, 1);
         assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Left);
         assert_eq!(e.mem.u32(CREATES), 2);
