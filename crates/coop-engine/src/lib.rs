@@ -42,6 +42,7 @@ pub mod reward;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod vars;
+pub mod watch;
 // world
 pub mod changes;
 pub mod world;
@@ -141,6 +142,8 @@ pub fn install(e: &mut Engine) {
     items::install(e);
     // the other players' ticks on the compass
     compass::install(e);
+    // another player's conversation shown in this game's own window
+    watch::install(e);
     // voiceui: the speaking players' ticks
     voicemark::install(e);
     // companions

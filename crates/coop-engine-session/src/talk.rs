@@ -5,8 +5,11 @@
 //!   (`coop_engine::talk`'s events) becomes the protocol's moves: the first shared line asks the
 //!   host for the NPC (`Open`), each line said is a `Pick` of its info, its end a `LineDone`, the
 //!   menu closing a `Close`. A machine that watches another player's conversation shows each
-//!   line picked, through the game's own HUD message, when its player is in the NPC's cell, and
-//!   reports the line done at once, so the talker never waits for a watcher. The NPC another
+//!   line picked when its player is in the NPC's cell: in the game's own dialogue window on its
+//!   NPC (`coop_engine::watch`, S42), else (another menu open, the player closed the window)
+//!   as the game's own HUD messages. It reports the line done at once, so the talker never
+//!   waits for a watcher. The window closes when the conversation ends, the player leaves the
+//!   NPC's cell, or nothing new is said for [`WATCH_QUIET_STEPS`]. The NPC another
 //!   player talks to is named busy to the game, which then opens no menu on it; a conversation
 //!   the host refuses is closed through the game.
 //! - [`Enactor`] runs on the host: a guest's pick of a line of the shared story has its result
@@ -59,6 +62,13 @@ pub struct Talker {
     pub lines_shown: u32,
     /// Other players' lines not shown: this player is not with the NPC.
     pub lines_far: u32,
+    /// Other players' lines shown in this game's own dialogue window (S42), not as text.
+    pub lines_windowed: u32,
+    /// Watching windows closed by co-op: the conversation ended, this player left the NPC, or
+    /// it went quiet for [`WATCH_QUIET_STEPS`].
+    pub windows_closed: u32,
+    /// The conversation the window shows: (session, the steps since its last new line).
+    watched: Option<(u32, u32)>,
     /// A quest of this player's own and one of its stages: until that stage is done in this game
     /// the player is in its own opening, and its conversations are its own (each game has its own
     /// Doc Mitchell for it): none of its lines goes to the protocol, and no NPC is refused to it.
@@ -66,6 +76,10 @@ pub struct Talker {
     /// Lines of this player's conversations kept its own because its opening runs.
     pub opening_lines: u32,
 }
+
+/// A watching window whose conversation has said nothing new for this many steps (frames) is
+/// closed: about five minutes at 60 frames a second (a talker may read a long list of topics).
+pub const WATCH_QUIET_STEPS: u32 = 18_000;
 
 /// How a watched line is shown: what the player chose, when the info has a prompt, then each of
 /// the NPC's responses as a message of its own.
@@ -141,7 +155,22 @@ impl Talker {
         client: &mut DialogueClient,
         out: &mut Vec<DialogueMsg>,
     ) {
-        let Some(v) = client.view().copied().filter(|v| v.initiator != me) else {
+        coop_engine::watch::step(e);
+        let view = client.view().copied().filter(|v| v.initiator != me);
+        // The window's conversation is over, another began, or this player left the NPC.
+        if let Some((session, quiet)) = self.watched {
+            let over = view.map_or(true, |v| v.session != session || !talk::near(e, v.npc.0));
+            let quiet = quiet + 1;
+            if over || quiet >= WATCH_QUIET_STEPS {
+                self.watched = None;
+                if coop_engine::watch::end_watch(e) {
+                    self.windows_closed += 1;
+                }
+            } else {
+                self.watched = Some((session, quiet));
+            }
+        }
+        let Some(v) = view else {
             return;
         };
         let Some(choice) = v.playing.filter(|_| !v.reported) else {
@@ -154,7 +183,13 @@ impl Talker {
             if talk::mark_said(e, choice) {
                 self.lines_marked += 1;
             }
-            if talk::near(e, v.npc.0) {
+            let window = talk::near(e, v.npc.0)
+                && coop_engine::watch::watch_line(e, v.npc.0, choice)
+                    == coop_engine::watch::Outcome::Window;
+            if window {
+                self.watched = Some((v.session, 0));
+                self.lines_windowed += 1;
+            } else if talk::near(e, v.npc.0) {
                 if let Some((text, prompt)) = talk::line(e, choice) {
                     for m in messages(v.initiator, &text, &prompt) {
                         talk::show(e, &m);

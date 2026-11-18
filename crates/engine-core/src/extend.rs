@@ -228,6 +228,13 @@ pub const WRAPS: &[Entry] = &[
     },
     // HUDMainMenu::UpdateCompass (compass, landmarks, objectives, actor ticks): the other
     // players get a mark of their own on the compass, in a colour the game's HUD does not use.
+    // DialogMenu::DoIdle: a window showing another player's conversation stays on its line
+    // until the next one comes (S42).
+    Entry {
+        addr: 0x0076_2950,
+        owners: COOP,
+        step: "C-15",
+    },
     Entry {
         addr: 0x0077_9070,
         owners: COOP,

@@ -352,6 +352,12 @@ pub fn result_quest(e: &mut Engine) -> Option<u32> {
 }
 
 fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
+    // A line shown in the window watching another player's conversation: its result ran where
+    // it was said (S42). One the host's game runs for a guest is not the window's.
+    if !enacting(e) && crate::watch::is_watch_speaker(e, a.get(2).copied().unwrap_or(0)) {
+        crate::watch::note_skipped(e);
+        return Ret::default();
+    }
     let t = e.ext_free::<Talk>();
     if !t.sharing.load(Ordering::SeqCst) || t.enacting.load(Ordering::SeqCst) > 0 {
         return e.call_next(addr::INFO_RUN_RESULT, a);
@@ -417,6 +423,11 @@ fn greets(e: &mut Engine, speaker: u32) -> bool {
 
 /// The wrap at `00761a20`. Its words: the speaker, a word for the topic manager, a target.
 pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
+    // The window watching another player's conversation (S42): the NPC is that player's, and
+    // this game only shows it.
+    if crate::watch::opening(e) {
+        return e.call_next(addr::DIALOG_MENU_CREATE, a);
+    }
     let speaker = a.first().copied().unwrap_or(0);
     let t = e.ext_free::<Talk>();
     if speaker != 0

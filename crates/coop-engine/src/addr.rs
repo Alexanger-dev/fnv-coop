@@ -1517,3 +1517,47 @@ pub const INFO_SAID_OFFSET: u32 = 0x22;
 /// (`0091fbb0`) ends one whose lines ran out, and as a conversation whose target is gone is ended
 /// (`ProcessLists`): the dialogue package is let go and the actor picks a package again.
 pub const ACTOR_END_DIALOGUE_SLOT: u32 = 0x288;
+/// `DialogMenu::DoIdle` (`thiscall`, the menu): its dialogue state machine, once a frame.
+pub const DIALOG_MENU_DO_IDLE: u32 = 0x0076_2950;
+/// `DialogMenu::LoadNextScreen` (`thiscall`, the menu and a byte: after a speech challenge):
+/// says the current topic's next response, or moves the conversation on; the new state.
+pub const DIALOG_MENU_LOAD_NEXT_SCREEN: u32 = 0x0076_2ff0;
+/// `DialogMenu::eDialogState` (+0x28): 0 fading in, 1 speaking, 2 the topics shown, 3 a line
+/// shown (counting down), 4 fading out, 5 a service menu.
+pub const DIALOG_MENU_STATE_OFFSET: u32 = 0x28;
+/// `DialogMenu::pTopicManager` (+0x70).
+pub const DIALOG_MENU_TOPICS_OFFSET: u32 = 0x70;
+/// `DialogMenu::bResponseShown` (+0x104).
+pub const DIALOG_MENU_RESPONSE_SHOWN_OFFSET: u32 = 0x104;
+/// The seconds left before a shown line moves on (`DoIdle` state 3), a float.
+pub const DIALOG_COUNTDOWN: u32 = 0x011d_951c;
+/// The info of the line the dialogue menu said last (its end result runs from it).
+pub const DIALOG_LAST_INFO: u32 = 0x011d_9518;
+/// A speaker's byte +0x7c: set when it has done saying its line (`DoIdle` states 1 and 3).
+pub const REF_LINE_DONE_OFFSET: u32 = 0x7c;
+/// `MenuTopic` (0x2c bytes): the constructor `0083db00` (`thiscall`: quest, topic, info, speaker,
+/// a flag), `0083e0c0` (`thiscall`) as the game calls it on a new one, and its current response
+/// `0083e170` (`thiscall`; 0 when every response was said).
+pub const MENU_TOPIC_SIZE: u32 = 0x2c;
+/// See [`MENU_TOPIC_SIZE`].
+pub const MENU_TOPIC_CONSTRUCT: u32 = 0x0083_db00;
+/// See [`MENU_TOPIC_SIZE`].
+pub const MENU_TOPIC_START: u32 = 0x0083_e0c0;
+/// See [`MENU_TOPIC_SIZE`].
+pub const MENU_TOPIC_CURRENT_RESPONSE: u32 = 0x0083_e170;
+/// `MenuTopicManager`: its current topic `0083e4c0`, a new shown list `0083f1a0` (the list),
+/// the first topic made current `0083e370` (a flag; true with one) (all `thiscall`).
+pub const TOPICS_CURRENT_TOPIC: u32 = 0x0083_e4c0;
+/// See [`TOPICS_CURRENT_TOPIC`].
+pub const TOPICS_SET_LIST: u32 = 0x0083_f1a0;
+/// See [`TOPICS_CURRENT_TOPIC`].
+pub const TOPICS_FIRST_TOPIC: u32 = 0x0083_e370;
+/// A `BSSimpleList`: the constructor `0096a2d0` (8 bytes) and add an item `00905820` (given the
+/// item's address) (`thiscall`).
+pub const SIMPLE_LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+/// See [`SIMPLE_LIST_CONSTRUCT`].
+pub const SIMPLE_LIST_ADD: u32 = 0x0090_5820;
+/// The game's millisecond clock: the word at +0x14 of the timer at `011f6394`.
+pub const GAME_MS: u32 = 0x011f_63a8;
+/// `MenuTopic::pInfo` (+0x18).
+pub const MENU_TOPIC_INFO_OFFSET: u32 = 0x18;

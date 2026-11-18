@@ -1488,7 +1488,7 @@ repository has some of their names in `crates/nvse/src/names.rs` only, with no b
 `jip` crate; the vanilla commands in `crates/engine-fallout-script` have none of them, so the
 menu's and the save loader's calls are used instead).
 
-## S42: shared conversations with votes (agreed 2026-11-18; not started in code)
+## S42: shared conversations with votes (agreed 2026-11-18; step 1 implemented, run in two headless games)
 
 The owner's idea, reviewed by a council of three (gameplay, engine, sync; 3-0 "good, with
 changes") and agreed with those changes:
@@ -1528,3 +1528,30 @@ where the other players' options and the labels and vote counts go. `DialogMenu:
 Order of work (each step testable on the PCs): 1. the shared window (the other players see and
 hear the conversation, read only); 2. the merged, labelled option list; 3. votes on the lines
 that matter, with the tie and timeout rules; 4. rewards to every player in the conversation.
+
+**Step 1, the shared window (implemented 2026-11-18).** The council chose (3-0) the game's own
+dialogue window in every player's game over a window co-op draws itself or HUD text, with four
+rules: a watching game runs no line's result; a line it cannot show is shown as text; the window
+always closes (the conversation over, the player away from the NPC, quiet for about five minutes,
+the session ended); the NPC's copy keeps following its game while it is open.
+
+- `coop_engine::watch` (step C-15, a wrap of `DialogMenu::DoIdle` `00762950`): `watch_line` opens
+  `DialogMenu::Create` on this game's NPC, given the line's topic (co-op's own refusals are not
+  applied while it opens), and puts each line to it as `LoadNextScreen`'s chain does: a new
+  `MenuTopic` (`0083db00`) of the line's quest, topic and info, started (`0083e0c0`), the only item
+  of a new shown list (`0083f1a0`), made current with `FirstTopic(0)` (the flag 1 skips the first
+  topic, the chain's greeting: a first try had the window close at once), then `LoadNextScreen`.
+  The wrap holds a window with nothing more to say on its line (state 3, its countdown above
+  zero), so the game moves nothing on by itself, and puts the next line once the speaker has done
+  (its byte +0x7c), at once when two are waiting, or after 20 s. `talk::run_result` runs no result
+  on the watched speaker while the window is open (one the host runs for a guest still runs).
+- The session (`talk::Talker::watch`) shows another player's line in the window when this player
+  is in the NPC's cell, else as HUD text, and closes the window as above; the status line counts
+  lines in the window, windows closed and results not run there.
+- Checked: 7 unit tests and mutation checks (every mutant killed); two headless games
+  (`/tmp/s_watch.sh`): the guest talked to Sunny in the saloon, the host's game opened its own
+  window on her and showed both lines (none as text), closed it when the guest's conversation
+  ended, ran no result of it (both games at VCG02 stage 10), and Sunny stood in the same place on
+  the same package, in no conversation, in both games afterwards.
+- Not yet: the watcher's own options (step 2), votes (step 3), rewards (step 4). Lines of no shared
+  quest are not sent between players yet (S16), so they are not shown to a watcher.

@@ -62,6 +62,10 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
     let shared = h.social_on && !players.is_empty();
     game_talk::set_sharing(e, shared);
     game_rest::set_sharing(e, shared);
+    if !shared {
+        // Nobody else's conversation to watch (S42).
+        coop_engine::watch::end_watch(e);
+    }
     if !h.social_on {
         return;
     }
@@ -149,6 +153,8 @@ pub(crate) fn guest_step(
     game_talk::set_sharing(e, active);
     game_rest::set_sharing(e, active);
     if !active {
+        // Nobody else's conversation to watch (S42).
+        coop_engine::watch::end_watch(e);
         return;
     }
     let me = g.sync.player;
