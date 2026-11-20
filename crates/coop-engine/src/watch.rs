@@ -7,9 +7,10 @@
 //! shows: nothing the player does in it says a line.
 //!
 //! - **Opening.** [`watch_line`] opens the window through the game's `DialogMenu::Create`, given
-//!   the line's topic (the game then often greets with that very line). While it opens, co-op's
-//!   own refusals of a conversation (the NPC is another player's, a copy came to greet) are not
-//!   applied ([`opening`]).
+//!   the line's topic; the game's pick of the topic's line it opens with is the line itself (a
+//!   wrap of `TESTopic::GetMatchingInfo_ov2`, [`matching_info`]), not this game's own pick. While
+//!   it opens, co-op's own refusals of a conversation (the NPC is another player's, a copy came
+//!   to greet) are not applied ([`opening`]).
 //! - **Showing a line.** A line is put to the window as the game puts the next line of a chain
 //!   (`DialogMenu::LoadNextScreen`'s own code): a new `MenuTopic` of the line's quest, topic and
 //!   info for the speaker, a shown topic list holding it, its first topic made current, then
@@ -38,6 +39,9 @@ use crate::{actors, addr, forms};
 
 /// Co-op's place in front of `DialogMenu::DoIdle`.
 pub(crate) const DO_IDLE: WrapSlot = WrapSlot::new(Owner::Coop, addr::DIALOG_MENU_DO_IDLE);
+/// Co-op's place in front of `TESTopic::GetMatchingInfo_ov2`.
+pub(crate) const MATCHING_INFO: WrapSlot =
+    WrapSlot::new(Owner::Coop, addr::TOPIC_GET_MATCHING_INFO);
 
 /// The countdown a held window is kept at (seconds; any value above zero holds it).
 const HOLD_SECONDS: f32 = 1.0;
@@ -98,6 +102,9 @@ fn state<R>(e: &mut Engine, f: impl FnOnce(&mut State) -> R) -> R {
 pub(crate) fn install(e: &mut Engine) {
     if e.is_registered(addr::DIALOG_MENU_DO_IDLE) {
         e.wrap(DO_IDLE, do_idle);
+    }
+    if e.is_registered(addr::TOPIC_GET_MATCHING_INFO) {
+        e.wrap(MATCHING_INFO, matching_info);
     }
     let _ = e.ext_free::<Watch>();
 }
@@ -338,6 +345,36 @@ fn more_to_say(e: &mut Engine) -> bool {
     }
 }
 
+/// The wrap at `0061a760` (topic, said byte's address, speaker, target). While the window opens,
+/// the game's pick of its first line for the line's topic is the line itself: the other player's
+/// game said it, and this game's own pick may differ (its conditions read this game's state,
+/// which the line's result in the other game has often moved on already). Without this the
+/// window greeted with this game's own line first (PC run 35: Sunny's "Do you need anything?"
+/// before each of her lines, on the watching player's screen).
+pub(crate) fn matching_info(e: &mut Engine, a: &[u32]) -> Ret {
+    let (topic, speaker) = (
+        a.first().copied().unwrap_or(0),
+        a.get(2).copied().unwrap_or(0),
+    );
+    let (npc, line) = state(e, |s| {
+        (s.npc, s.queue.front().copied().filter(|_| s.opening))
+    });
+    if let Some(line) = line {
+        if topic != 0 && speaker != 0 && actors::actor(e, npc) == Some(speaker) {
+            if let Some(f) = info_form(e, line) {
+                if e.call(addr::TOPIC_GET_OWNER_TOPIC, &args![f]).u32() == topic {
+                    log(|| format!("window on {npc:08x} opens with line {line:08x}"));
+                    return Ret {
+                        eax: f,
+                        ..Ret::default()
+                    };
+                }
+            }
+        }
+    }
+    e.call_next(addr::TOPIC_GET_MATCHING_INFO, a)
+}
+
 /// The wrap at `00762950`. Its word: the menu.
 pub(crate) fn do_idle(e: &mut Engine, a: &[u32]) -> Ret {
     let menu = a.first().copied().unwrap_or(0);
@@ -515,8 +552,18 @@ mod tests {
             e.mem.set_u32(HEAP, block + 0x40);
             eax(block)
         });
-        // The game's Create: the menu open on the speaker, fading in, its greeting the current
-        // topic, the greeting's result run.
+        // The game's own pick of a topic's line: GREETING's (the stand-in's conditions), for
+        // its one topic only.
+        e.register(addr::TOPIC_GET_MATCHING_INFO, |e, a| {
+            eax(if a[0] == TOPIC {
+                e.mem.u32(GREETING)
+            } else {
+                0
+            })
+        });
+        // The game's Create: the menu open on the speaker, fading in, its greeting (the
+        // topic's matching line, `MenuTopicManager::Initialize`) the current topic, the
+        // greeting's result run.
         e.register(addr::DIALOG_MENU_CREATE, |e, a| {
             e.mem.set_u32(CREATES, e.mem.u32(CREATES) + 1);
             e.mem.set_u32(CREATES + 0x20, a[1]);
@@ -525,7 +572,12 @@ mod tests {
             e.mem
                 .set_u32(MENU + addr::DIALOG_MENU_TOPICS_OFFSET, TOPICS);
             e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 0);
-            let greeting = e.mem.u32(GREETING);
+            let greeting = e
+                .call(
+                    addr::TOPIC_GET_MATCHING_INFO,
+                    &args![a[1], 0u32, a[0], 0u32],
+                )
+                .u32();
             let t = menu_topic(e, greeting);
             e.mem.set_u32(TOPICS, t);
             e.call(addr::INFO_RUN_RESULT, &args![greeting, 0u32, a[0]]);
@@ -661,7 +713,8 @@ mod tests {
     #[test]
     fn a_watched_line_opens_the_window_and_is_said_there_with_no_result() {
         let mut e = world();
-        // The game greets with another line of the topic: replaced by the watched one.
+        // This game's own pick for the topic is another line (PC run 35: Sunny's "Do you need
+        // anything?"): the window opens with the watched one all the same, and says it alone.
         e.mem.set_u32(GREETING, INFOS[2]);
         assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
         assert_eq!(e.mem.u32(CREATES), 1);
@@ -671,16 +724,16 @@ mod tests {
             "opened on the line's topic"
         );
         assert_eq!(watching(&mut e), Some(NPC));
+        assert_eq!(counts(&mut e).0, 1, "the line was the window's first");
         idle(&mut e, 1);
-        // The game's greeting said first (fading in), then the watched line at once.
-        assert_eq!(said(&e), vec![INFOS[2], INFOS[0]]);
-        // No result ran here: the greeting's was skipped.
+        assert_eq!(said(&e), vec![INFOS[0]]);
+        // No result ran here: the line's was skipped.
         assert_eq!(e.mem.u32(RESULTS), 0);
         assert_eq!(counts(&mut e).1, 1);
         // Its second response once the first is said; then the window holds.
         line_done(&mut e);
         idle(&mut e, 10);
-        assert_eq!(said(&e), vec![INFOS[2], INFOS[0], INFOS[0]]);
+        assert_eq!(said(&e), vec![INFOS[0], INFOS[0]]);
         line_done(&mut e);
         idle(&mut e, 200);
         assert_eq!(
@@ -702,6 +755,40 @@ mod tests {
         idle(&mut e, 50);
         assert_eq!(said(&e), vec![INFOS[0], INFOS[0]]);
         assert_eq!(counts(&mut e).0, 1);
+    }
+
+    #[test]
+    fn the_games_own_pick_stands_outside_the_window_opening() {
+        let mut e = world();
+        e.mem.set_u32(GREETING, INFOS[2]);
+        let pick = |e: &mut Engine, topic: u32, speaker: u32| {
+            e.call(
+                addr::TOPIC_GET_MATCHING_INFO,
+                &args![topic, 0u32, speaker, 0u32],
+            )
+            .u32()
+        };
+        // No window opening: the game's own pick, for this NPC too.
+        assert_eq!(pick(&mut e, TOPIC, ACTOR), INFOS[2]);
+        // A window opening on another NPC, or for another topic: the game's own pick there.
+        state(&mut e, |s| {
+            *s = State {
+                npc: NPC,
+                opening: true,
+                queue: VecDeque::from([IDS[0]]),
+                ..State::default()
+            }
+        });
+        assert_eq!(pick(&mut e, TOPIC, BASE + 0x100), INFOS[2]);
+        assert_eq!(pick(&mut e, TOPIC + 4, ACTOR), 0);
+        assert_eq!(pick(&mut e, TOPIC, ACTOR), INFOS[0]);
+        // The window open (no longer opening): the game's own pick again.
+        state(&mut e, |s| s.opening = false);
+        assert_eq!(pick(&mut e, TOPIC, ACTOR), INFOS[2]);
+        // The player's own conversation, after the watched one ended: the game's own pick.
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        end_watch(&mut e);
+        assert_eq!(pick(&mut e, TOPIC, ACTOR), INFOS[2]);
     }
 
     #[test]

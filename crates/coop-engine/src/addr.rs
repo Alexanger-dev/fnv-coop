@@ -589,6 +589,11 @@ pub const INFO_PROMPT_OFFSET: u32 = 0x28;
 /// `TESTopic::GetOwnerTopic` (`cdecl`: info; `0061a310`, `testopic.rs`): the topic that holds
 /// the info, or 0.
 pub const TOPIC_GET_OWNER_TOPIC: u32 = 0x0061_a310;
+/// `TESTopic::GetMatchingInfo_ov2` (`thiscall`: topic, a "said" byte's address, speaker,
+/// target; `0061a760`, `testopic.rs`): the topic's first info whose conditions hold for the
+/// speaker and the target, or 0. `MenuTopicManager::Initialize` (`0083e620`) picks a dialogue
+/// window's first line with it.
+pub const TOPIC_GET_MATCHING_INFO: u32 = 0x0061_a760;
 /// The quest under which a topic holds an info (`thiscall`: topic, info; `RET 4`; `00619d00`,
 /// `run_00619b60.rs`), or 0.
 pub const TOPIC_INFO_QUEST: u32 = 0x0061_9d00;

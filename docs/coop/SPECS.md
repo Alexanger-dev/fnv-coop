@@ -1537,7 +1537,9 @@ the session ended); the NPC's copy keeps following its game while it is open.
 
 - `coop_engine::watch` (step C-15, a wrap of `DialogMenu::DoIdle` `00762950`): `watch_line` opens
   `DialogMenu::Create` on this game's NPC, given the line's topic (co-op's own refusals are not
-  applied while it opens), and puts each line to it as `LoadNextScreen`'s chain does: a new
+  applied while it opens; a wrap of `TESTopic::GetMatchingInfo_ov2` `0061a760`, also step C-15,
+  makes the line itself the window's first line, where `MenuTopicManager::Initialize` would take
+  this game's own pick for the topic: PC run 35), and puts each line to it as `LoadNextScreen`'s chain does: a new
   `MenuTopic` (`0083db00`) of the line's quest, topic and info, started (`0083e0c0`), the only item
   of a new shown list (`0083f1a0`), made current with `FirstTopic(0)` (the flag 1 skips the first
   topic, the chain's greeting: a first try had the window close at once), then `LoadNextScreen`.

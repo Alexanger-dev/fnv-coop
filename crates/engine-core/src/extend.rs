@@ -184,6 +184,14 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-9",
     },
+    // TESTopic::GetMatchingInfo_ov2 (topic, said byte, speaker, target): the line a dialogue
+    // window opens with. A window showing another player's conversation opens with that
+    // player's line, not this game's own pick for the topic (S42).
+    Entry {
+        addr: 0x0061_a760,
+        owners: COOP,
+        step: "C-15",
+    },
     // social: co-op's shared conversations and its sleep and wait vote (docs/coop/SPECS.md S16,
     // S19). TESTopicInfo::RunResult (info, index, reference): a conversation's results run once,
     // on the host. DialogMenu::Create (speaker, word, target): one conversation per NPC.
