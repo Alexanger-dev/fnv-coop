@@ -78,6 +78,16 @@ struct State {
     queue: VecDeque<u32>,
     /// The line shown now and since when (the game's milliseconds).
     shown: Option<(u32, u32)>,
+    /// This game's player clicked one of the window's own rows (S42 step 2c): the window goes on
+    /// as the game's own, its lines (that one, its end, a line chained to it) said and their
+    /// results run here, until another player's line is put to it.
+    driving: bool,
+    /// The line this game's player said in the window by its last click (an info's form id).
+    own_line: Option<u32>,
+    /// A line another player's game said, put to this player's own conversation window (an
+    /// info's form id): its results are not run here, and the window holds on it (its end and a
+    /// line chained to it are that game's) until it lists its options again.
+    injected: Option<u32>,
 }
 
 /// The game-wide state of the watching window.
@@ -142,9 +152,21 @@ pub(crate) fn is_window(e: &mut Engine, menu: u32) -> bool {
 /// window as before. False, and nothing done, when the window is not open, still says its line,
 /// has lines waiting, lists its options already, or has none to list.
 pub fn show_topics(e: &mut Engine) -> bool {
-    let (npc, open, waiting) = state(e, |s| (s.npc, s.open, !s.queue.is_empty()));
+    let (npc, open, waiting, driving, injected) = state(e, |s| {
+        (
+            s.npc,
+            s.open,
+            !s.queue.is_empty(),
+            s.driving,
+            s.injected.is_some(),
+        )
+    });
     let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
-    if npc == 0 || !open || waiting || !is_window(e, menu) {
+    // The watching window, unless this game drives it (the game lists its options itself); or
+    // this player's own window holding on another player's line.
+    let watching = npc != 0 && open && !waiting && !driving && is_window(e, menu);
+    let own = menu != 0 && injected && !is_window(e, menu);
+    if !watching && !own {
         return false;
     }
     let needed = [
@@ -180,7 +202,7 @@ pub fn show_topics(e: &mut Engine) -> bool {
     }
     e.call(addr::DIALOG_MENU_LOAD_TOPICS_LIST, &args![menu]);
     e.mem.set_u32(at, 2);
-    log(|| format!("window on {npc:08x} lists its options"));
+    log(|| format!("window {menu:08x} lists its options"));
     true
 }
 
@@ -197,6 +219,78 @@ pub(crate) fn is_watch_speaker(e: &mut Engine, speaker: u32) -> bool {
         return false;
     }
     opening || open_speaker(e) == Some(speaker)
+}
+
+/// Whether a result of a line on `speaker` (a pointer) is not run here: a line put to the
+/// watching window (another player's game said it), unless this game drives the window (its
+/// player clicked one of its own rows, S42 step 2c); or a line on this player's own conversation
+/// window holding on another player's line ([`inject`]).
+pub(crate) fn skips_result(e: &mut Engine, speaker: u32) -> bool {
+    let (driving, injected) = state(e, |s| (s.driving, s.injected));
+    if is_watch_speaker(e, speaker) {
+        return !driving;
+    }
+    injected.is_some() && open_speaker(e) == Some(speaker)
+}
+
+/// A click of this game's player on one of the window's own rows begins (S42 step 2c): the
+/// window is this game's to drive from now.
+pub(crate) fn begin_own_click(e: &mut Engine) {
+    state(e, |s| s.driving = true);
+}
+
+/// The click is said: `said` is the line (an info's form id) the game said for it.
+pub(crate) fn end_own_click(e: &mut Engine, said: Option<u32>) {
+    state(e, |s| {
+        if said.is_some() {
+            s.own_line = said;
+        }
+    });
+}
+
+/// The line this game's player said in the watching window by its last click, while the window
+/// is this game's to drive.
+pub fn own_line(e: &mut Engine) -> Option<u32> {
+    state(e, |s| s.own_line.filter(|_| s.driving))
+}
+
+/// Puts line `info` (a form id), said by another player's game on an option of theirs, to this
+/// player's own conversation window, listing its options (state 2), as a line of the watching
+/// window is put (S42 step 2c); its results are not run here. The window goes on as after any
+/// line: a line chained to it, or its options. False, and nothing done, when no window of this
+/// player's own lists its options.
+pub fn inject(e: &mut Engine, info: u32) -> bool {
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if menu == 0 || is_window(e, menu) {
+        return false;
+    }
+    // Listing its options, or holding on the last line put to it (a line chained to it comes).
+    let st = e.mem.u32(menu + addr::DIALOG_MENU_STATE_OFFSET);
+    let held = matches!(st, 1 | 3) && state(e, |s| s.injected.is_some()) && !more_to_say(e);
+    if st != 2 && !held {
+        return false;
+    }
+    let Some(speaker) = open_speaker(e) else {
+        return false;
+    };
+    state(e, |s| s.injected = Some(info));
+    let shown = show(e, menu, speaker, info);
+    if !shown {
+        state(e, |s| s.injected = None);
+    }
+    log(|| format!("line {info:08x} of another player's put to this player's window: {shown}"));
+    shown
+}
+
+/// The line put by [`inject`] is over (the window lists its options again, or this player
+/// clicked).
+pub(crate) fn clear_injected(e: &mut Engine) {
+    state(e, |s| s.injected = None);
+}
+
+/// Whether this player's own conversation window holds on a line of another player's.
+pub fn holds_injected(e: &mut Engine) -> bool {
+    state(e, |s| s.injected.is_some())
 }
 
 /// Notes a result not run because it was a watched line's.
@@ -448,15 +542,25 @@ pub(crate) fn do_idle(e: &mut Engine, a: &[u32]) -> Ret {
         && actor.is_some()
         && e.mem.u32(addr::DIALOG_MENU_OPEN) == menu
         && e.mem.u32(menu + addr::DIALOG_MENU_SPEAKER_OFFSET) == actor.unwrap_or(0);
+    let at = menu + addr::DIALOG_MENU_STATE_OFFSET;
     if !ours {
+        // This player's own window on another player's line: it holds on it (that game says its
+        // end and a line chained to it), as the watching window holds (S42 step 2c).
+        let holds = menu != 0
+            && e.mem.u32(addr::DIALOG_MENU_OPEN) == menu
+            && state(e, |s| s.injected.is_some());
+        if holds && !more_to_say(e) && matches!(e.mem.u32(at), 1 | 3) {
+            e.mem.set_u32(at, 3);
+            e.mem.set_f32(addr::DIALOG_COUNTDOWN, HOLD_SECONDS);
+        }
         let r = e.call_next(addr::DIALOG_MENU_DO_IDLE, a);
         crate::choices::after_game(e);
         return r;
     }
     let speaker = actor.unwrap_or(0);
-    let at = menu + addr::DIALOG_MENU_STATE_OFFSET;
-    // Nothing more to say: the window stays on its line.
-    if !more_to_say(e) && matches!(e.mem.u32(at), 1 | 3) {
+    // Nothing more to say: the window stays on its line, unless this game drives it.
+    let driving = state(e, |s| s.driving);
+    if !driving && !more_to_say(e) && matches!(e.mem.u32(at), 1 | 3) {
         e.mem.set_u32(at, 3);
         e.mem.set_f32(addr::DIALOG_COUNTDOWN, HOLD_SECONDS);
     }
@@ -499,6 +603,10 @@ fn show(e: &mut Engine, menu: u32, speaker: u32, info: u32) -> bool {
     let Some(f) = info_form(e, info) else {
         return false;
     };
+    state(e, |s| {
+        s.driving = false;
+        s.own_line = None;
+    });
     let topic = e.call(addr::TOPIC_GET_OWNER_TOPIC, &args![f]).u32();
     if topic == 0 {
         return false;
@@ -869,18 +977,23 @@ mod tests {
         assert_eq!(option_lists(&e), (1, 0));
     }
 
-    /// The rows of a window showing another player's conversation are not said here (S42 step
-    /// 2, read only); once the window is gone, a click is the game's again.
+    /// S42 step 2c: a click on one of this player's own rows in the window showing another
+    /// player's conversation is said here, and the window is this game's to drive: its results
+    /// run here and it is not held on its line, until another player's line is put to it.
     #[test]
-    fn a_click_in_the_watching_window_is_not_said_here() {
+    fn a_click_on_its_own_row_in_the_watching_window_drives_it_here() {
         const CLICKS: u32 = BASE + 0x6030;
         let mut e = world();
         e.register(addr::LIST_BOX_BELONGS_TO, |_, _| eax(1));
         e.register(addr::TILE_GET_FLOAT, |_, _| Ret::default());
+        // The game's click: the row's line said (and stored as the last info), its result run.
         e.register(addr::DIALOG_MENU_DO_CLICK, |e, _| {
             e.mem.set_u32(CLICKS, e.mem.u32(CLICKS) + 1);
+            e.mem.set_u32(addr::DIALOG_LAST_INFO, INFOS[2]);
+            e.call(addr::INFO_RUN_RESULT, &args![INFOS[2], 0u32, ACTOR]);
             Ret::default()
         });
+        with_option_list(&mut e, true);
         crate::choices::install(&mut e);
         let click = |e: &mut Engine| {
             let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
@@ -890,16 +1003,101 @@ mod tests {
             );
         };
         assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
-        idle(&mut e, 1);
-        click(&mut e);
-        assert_eq!(e.mem.u32(CLICKS), 0);
-        assert_eq!(crate::choices::counts(&mut e).2, 1);
-        // The window closed and a window of this player's own open: its clicks are its own.
-        assert!(end_watch(&mut e));
-        idle(&mut e, 4);
-        e.mem.set_u32(addr::DIALOG_MENU_OPEN, MENU);
+        // Its line said to the end.
+        while said(&e).len() < 2 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        let results = e.mem.u32(RESULTS);
+        assert!(skips_result(&mut e, ACTOR), "the watched line's");
+        assert_eq!(own_line(&mut e), None);
         click(&mut e);
         assert_eq!(e.mem.u32(CLICKS), 1);
+        assert_eq!(
+            e.mem.u32(RESULTS),
+            results + 1,
+            "the clicked line's result ran here"
+        );
+        assert_eq!(own_line(&mut e), Some(IDS[2]));
+        assert!(!skips_result(&mut e, ACTOR), "this game drives the window");
+        // Not held: its line said, the game moves the window on (here, from 3 to 1); co-op lists
+        // no options of its own in it (the game does, as for any line of its own).
+        let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+        e.mem.set_u32(menu + addr::DIALOG_MENU_STATE_OFFSET, 3);
+        e.mem.set_f32(addr::DIALOG_COUNTDOWN, 0.0);
+        line_done(&mut e);
+        state(&mut e, |s| s.queue.clear());
+        assert!(!more_to_say(&mut e));
+        assert!(!show_topics(&mut e));
+        e.call(addr::DIALOG_MENU_DO_IDLE, &args![MENU]);
+        assert_eq!(menu_state(&mut e), 1);
+        // Another player's line put to the window: it is held and watched again.
+        assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Window);
+        for _ in 0..20 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        assert_eq!(own_line(&mut e), None);
+        assert!(skips_result(&mut e, ACTOR));
+        assert_eq!(menu_state(&mut e), 3, "held");
+    }
+
+    /// S42 step 2c: a line of another player's put to this player's own conversation window,
+    /// listing its options: its results are not run here, the window holds on it (a line chained
+    /// to it may come), and lists this player's options when asked.
+    #[test]
+    fn another_players_line_is_put_to_this_players_own_window_which_holds_on_it() {
+        let mut e = world();
+        with_option_list(&mut e, true);
+        crate::choices::install(&mut e);
+        // No window: nothing.
+        assert!(!inject(&mut e, IDS[1]));
+        // This player's own conversation, listing its options.
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, MENU);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_SPEAKER_OFFSET, ACTOR);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_TOPICS_OFFSET, TOPICS);
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 3);
+        line_done(&mut e);
+        assert!(
+            !inject(&mut e, IDS[1]),
+            "not while it says a line of its own"
+        );
+        assert!(!show_topics(&mut e), "no line of another's held");
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 2);
+        // An unknown line: nothing put, nothing held.
+        assert!(!inject(&mut e, 0x77));
+        assert!(!holds_injected(&mut e));
+        assert!(inject(&mut e, IDS[1]));
+        assert_eq!(said(&e), vec![INFOS[1]]);
+        assert!(holds_injected(&mut e));
+        assert!(!inject(&mut e, IDS[2]), "not while the line is being said");
+        assert!(skips_result(&mut e, ACTOR));
+        assert!(
+            !skips_result(&mut e, BASE + 0x700),
+            "another speaker's: this game's"
+        );
+        // Its lines said, it holds (nothing moves it on: no end of its own, no chain).
+        let moved = e.mem.u32(MOVED_ON);
+        for _ in 0..20 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        assert_eq!(menu_state(&mut e), 3);
+        assert_eq!(e.mem.u32(MOVED_ON), moved);
+        // A line chained to it, said in the other player's game: put too.
+        assert!(inject(&mut e, IDS[2]));
+        assert_eq!(said(&e).last(), Some(&INFOS[2]));
+        for _ in 0..20 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        // The step over: it lists this player's options, and holds no more.
+        assert!(show_topics(&mut e));
+        assert_eq!(menu_state(&mut e), 2);
+        assert!(!holds_injected(&mut e));
+        assert!(!skips_result(&mut e, ACTOR));
     }
 
     #[test]

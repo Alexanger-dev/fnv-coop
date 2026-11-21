@@ -102,8 +102,18 @@ pub struct Talker {
     pub windows_listed: u32,
     /// The other players' options put to the window (each time they changed).
     pub menus_shown: u32,
-    /// Clicks on another player's option (S42 step 2c says them; until then not said).
+    /// Clicks on another player's option, sent to the table for its owner to say.
     pub foreign_clicks: u32,
+    /// The step this player's game picked last (session, step): its line is not shown again.
+    my_pick: Option<(u32, u32)>,
+    /// The step another player picked whose line was put to this player's own window.
+    injected: Option<(u32, u32)>,
+    /// Lines of other players' picks put to this player's own conversation window.
+    pub lines_injected: u32,
+    /// Options of this player's another player picked, said here (and those that could not be).
+    pub asks_said: u32,
+    /// Options of this player's another player picked that this game could not say.
+    pub asks_failed: u32,
     /// A quest of this player's own and one of its stages: until that stage is done in this game
     /// the player is in its own opening, and its conversations are its own (each game has its own
     /// Doc Mitchell for it): none of its lines goes to the protocol, and no NPC is refused to it.
@@ -252,10 +262,40 @@ impl Talker {
         client: &mut DialogueClient,
         out: &mut Vec<DialogueMsg>,
     ) {
-        if coop_engine::choices::take_clicked(e).is_some() {
-            self.foreign_clicks += 1;
+        // Another player's option clicked: the table asks its owner to say it (S42 step 2c).
+        if let Some(info) = coop_engine::choices::take_clicked(e) {
+            if let Some(msg) = client.want(info) {
+                out.push(msg);
+                self.foreign_clicks += 1;
+            }
+        }
+        // An option of this player's another player picked: said here as a click on its row.
+        if let Some(asked) = client.take_asked() {
+            if coop_engine::choices::say(e, asked.choice) {
+                self.asks_said += 1;
+            } else {
+                self.asks_failed += 1;
+            }
         }
         let view = client.view().copied();
+        // Another player's pick in this player's own conversation: its line, said in that
+        // player's game, is put to this player's window, and done here.
+        if let Some(v) = view.filter(|v| v.initiator == me && !v.reported) {
+            let step = (v.session, v.step);
+            if let Some(choice) = v
+                .playing
+                .filter(|_| self.my_pick != Some(step) && self.injected != Some(step))
+            {
+                self.injected = Some(step);
+                if talk::mark_said(e, choice) {
+                    self.lines_marked += 1;
+                }
+                if coop_engine::watch::inject(e, choice) {
+                    self.lines_injected += 1;
+                }
+                out.extend(client.line_done());
+            }
+        }
         let mine = view.filter(|v| {
             if v.initiator == me {
                 talk::menu_npc(e) == Some(v.npc.0)
@@ -293,7 +333,14 @@ impl Talker {
             }
             return;
         }
-        if v.initiator != me && client.menu().is_some() && coop_engine::watch::show_topics(e) {
+        // The watching window, once the table has the step's list; this player's own window
+        // holding on another player's line, once that step is over (S42 step 2c).
+        let list = if v.initiator == me {
+            coop_engine::watch::holds_injected(e)
+        } else {
+            client.menu().is_some()
+        };
+        if list && coop_engine::watch::show_topics(e) {
             self.windows_listed += 1;
         }
         let lists = coop_engine::choices::counts(e).0;
@@ -366,6 +413,11 @@ impl Talker {
         let Some(choice) = v.playing.filter(|_| !v.reported) else {
             return;
         };
+        // The step is this player's own pick (S42 step 2c: a click in the window): its game
+        // said the line, and reports it done when it ends.
+        if self.my_pick == Some((v.session, v.step)) {
+            return;
+        }
         if self.shown != Some((v.session, v.step)) {
             self.shown = Some((v.session, v.step));
             // Said in the story once, for every player: a line the game says once is not said
@@ -447,6 +499,18 @@ impl Talker {
                 return;
             }
         }
+        // A line this player said in the window showing another player's conversation (a click
+        // on an option of its own, S42 step 2c) is the step's pick, as the initiator's lines are.
+        if let Some(v) = client
+            .view()
+            .copied()
+            .filter(|_| client.is_spectator())
+            .filter(|v| self.queue.front().is_some_and(|q| q.npc == v.npc.0))
+        {
+            self.closing = false;
+            self.say_lines(client, v, out);
+            return;
+        }
         if !client.is_initiator() {
             self.awaiting = None;
             self.closing = false;
@@ -465,9 +529,32 @@ impl Talker {
             // The close is on its way: what is said now belongs to the next conversation.
             return;
         }
+        if !self.say_lines(client, v, out) {
+            return;
+        }
+        // Nothing left to say and the menu is closed: the conversation is over.
+        if talk::menu_npc(e).is_none() {
+            if v.playing.is_some() {
+                out.extend(client.line_done());
+            } else if !self.closing {
+                self.closing = true;
+                out.extend(client.close());
+            }
+        }
+    }
+
+    /// The lines this game said in the conversation `v`: each the step's pick, each one's end
+    /// that step's lines done. False when a message went out or a step is awaited (nothing more
+    /// this step).
+    fn say_lines(
+        &mut self,
+        client: &mut DialogueClient,
+        v: coop_core::dialogue::View,
+        out: &mut Vec<DialogueMsg>,
+    ) -> bool {
         if let Some(step) = self.awaiting {
             if v.step < step {
-                return;
+                return false;
             }
             self.awaiting = None;
         }
@@ -482,7 +569,7 @@ impl Talker {
                 (true, Some(choice)) if choice == next.info => {
                     self.queue.pop_front();
                     out.extend(client.line_done());
-                    return;
+                    return false;
                 }
                 // An end with no line playing, or of another line: nothing to finish.
                 (true, _) => {
@@ -491,29 +578,22 @@ impl Talker {
                 // The next line while the last still plays: the last is done first.
                 (false, Some(_)) => {
                     out.extend(client.line_done());
-                    return;
+                    return false;
                 }
                 (false, None) => {
                     let Some(msg) = client.pick(next.info) else {
-                        return;
+                        return false;
                     };
                     self.queue.pop_front();
                     self.awaiting = Some(v.step + 1);
+                    self.my_pick = Some((v.session, v.step + 1));
                     self.picks += 1;
                     out.push(msg);
-                    return;
+                    return false;
                 }
             }
         }
-        // Nothing left to say and the menu is closed: the conversation is over.
-        if talk::menu_npc(e).is_none() {
-            if v.playing.is_some() {
-                out.extend(client.line_done());
-            } else if !self.closing {
-                self.closing = true;
-                out.extend(client.close());
-            }
-        }
+        true
     }
 }
 

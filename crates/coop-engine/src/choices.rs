@@ -14,9 +14,11 @@
 //!   have, are added after them with the owner's name, e.g. `ICE CREAM! (Player 2)`.
 //!
 //! A click on one of the added rows is not this game's to say (`DialogMenu::DoClick`,
-//! `007624f0`, wrapped too): it is noted ([`take_clicked`]) and the game does nothing with it.
-//! While a window shows another player's conversation ([`crate::watch`]) no row of it is said
-//! here yet: the option list is shown, read only.
+//! `007624f0`, wrapped too): it is noted ([`take_clicked`]) and the game does nothing with it
+//! (the session asks the table for it). A click on one of this game's own rows is said by the
+//! game as any click, in the window showing another player's conversation too ([`crate::watch`]:
+//! its results are then this game's, and the line it said is the step's pick). [`say`] clicks a
+//! row of this game's own when the table asks this game to say it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -125,6 +127,47 @@ pub fn set_foreign(e: &mut Engine, foreign: Vec<(u32, String)>) -> bool {
 /// An added row (another player's option) clicked since the last call: its info.
 pub fn take_clicked(e: &mut Engine) -> Option<u32> {
     state(e, |s| s.clicked.take())
+}
+
+/// Says option `info` (a form id) of this game's own in the open window listing its options, as
+/// the player's click on its row (the game's `DoClick`, its half-second guard after a new list
+/// lifted): the table asked this game to say it, another player having picked it (S42 step 2c).
+/// False, and nothing done, when no window lists it as one of this game's own.
+pub fn say(e: &mut Engine, info: u32) -> bool {
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if menu == 0 || info == 0 || e.mem.u32(menu + addr::DIALOG_MENU_STATE_OFFSET) != 2 {
+        return false;
+    }
+    let index = state(e, |s| {
+        (s.menu == menu)
+            .then(|| s.own.iter().position(|i| *i == info))
+            .flatten()
+    });
+    let Some(tile) = index.and_then(|i| row_tile(e, menu, i as u32)) else {
+        return false;
+    };
+    e.mem
+        .set_u32(menu + addr::DIALOG_MENU_IGNORE_INPUT_OFFSET, 0);
+    e.call(addr::DIALOG_MENU_DO_CLICK, &args![menu, -1i32 as u32, tile]);
+    log(|| format!("option {info:08x} said for another player's pick"));
+    true
+}
+
+/// The tile of the window's row `index` (the list box's items: the tile at +0, the row's data,
+/// its index, at +4).
+fn row_tile(e: &mut Engine, menu: u32, index: u32) -> Option<u32> {
+    let mut node = menu + addr::DIALOG_MENU_LIST_OFFSET + 4;
+    for _ in 0..ROWS_MAX * 2 {
+        let item = e.mem.u32(node);
+        if item != 0 && e.mem.u32(item + 4) == index {
+            return Some(e.mem.u32(item)).filter(|t| *t != 0);
+        }
+        node = e.mem.u32(node + 4);
+        if node == 0 {
+            break;
+        }
+    }
+    None
 }
 
 /// The infos of the topic manager's list, by index (0 for a topic without an info).
@@ -252,6 +295,7 @@ pub(crate) fn after_game(e: &mut Engine) {
 
 /// A list the game just built in `menu`: its own options noted, the other players' added.
 fn take_list(e: &mut Engine, menu: u32) {
+    crate::watch::clear_injected(e);
     let own = listed(e, menu);
     let foreign: Vec<(u32, String)> = state(e, |s| {
         s.menu = menu;
@@ -331,19 +375,27 @@ pub(crate) fn do_click(e: &mut Engine, a: &[u32]) -> Ret {
         }
         Some(s.rows.get(index - s.own.len()).copied())
     });
-    let watched = crate::watch::is_window(e, menu);
-    match added {
-        Some(info) => {
-            state(e, |s| s.clicked = info);
-            log(|| format!("another player's option clicked: {info:08x?}"));
+    let Some(info) = added else {
+        // One of this game's own rows: said here, in the watching window too (its results this
+        // game's, the line it said the step's pick).
+        let watched = crate::watch::is_window(e, menu);
+        if watched {
+            crate::watch::begin_own_click(e);
+        } else {
+            crate::watch::clear_injected(e);
         }
-        None if watched => log(|| "a row of a watched conversation clicked: not said here".into()),
-        None => {
-            let r = e.call_next(addr::DIALOG_MENU_DO_CLICK, a);
-            after_game(e);
-            return r;
+        let r = e.call_next(addr::DIALOG_MENU_DO_CLICK, a);
+        if watched {
+            let last = e.mem.u32(addr::DIALOG_LAST_INFO);
+            let said = (last != 0).then(|| e.mem.u32(last + addr::FORM_ID_OFFSET));
+            crate::watch::end_own_click(e, said);
+            log(|| format!("a row of the watching window said here: {said:08x?}"));
         }
-    }
+        after_game(e);
+        return r;
+    };
+    state(e, |s| s.clicked = info);
+    log(|| format!("another player's option clicked: {info:08x?}"));
     e.ext_free::<Choices>()
         .clicks_held
         .fetch_add(1, Ordering::SeqCst);
@@ -373,6 +425,8 @@ mod tests {
     const GAME_LISTS: u32 = COUNTS + 8;
     const HEAP: u32 = COUNTS + 0xc;
     const ALPHA: u32 = 0x1234;
+    const ITEMS: u32 = BASE + 0xb000;
+    const NODES: u32 = BASE + 0xb800;
     /// Infos 0..5: form ids, the first four with a prompt, the last without one.
     const IDS: [u32; 5] = [0x10_0001, 0x10_0002, 0x10_0003, 0x10_0004, 0x10_0005];
 
@@ -477,6 +531,18 @@ mod tests {
             let text = e.mem.cstr(a[2]);
             e.mem.set_cstr(at + 4, &text);
             e.mem.set_u32(ROWS, n + 1);
+            // The list box's items, a list from the node embedded at +4: (tile, data).
+            let item = ITEMS + 0x10 * n;
+            e.mem.set_u32(item, tile(n));
+            e.mem.set_u32(item + 4, a[1]);
+            let head = a[0] + 4;
+            let node = if n == 0 { head } else { NODES + 8 * n };
+            e.mem.set_u32(node, item);
+            e.mem.set_u32(node + 4, 0);
+            if n > 0 {
+                let prev = if n == 1 { head } else { NODES + 8 * (n - 1) };
+                e.mem.set_u32(prev + 4, node);
+            }
             eax(tile(n))
         });
         e.register(addr::TILE_SET_NAME, |e, a| {
@@ -740,5 +806,39 @@ mod tests {
             .set_u32(BASE + 0x1400 + addr::DIALOG_MENU_STATE_OFFSET, 2);
         after_game(&mut e);
         assert_eq!(counts(&mut e).0, 3);
+    }
+
+    /// S42 step 2c: the table asks this game to say an option of its own: its row is clicked as
+    /// the player would, the half-second guard after a new list lifted.
+    #[test]
+    fn an_option_of_this_games_own_is_said_as_a_click_on_its_row() {
+        let mut e = world(&[0, 1]);
+        set_foreign(&mut e, vec![(IDS[3], "Player 2".into())]);
+        list(&mut e);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_IGNORE_INPUT_OFFSET, 1234);
+        assert!(say(&mut e, IDS[1]));
+        assert_eq!(e.mem.u32(SAID), 2, "row 1 clicked");
+        assert_eq!(e.mem.u32(MENU + addr::DIALOG_MENU_IGNORE_INPUT_OFFSET), 0);
+        // Another player's option (an added row), or one listed nowhere: not this game's.
+        e.mem.set_u32(SAID, 0);
+        assert!(!say(&mut e, IDS[3]));
+        assert!(!say(&mut e, IDS[2]));
+        assert!(!say(&mut e, 0));
+        assert_eq!(e.mem.u32(SAID), 0);
+        // Not while the window says a line.
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 3);
+        assert!(!say(&mut e, IDS[0]));
+        // Another window: its list was not taken.
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 2);
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, BASE + 0x1400);
+        e.mem
+            .set_u32(BASE + 0x1400 + addr::DIALOG_MENU_STATE_OFFSET, 2);
+        assert!(!say(&mut e, IDS[0]));
+        assert_eq!(e.mem.u32(SAID), 0);
+        // The first row.
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, MENU);
+        assert!(say(&mut e, IDS[0]));
+        assert_eq!(e.mem.u32(SAID), 1);
     }
 }

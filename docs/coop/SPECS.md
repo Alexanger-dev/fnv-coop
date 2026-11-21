@@ -1593,8 +1593,32 @@ and not said; a row of a watching window is not said here (read only until step 
 unit tests and mutation checks (all killed); two headless games (`/tmp/s_opts.sh`): the guest
 talked to Sunny, the host stood by; after her greeting the host's window listed the host's six
 options, both games sent theirs, the host's click on a row was held, and the window closed when
-the guest said goodbye. Still to do (step 2c): a click on one's own option said by one's game and
-sent as the step's pick, another's option sent as `Want` and said by its owner's game on `Ask`,
-and the initiator's window showing a line another player's game said.
-- Not yet: clicks from every player (step 2c), votes (step 3), rewards (step 4). Lines of no
-  shared quest are not sent between players yet (S16), so they are not shown to a watcher.
+the guest said goodbye.
+
+Step 2c, clicks from every player (2026-11-21). The council (3-0) chose that the game of the
+player whose option it is says it (its stats judge it, as agreed), not the initiator's game for
+every option (which would judge a watcher's speech check by the initiator's stats). The rule: the
+game whose player picked a line says it as its own, its end and any line chained to it included;
+every other game shows it, holds, and lists its own options when the step is over.
+- A click on one of this game's own rows in the watching window is said by the game as any click;
+  the window is then this game's to drive (`watch` "driving": its results run here, it is not held,
+  the game lists its next options itself) until another player's line is put to it. The line is
+  the step's pick (the session's `say_lines`, shared with the initiator's lines), and that player
+  does not get its own line again.
+- A click on an added row (another player's option) is sent as `Want`; on `Ask` the owner's game
+  says it (`choices::say`: a click on its row, the half-second guard lifted).
+- Another player's pick in the initiator's conversation is put to the initiator's window
+  (`watch::inject`): its results are not run there (the host's game runs a guest's; the host's
+  own ran in its game), the window holds on it (its end and a chained line are the other game's;
+  a chained line is put too) and lists the initiator's options once the step is over.
+- Checked: unit tests and mutation checks (all killed after four tests were tightened); two
+  headless games (`/tmp/s_click.sh`): the guest talked to Sunny, the host clicked one of its own
+  options ("What do you do around here?") in its watching window: the host's game said it and ran
+  both its results, the guest's window showed it without results, both windows listed the same
+  next options within six seconds, the quest unchanged in both. Not yet checked in two games: a
+  `Want`/`Ask` (needs a player with an option the other lacks).
+- Known limit until step 3: two clicks at the same moment, one from each player, are both said
+  in their games; the table takes the first, so the other player's game said a line the others did
+  not see. Step 3's votes hold every click until the choice is made.
+- Not yet: votes (step 3), rewards (step 4). Lines of no shared quest are not sent between
+  players yet (S16), so they are not shown to a watcher.

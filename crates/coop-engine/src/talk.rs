@@ -454,9 +454,11 @@ pub fn result_quest(e: &mut Engine) -> Option<u32> {
 }
 
 fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
-    // A line shown in the window watching another player's conversation: its result ran where
-    // it was said (S42). One the host's game runs for a guest is not the window's.
-    if !enacting(e) && crate::watch::is_watch_speaker(e, a.get(2).copied().unwrap_or(0)) {
+    // A line shown in the window watching another player's conversation, or one of another
+    // player's put to this player's own window: its result ran where it was said (S42). One the
+    // host's game runs for a guest is not the window's; one this game's player said in the window
+    // by a click is this game's (S42 step 2c).
+    if !enacting(e) && crate::watch::skips_result(e, a.get(2).copied().unwrap_or(0)) {
         crate::watch::note_skipped(e);
         return Ret::default();
     }
