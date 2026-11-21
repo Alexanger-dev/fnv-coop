@@ -81,6 +81,14 @@ pub struct Talker {
     pub lines_far_held: u32,
     /// "... is talking to ..." and "... finished talking to ..." notices shown instead.
     pub far_notices: u32,
+    /// Other players' lines as text, waiting to be shown one subtitle at a time.
+    subtitles: VecDeque<String>,
+    /// Steps the first waiting subtitle has waited for the HUD's own to end.
+    subtitle_waited: u32,
+    /// Lines shown as the game's subtitles.
+    pub subtitles_shown: u32,
+    /// Lines shown as HUD messages instead (the game's subtitles are off).
+    pub subtitles_as_messages: u32,
     /// A quest of this player's own and one of its stages: until that stage is done in this game
     /// the player is in its own opening, and its conversations are its own (each game has its own
     /// Doc Mitchell for it): none of its lines goes to the protocol, and no NPC is refused to it.
@@ -109,22 +117,64 @@ fn player_name(p: PlayerId) -> String {
 /// closed: about five minutes at 60 frames a second (a talker may read a long list of topics).
 pub const WATCH_QUIET_STEPS: u32 = 18_000;
 
-/// How a watched line is shown: what the player chose, when the info has a prompt, then each of
-/// the NPC's responses as a message of its own.
-fn messages(initiator: PlayerId, text: &str, prompt: &str) -> Vec<String> {
+/// How a watched line is shown as text: what the player chose, when the info has a prompt, then
+/// each of the NPC's responses (after the NPC's name, when it has one), each as a subtitle of its
+/// own ([`talk::subtitle_parts`]: a long one in several).
+fn messages(initiator: PlayerId, npc: Option<&str>, text: &str, prompt: &str) -> Vec<String> {
     let mut out = Vec::new();
     if !prompt.is_empty() {
-        out.push(format!("{}: {prompt}", player_name(initiator)));
+        out.extend(talk::subtitle_parts(&format!(
+            "{}: {prompt}",
+            player_name(initiator)
+        )));
     }
-    out.extend(
-        text.split(" | ")
-            .filter(|t| !t.trim().is_empty())
-            .map(str::to_string),
-    );
+    for t in text.split(" | ").filter(|t| !t.trim().is_empty()) {
+        let t = match npc {
+            Some(name) => format!("{name}: {}", t.trim()),
+            None => t.trim().to_string(),
+        };
+        out.extend(talk::subtitle_parts(&t));
+    }
     out
 }
 
+/// Subtitles waiting to be shown at most: more drops the oldest.
+pub const SUBTITLES_QUEUED_MAX: usize = 32;
+/// How many steps (frames) a waiting subtitle waits for the HUD's own (an NPC's nearby) to end
+/// before it is shown anyway.
+pub const SUBTITLE_WAIT_STEPS: u32 = 600;
+
 impl Talker {
+    fn queue_subtitles(&mut self, lines: Vec<String>) {
+        self.subtitles.extend(lines);
+        while self.subtitles.len() > SUBTITLES_QUEUED_MAX {
+            self.subtitles.pop_front();
+        }
+    }
+
+    /// Shows the next waiting subtitle once the HUD's last has ended (each its full time: the
+    /// game counts a subtitle's time from when it is queued), not while the player is busy. Where
+    /// the game shows no subtitles, as a HUD message.
+    fn show_subtitles(&mut self, e: &mut Engine) {
+        if self.subtitles.is_empty() || talk::busy(e) {
+            return;
+        }
+        if talk::subtitle_showing(e) && self.subtitle_waited < SUBTITLE_WAIT_STEPS {
+            self.subtitle_waited += 1;
+            return;
+        }
+        self.subtitle_waited = 0;
+        let Some(line) = self.subtitles.pop_front() else {
+            return;
+        };
+        if talk::subtitle(e, &line) {
+            self.subtitles_shown += 1;
+        } else {
+            talk::show(e, &line);
+            self.subtitles_as_messages += 1;
+        }
+    }
+
     /// One step. `share` says which of this game's lines are the shared story's (on a guest the
     /// ones the game held back for the host; on the host the ones of a shared quest). Returns the
     /// protocol messages to send to the host's dialogue table.
@@ -184,6 +234,7 @@ impl Talker {
         out: &mut Vec<DialogueMsg>,
     ) {
         coop_engine::watch::step(e);
+        self.show_subtitles(e);
         let view = client.view().copied().filter(|v| v.initiator != me);
         // The far conversation is over: its end is told when lines were held back.
         if let Some(f) = self.far {
@@ -238,9 +289,8 @@ impl Talker {
                 self.lines_windowed += 1;
             } else if talk::near(e, v.npc.0) {
                 if let Some((text, prompt)) = talk::line(e, choice) {
-                    for m in messages(v.initiator, &text, &prompt) {
-                        talk::show(e, &m);
-                    }
+                    let name = talk::name_of(e, v.npc.0);
+                    self.queue_subtitles(messages(v.initiator, name.as_deref(), &text, &prompt));
                     self.lines_shown += 1;
                 }
             } else {
@@ -271,9 +321,13 @@ impl Talker {
                     }
                 } else {
                     if let Some((text, prompt)) = talk::line(e, choice) {
-                        for m in messages(v.initiator, &text, &prompt) {
-                            talk::show(e, &m);
-                        }
+                        let name = talk::name_of(e, v.npc.0);
+                        self.queue_subtitles(messages(
+                            v.initiator,
+                            name.as_deref(),
+                            &text,
+                            &prompt,
+                        ));
                         self.lines_far_shown += 1;
                     }
                     f
@@ -445,10 +499,55 @@ mod tests {
     #[test]
     fn a_watched_line_is_the_prompt_then_each_response() {
         assert_eq!(
-            messages(PlayerId(1), "Howdy. | Welcome to Goodsprings.", "Hello."),
+            messages(
+                PlayerId(1),
+                None,
+                "Howdy. | Welcome to Goodsprings.",
+                "Hello."
+            ),
             ["Player 2: Hello.", "Howdy.", "Welcome to Goodsprings."]
         );
-        assert_eq!(messages(PlayerId(0), "Howdy.", ""), ["Howdy."]);
-        assert!(messages(PlayerId(0), "", "").is_empty());
+        assert_eq!(
+            messages(PlayerId(1), Some("Sunny Smiles"), "Howdy. | ", "Hello."),
+            ["Player 2: Hello.", "Sunny Smiles: Howdy."]
+        );
+        assert_eq!(messages(PlayerId(0), None, "Howdy.", ""), ["Howdy."]);
+        assert!(messages(PlayerId(0), Some("Sunny"), "", "").is_empty());
+    }
+
+    #[test]
+    fn at_most_so_many_subtitles_wait_the_oldest_dropped() {
+        let mut t = Talker::default();
+        t.queue_subtitles(
+            (0..SUBTITLES_QUEUED_MAX + 8)
+                .map(|n| n.to_string())
+                .collect(),
+        );
+        assert_eq!(t.subtitles.len(), SUBTITLES_QUEUED_MAX);
+        assert_eq!(t.subtitles.front().map(String::as_str), Some("8"));
+    }
+
+    #[test]
+    fn a_long_line_is_cut_at_spaces_into_subtitles() {
+        let word = "gecko ".repeat(100);
+        let long = format!("Sunny: {}", word.trim());
+        let parts = talk::subtitle_parts(&long);
+        assert!(parts.len() > 1);
+        assert!(parts
+            .iter()
+            .all(|p| p.chars().count() <= coop_engine::addr::SUBTITLE_MAX));
+        assert!(parts
+            .iter()
+            .all(|p| !p.starts_with(' ') && !p.ends_with(' ')));
+        assert_eq!(parts.join(" "), long);
+        // A word longer than a subtitle: cut inside it.
+        let one = "é".repeat(coop_engine::addr::SUBTITLE_MAX + 5);
+        let parts = talk::subtitle_parts(&one);
+        assert_eq!(
+            parts.iter().map(|p| p.chars().count()).collect::<Vec<_>>(),
+            [coop_engine::addr::SUBTITLE_MAX, 5]
+        );
+        assert_eq!(talk::subtitle_parts("  Howdy.  "), ["Howdy."]);
+        assert!(talk::subtitle_parts("   ").is_empty());
     }
 }

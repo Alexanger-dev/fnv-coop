@@ -40,6 +40,16 @@ const SLEEP_MENU: u32 = KIT + 0x200;
 const HOURS_TILE: u32 = KIT + 0x300;
 const SAVE_NAME: u32 = KIT + 0x400;
 /// The messages shown: 0x110 bytes each.
+/// The HUD, once a test turns the game's subtitles on ([`Story::subtitles_on`]): only its queue
+/// of subtitles (a count at `HUD_SUBTITLES_OFFSET + 8`).
+const HUD: u32 = KIT + 0x600;
+/// The subtitles the game showed, in order (each up to `SUBTITLE_MAX` characters and the end).
+const SUBTITLES: u32 = KIT + 0x6000;
+const SUBTITLE_SLOT: u32 = 0x110;
+const SUBTITLES_MAX: u32 = 64;
+const SUBTITLES_SHOWN: u32 = KIT + 0x24;
+/// The general subtitles setting (on unless a test turns it off).
+const SUBTITLES_OFF: u32 = KIT + 0x28;
 const MESSAGES: u32 = KIT + 0x1000;
 const MESSAGE_SLOT: u32 = 0x110;
 const MESSAGES_MAX: u32 = 64;
@@ -372,6 +382,59 @@ impl Story {
         let base = NAMES + NAME_SLOT * n;
         self.e.mem.set_cstr(base, name.as_bytes());
         self.e.mem.set_u32(r + addr::REF_BASE_FORM_OFFSET, base);
+    }
+
+    /// The game's HUD shows subtitles from now (`HUDMainMenu::ShowSubtitle`: each queued until a
+    /// test lets the time of the oldest run out, [`Story::subtitle_ends`]).
+    pub fn subtitles_on(&mut self) {
+        self.e.mem.set_u32(addr::HUD_SINGLETON, HUD);
+        self.e.register(addr::HUD_SHOW_SUBTITLE, |e, a| {
+            assert_eq!(a[0], HUD, "the HUD's ShowSubtitle");
+            if e.mem.u32(SUBTITLES_OFF) != 0 {
+                return Ret::default();
+            }
+            let text = e.mem.cstr(a[1]);
+            assert!(
+                text.len() <= addr::SUBTITLE_MAX,
+                "a subtitle the HUD would not hold"
+            );
+            let n = e.mem.u32(SUBTITLES_SHOWN);
+            assert!(n < SUBTITLES_MAX);
+            e.mem.set_cstr(SUBTITLES + SUBTITLE_SLOT * n, &text);
+            e.mem.set_u32(SUBTITLES_SHOWN, n + 1);
+            let count = HUD + addr::HUD_SUBTITLES_OFFSET + 8;
+            e.mem.set_u32(count, e.mem.u32(count) + 1);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+    }
+
+    /// The general subtitles setting is turned off (`true`) or on.
+    pub fn set_subtitles_off(&mut self, off: bool) {
+        self.e.mem.set_u32(SUBTITLES_OFF, u32::from(off));
+    }
+
+    /// The oldest queued subtitle's time runs out.
+    pub fn subtitle_ends(&mut self) {
+        let count = HUD + addr::HUD_SUBTITLES_OFFSET + 8;
+        let n = self.e.mem.u32(count);
+        self.e.mem.set_u32(count, n.saturating_sub(1));
+    }
+
+    /// The subtitles the game showed so far, in order.
+    pub fn subtitles(&mut self) -> Vec<String> {
+        (0..self.e.mem.u32(SUBTITLES_SHOWN))
+            .map(|i| {
+                self.e
+                    .mem
+                    .cstr(SUBTITLES + SUBTITLE_SLOT * i)
+                    .into_iter()
+                    .map(char::from)
+                    .collect()
+            })
+            .collect()
     }
 
     /// The HUD messages shown so far, in order.

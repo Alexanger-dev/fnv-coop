@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    CloseReason, Deny, DialogueEvent, DialogueMsg, HEARTBEAT_MISS_MS, LEASE_MS, LINE_TIMEOUT_MS,
+    CloseReason, Deny, DialogueEvent, DialogueMsg, MenuItem, ASK_TIMEOUT_MS, HEARTBEAT_MISS_MS,
+    LEASE_MS, LINE_TIMEOUT_MS, OPTIONS_MAX,
 };
 use crate::ids::{FormId, PlayerId};
 use crate::interest::Audience;
@@ -29,6 +30,16 @@ struct Playing {
     waiting: BTreeSet<PlayerId>,
 }
 
+/// A pick of another player's option, waiting for its owner to say it.
+#[derive(Clone, Debug)]
+struct Asking {
+    step: u32,
+    choice: u32,
+    by: PlayerId,
+    owner: PlayerId,
+    since_ms: u64,
+}
+
 #[derive(Clone, Debug)]
 struct Session {
     npc: FormId,
@@ -37,6 +48,37 @@ struct Session {
     playing: Option<Playing>,
     last_pick_ms: u64,
     last_beat_ms: u64,
+    /// Each player's options for the next step (S42 step 2).
+    offers: BTreeMap<PlayerId, Vec<u32>>,
+    /// The merged options last sent.
+    menu: Vec<MenuItem>,
+    asking: Option<Asking>,
+}
+
+impl Session {
+    /// Every player's options merged: the initiator's first, in its order, then each other
+    /// player's (by id) not offered yet; an option's owners the initiator first, then by id.
+    fn merged(&self) -> Vec<MenuItem> {
+        let mut order: Vec<PlayerId> = vec![self.initiator];
+        order.extend(self.offers.keys().copied().filter(|p| *p != self.initiator));
+        let mut items: Vec<MenuItem> = Vec::new();
+        for p in order {
+            for &choice in self.offers.get(&p).into_iter().flatten() {
+                match items.iter_mut().find(|i| i.choice == choice) {
+                    Some(i) => {
+                        if !i.owners.contains(&p) {
+                            i.owners.push(p);
+                        }
+                    }
+                    None => items.push(MenuItem {
+                        choice,
+                        owners: vec![p],
+                    }),
+                }
+            }
+        }
+        items
+    }
 }
 
 /// The authoritative dialogue lock and step sequencer.
@@ -89,10 +131,11 @@ impl DialogueHost {
     /// The step stays open, no script runs, and only the picker is told.
     /// A pick the table would ignore anyway gets no answer.
     pub fn refuse(&mut self, from: PlayerId, session: u32, step: u32, choice: u32) -> Vec<DOut> {
-        let open = self
-            .sessions
-            .get(&session)
-            .is_some_and(|s| s.initiator == from && s.playing.is_none() && step == s.step + 1);
+        let open = self.sessions.get(&session).is_some_and(|s| {
+            (s.initiator == from || s.offers.contains_key(&from))
+                && s.playing.is_none()
+                && step == s.step + 1
+        });
         if !open {
             return vec![];
         }
@@ -151,6 +194,16 @@ impl DialogueHost {
                 }
                 self.maybe_finish_step(session)
             }
+            DialogueMsg::Options {
+                session,
+                step,
+                choices,
+            } => self.options(from, session, step, choices, members),
+            DialogueMsg::Want {
+                session,
+                step,
+                choice,
+            } => self.want(from, session, step, choice, now_ms, members),
             DialogueMsg::Heartbeat { session } => {
                 if let Some(s) = self
                     .sessions
@@ -202,6 +255,9 @@ impl DialogueHost {
                 playing: None,
                 last_pick_ms: now_ms,
                 last_beat_ms: now_ms,
+                offers: BTreeMap::new(),
+                menu: Vec::new(),
+                asking: None,
             },
         );
         self.npc_lock.insert(npc, session);
@@ -226,11 +282,11 @@ impl DialogueHost {
         now_ms: u64,
         members: &[PlayerId],
     ) -> Vec<DOut> {
-        let Some(s) = self
-            .sessions
-            .get_mut(&session)
-            .filter(|s| s.initiator == from)
-        else {
+        // The initiator picks; so does any player in the conversation who offered options for
+        // this step (S42 step 2: its game said one of its own, or one it was asked to say).
+        let Some(s) = self.sessions.get_mut(&session).filter(|s| {
+            s.initiator == from || (members.contains(&from) && s.offers.contains_key(&from))
+        }) else {
             return vec![];
         };
         // duplicates (step already taken), skips and picks mid-step are ignored
@@ -238,6 +294,9 @@ impl DialogueHost {
             return vec![];
         }
         s.step = step;
+        s.offers.clear();
+        s.menu.clear();
+        s.asking = None;
         s.last_pick_ms = now_ms;
         s.last_beat_ms = now_ms;
         s.playing = Some(Playing {
@@ -259,6 +318,122 @@ impl DialogueHost {
                 session,
                 step,
                 choice,
+            },
+        )]
+    }
+
+    /// A player's options for the next step: merged with the others', and the merged list sent
+    /// to everyone when it changed. Only a player in the conversation, between steps.
+    fn options(
+        &mut self,
+        from: PlayerId,
+        session: u32,
+        step: u32,
+        mut choices: Vec<u32>,
+        members: &[PlayerId],
+    ) -> Vec<DOut> {
+        let Some(s) = self.sessions.get_mut(&session) else {
+            return vec![];
+        };
+        if !(from == s.initiator || members.contains(&from))
+            || s.playing.is_some()
+            || step != s.step + 1
+        {
+            return vec![];
+        }
+        choices.truncate(OPTIONS_MAX);
+        if choices.is_empty() {
+            s.offers.remove(&from);
+        } else {
+            s.offers.insert(from, choices);
+        }
+        let menu = s.merged();
+        if menu == s.menu {
+            return vec![];
+        }
+        s.menu = menu.clone();
+        vec![out(
+            Audience::All,
+            DialogueMsg::Menu {
+                session,
+                step,
+                items: menu,
+            },
+        )]
+    }
+
+    /// A player picks an option of the merged list that is not its own: an owner is asked to say
+    /// it (the initiator when it is one). One at a time; a pick of an option no one offers is
+    /// refused.
+    fn want(
+        &mut self,
+        from: PlayerId,
+        session: u32,
+        step: u32,
+        choice: u32,
+        now_ms: u64,
+        members: &[PlayerId],
+    ) -> Vec<DOut> {
+        let Some(s) = self.sessions.get_mut(&session) else {
+            return vec![];
+        };
+        if !(from == s.initiator || members.contains(&from))
+            || s.playing.is_some()
+            || step != s.step + 1
+            || s.asking.is_some()
+        {
+            return vec![];
+        }
+        let owner = s
+            .menu
+            .iter()
+            .find(|i| i.choice == choice)
+            .and_then(|i| i.owners.first().copied())
+            .filter(|o| *o != from && members.iter().chain([&s.initiator]).any(|m| m == o));
+        let Some(owner) = owner else {
+            return vec![out(
+                Audience::To(from),
+                DialogueMsg::Refused {
+                    session,
+                    step,
+                    choice,
+                },
+            )];
+        };
+        s.asking = Some(Asking {
+            step,
+            choice,
+            by: from,
+            owner,
+            since_ms: now_ms,
+        });
+        vec![out(
+            Audience::To(owner),
+            DialogueMsg::Ask {
+                session,
+                step,
+                choice,
+                by: from,
+            },
+        )]
+    }
+
+    /// A pick the owner did not say in time (it left, or its game could not): refused to the
+    /// player who made it.
+    fn ask_lapsed(&mut self, session: u32) -> Vec<DOut> {
+        let Some(a) = self
+            .sessions
+            .get_mut(&session)
+            .and_then(|s| s.asking.take())
+        else {
+            return vec![];
+        };
+        vec![out(
+            Audience::To(a.by),
+            DialogueMsg::Refused {
+                session,
+                step: a.step,
+                choice: a.choice,
             },
         )]
     }
@@ -319,11 +494,37 @@ impl DialogueHost {
         }
         let ids: Vec<u32> = self.sessions.keys().copied().collect();
         for id in ids {
-            if let Some(Session {
-                playing: Some(pl), ..
-            }) = self.sessions.get_mut(&id)
-            {
-                pl.waiting.remove(&p);
+            let mut lapsed = false;
+            let mut menu = None;
+            if let Some(s) = self.sessions.get_mut(&id) {
+                if let Some(pl) = s.playing.as_mut() {
+                    pl.waiting.remove(&p);
+                }
+                lapsed = s.asking.as_ref().is_some_and(|a| a.owner == p);
+                if s.asking.as_ref().is_some_and(|a| a.by == p) {
+                    s.asking = None;
+                }
+                // Its options leave with it.
+                if s.offers.remove(&p).is_some() {
+                    let merged = s.merged();
+                    if merged != s.menu {
+                        s.menu = merged.clone();
+                        menu = Some((s.step + 1, merged));
+                    }
+                }
+            }
+            if lapsed {
+                res.extend(self.ask_lapsed(id));
+            }
+            if let Some((step, items)) = menu {
+                res.push(out(
+                    Audience::All,
+                    DialogueMsg::Menu {
+                        session: id,
+                        step,
+                        items,
+                    },
+                ));
             }
             res.extend(self.maybe_finish_step(id));
         }
@@ -347,6 +548,13 @@ impl DialogueHost {
                     if now_ms.saturating_sub(p.started_ms) >= LINE_TIMEOUT_MS {
                         p.waiting.clear();
                     }
+                }
+                let lapsed = s
+                    .asking
+                    .as_ref()
+                    .is_some_and(|a| now_ms.saturating_sub(a.since_ms) >= ASK_TIMEOUT_MS);
+                if lapsed {
+                    res.extend(self.ask_lapsed(id));
                 }
                 res.extend(self.maybe_finish_step(id));
             }
@@ -763,5 +971,326 @@ mod tests {
         );
         c.on_msg(o[0].msg.clone(), 1);
         assert_eq!((c.refused, c.last_refused), (1, Some((s, 9))));
+    }
+
+    fn offer(h: &mut DialogueHost, who: PlayerId, s: u32, step: u32, c: &[u32]) -> Vec<DOut> {
+        h.on_msg(
+            who,
+            DialogueMsg::Options {
+                session: s,
+                step,
+                choices: c.to_vec(),
+            },
+            1,
+            &ALL,
+        )
+    }
+
+    fn item(choice: u32, owners: &[PlayerId]) -> MenuItem {
+        MenuItem {
+            choice,
+            owners: owners.to_vec(),
+        }
+    }
+
+    #[test]
+    fn every_players_options_are_merged_the_initiators_first() {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        // B's first: its own list, each option once.
+        let o = offer(&mut h, B, s, 1, &[3, 2, 3]);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].aud, Audience::All);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Menu {
+                session: s,
+                step: 1,
+                items: vec![item(3, &[B]), item(2, &[B])]
+            }
+        );
+        // The initiator's: first, in its order; a shared option has both, the initiator first.
+        let o = offer(&mut h, A, s, 1, &[1, 2]);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Menu {
+                session: s,
+                step: 1,
+                items: vec![item(1, &[A]), item(2, &[A, B]), item(3, &[B])]
+            }
+        );
+        // The same again: nothing sent. For another step, or from no one in it: ignored.
+        assert!(offer(&mut h, A, s, 1, &[1, 2]).is_empty());
+        assert!(offer(&mut h, B, s, 2, &[9]).is_empty());
+        assert!(h
+            .on_msg(
+                PlayerId(7),
+                DialogueMsg::Options {
+                    session: s,
+                    step: 1,
+                    choices: vec![9]
+                },
+                1,
+                &ALL
+            )
+            .is_empty());
+        // B has none now: its options leave the list.
+        let o = offer(&mut h, B, s, 1, &[]);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Menu {
+                session: s,
+                step: 1,
+                items: vec![item(1, &[A]), item(2, &[A])]
+            }
+        );
+        // At most OPTIONS_MAX of one player's.
+        let many: Vec<u32> = (100..100 + OPTIONS_MAX as u32 + 5).collect();
+        let o = offer(&mut h, H, s, 1, &many);
+        let DialogueMsg::Menu { items, .. } = &o[0].msg else {
+            panic!()
+        };
+        assert_eq!(items.len(), 2 + OPTIONS_MAX);
+    }
+
+    #[test]
+    fn a_player_who_offered_options_picks_and_the_step_starts_anew() {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        // H offered nothing: its pick is not taken.
+        let pick = |h: &mut DialogueHost, who, step, choice| {
+            h.on_msg(
+                who,
+                DialogueMsg::Pick {
+                    session: s,
+                    step,
+                    choice,
+                },
+                5,
+                &ALL,
+            )
+        };
+        assert!(pick(&mut h, H, 1, 3).is_empty());
+        offer(&mut h, B, s, 1, &[3]);
+        // Nor one of a player not in the conversation, though it offered.
+        assert!(h
+            .on_msg(
+                B,
+                DialogueMsg::Pick {
+                    session: s,
+                    step: 1,
+                    choice: 3
+                },
+                5,
+                &[H, A]
+            )
+            .is_empty());
+        let o = pick(&mut h, B, 1, 3);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Picked {
+                session: s,
+                step: 1,
+                choice: 3
+            }
+        );
+        assert!(matches!(
+            h.take_events()[0],
+            DialogueEvent::RunBegin {
+                choice: 3,
+                initiator: B,
+                ..
+            }
+        ));
+        done_all(&mut h, s, 1);
+        // The next step: B's options of the last step are gone, so B picks no more until it
+        // offers again.
+        assert!(pick(&mut h, B, 2, 3).is_empty());
+        assert!(
+            !pick(&mut h, A, 2, 4).is_empty(),
+            "the initiator always picks"
+        );
+    }
+
+    #[test]
+    fn a_pick_of_another_players_option_asks_its_owner_once() {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        offer(&mut h, A, s, 1, &[1, 2]);
+        offer(&mut h, B, s, 1, &[2, 3]);
+        let want = |h: &mut DialogueHost, who, choice, now| {
+            h.on_msg(
+                who,
+                DialogueMsg::Want {
+                    session: s,
+                    step: 1,
+                    choice,
+                },
+                now,
+                &ALL,
+            )
+        };
+        // An option no one offers, or one of the picker's own: refused to the picker.
+        for (who, choice) in [(H, 9), (B, 3)] {
+            let o = want(&mut h, who, choice, 1);
+            assert_eq!(o[0].aud, Audience::To(who));
+            assert_eq!(
+                o[0].msg,
+                DialogueMsg::Refused {
+                    session: s,
+                    step: 1,
+                    choice
+                }
+            );
+        }
+        // H picks 2 (A's and B's): the initiator is asked.
+        let o = want(&mut h, H, 2, 1);
+        assert_eq!(o[0].aud, Audience::To(A));
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Ask {
+                session: s,
+                step: 1,
+                choice: 2,
+                by: H
+            }
+        );
+        // One at a time.
+        assert!(want(&mut h, B, 1, 2).is_empty());
+        // Not said in time: refused to H, and another may be asked.
+        assert!(h.tick(1 + ASK_TIMEOUT_MS - 1).is_empty());
+        let o = h.tick(1 + ASK_TIMEOUT_MS);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].aud, Audience::To(H));
+        assert!(matches!(o[0].msg, DialogueMsg::Refused { choice: 2, .. }));
+        // A picks 3 (B's): B asked; B leaves before saying it: refused to A, and B's options
+        // leave the list.
+        let o = want(&mut h, A, 3, 20_000);
+        assert_eq!(o[0].aud, Audience::To(B));
+        let o = h.on_disconnect(B);
+        assert!(o
+            .iter()
+            .any(|d| d.aud == Audience::To(A)
+                && matches!(d.msg, DialogueMsg::Refused { choice: 3, .. })));
+        assert!(o.iter().any(|d| d.msg
+            == DialogueMsg::Menu {
+                session: s,
+                step: 1,
+                items: vec![item(1, &[A]), item(2, &[A])]
+            }));
+    }
+
+    #[test]
+    fn an_asked_owners_pick_is_taken_and_ends_the_ask() {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        offer(&mut h, B, s, 1, &[3]);
+        h.on_msg(
+            A,
+            DialogueMsg::Want {
+                session: s,
+                step: 1,
+                choice: 3,
+            },
+            1,
+            &ALL,
+        );
+        // B's game said 3's failure line (a speech check): that is the step's pick.
+        let o = h.on_msg(
+            B,
+            DialogueMsg::Pick {
+                session: s,
+                step: 1,
+                choice: 33,
+            },
+            2,
+            &ALL,
+        );
+        assert!(matches!(o[0].msg, DialogueMsg::Picked { choice: 33, .. }));
+        // No refusal later: the ask is over.
+        assert!(h
+            .tick(2 + ASK_TIMEOUT_MS)
+            .iter()
+            .all(|d| !matches!(d.msg, DialogueMsg::Refused { .. })));
+    }
+
+    #[test]
+    fn options_and_wants_mid_step_are_ignored() {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        h.on_msg(
+            A,
+            DialogueMsg::Pick {
+                session: s,
+                step: 1,
+                choice: 9,
+            },
+            5,
+            &ALL,
+        );
+        assert!(offer(&mut h, B, s, 2, &[3]).is_empty());
+        assert!(h
+            .on_msg(
+                B,
+                DialogueMsg::Want {
+                    session: s,
+                    step: 2,
+                    choice: 9
+                },
+                6,
+                &ALL
+            )
+            .is_empty());
+    }
+
+    #[test]
+    fn an_owner_not_in_the_conversation_is_not_asked_and_a_leaving_asker_frees_the_ask() {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        offer(&mut h, B, s, 1, &[3, 3, 4]);
+        // B walked off (still connected): its option is not asked of it.
+        let o = h.on_msg(
+            A,
+            DialogueMsg::Want {
+                session: s,
+                step: 1,
+                choice: 3,
+            },
+            1,
+            &[H, A],
+        );
+        assert!(matches!(o[0].msg, DialogueMsg::Refused { choice: 3, .. }));
+        // H asks B for 4, then leaves: the ask is over, A may ask at once.
+        let o = h.on_msg(
+            H,
+            DialogueMsg::Want {
+                session: s,
+                step: 1,
+                choice: 4,
+            },
+            1,
+            &ALL,
+        );
+        assert_eq!(o[0].aud, Audience::To(B));
+        h.on_disconnect(H);
+        let o = h.on_msg(
+            A,
+            DialogueMsg::Want {
+                session: s,
+                step: 1,
+                choice: 3,
+            },
+            2,
+            &[A, B],
+        );
+        assert_eq!(o[0].aud, Audience::To(B));
+        assert!(matches!(
+            o[0].msg,
+            DialogueMsg::Ask {
+                choice: 3,
+                by: A,
+                ..
+            }
+        ));
     }
 }

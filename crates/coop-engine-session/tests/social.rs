@@ -290,6 +290,100 @@ fn a_busy_far_player_told_of_a_second_players_conversation_is_told_both_ends() {
     );
 }
 
+/// The owner, 2026-11-21: a far player's lines came as Pip-Boy notifications, cut short. They
+/// are the game's own subtitles now, one at a time (each its full time), the NPC's named.
+#[test]
+fn a_far_player_gets_the_lines_as_subtitles_one_at_a_time() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.set_name(SUNNY, "Sunny Smiles");
+    w.host.subtitles_on();
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    // The first shown; the next waits for it to end.
+    assert_eq!(w.host.subtitles(), ["Player 2: Where is Sunny?"]);
+    w.host.subtitle_ends();
+    w.run(2);
+    assert_eq!(w.host.subtitles().len(), 2);
+    assert_eq!(
+        w.host.subtitles()[1],
+        "Sunny Smiles: Head on up to the saloon."
+    );
+    w.host.subtitle_ends();
+    w.run(2);
+    assert_eq!(
+        w.host.subtitles()[2],
+        "Sunny Smiles: I will meet you there."
+    );
+    w.host.subtitle_ends();
+    w.run(20);
+    assert_eq!(w.host.subtitles().len(), 3);
+    assert!(w.host.messages().is_empty(), "{:?}", w.host.messages());
+    assert_eq!(w.hd.social.talker.subtitles_shown, 3);
+}
+
+/// Waiting subtitles are not shown while the player is busy, and one waits for the HUD's own
+/// (an NPC's nearby) only so long.
+#[test]
+fn waiting_subtitles_hold_while_busy_and_do_not_wait_forever() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.subtitles_on();
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert_eq!(w.host.subtitles().len(), 1);
+    // The inventory opened: the first ends, nothing more while it is open.
+    w.host.open_menu(INVENTORY);
+    w.host.subtitle_ends();
+    w.run(30);
+    assert_eq!(w.host.subtitles().len(), 1);
+    w.host.close_menu();
+    w.run(2);
+    assert_eq!(w.host.subtitles().len(), 2);
+    // The HUD's subtitle never ends (an NPC chattering nearby): the next is shown after a while.
+    w.run(coop_engine_session::talk::SUBTITLE_WAIT_STEPS - 10);
+    assert_eq!(w.host.subtitles().len(), 2);
+    w.run(20);
+    assert_eq!(w.host.subtitles().len(), 3);
+}
+
+/// A subtitle longer than the game's holds is cut to what it holds (the game copies it into
+/// 0x104 bytes).
+#[test]
+fn a_subtitle_is_never_longer_than_the_game_holds() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.subtitles_on();
+    assert!(coop_engine::talk::subtitle(&mut w.host.e, &"x".repeat(400)));
+    assert_eq!(w.host.subtitles()[0].len(), coop_engine::addr::SUBTITLE_MAX);
+}
+
+/// With the game's subtitles turned off, the lines come as HUD messages, one a step.
+#[test]
+fn with_subtitles_off_the_lines_come_as_messages() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.subtitles_on();
+    w.host.set_subtitles_off(true);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert!(w.host.subtitles().is_empty());
+    assert_eq!(
+        w.host.messages(),
+        [
+            "Player 2: Where is Sunny?",
+            "Head on up to the saloon.",
+            "I will meet you there."
+        ]
+    );
+    assert_eq!(w.hd.social.talker.subtitles_as_messages, 3);
+}
+
 /// A far player in a fight is busy too: told of the conversation, not shown its lines.
 #[test]
 fn a_far_player_in_a_fight_is_told_of_the_conversation_not_shown_its_lines() {

@@ -299,6 +299,84 @@ pub fn show(e: &mut Engine, text: &str) -> bool {
     true
 }
 
+/// Shows `text` as one of the game's own subtitles, at the foot of the screen as an NPC's speech
+/// (`HUDMainMenu::ShowSubtitle`, with no sound: its time comes from its length), placed at the
+/// player so the HUD's distance test always passes. Text longer than a subtitle holds is cut at
+/// a space (the caller splits it, [`subtitle_parts`]). False when the game shows no subtitles (the
+/// setting is off, or there is no HUD or player): the caller shows it another way.
+pub fn subtitle(e: &mut Engine, text: &str) -> bool {
+    let hud = e.mem.u32(addr::HUD_SINGLETON);
+    let Some(player) = crate::live::player(e) else {
+        return false;
+    };
+    if hud == 0 || !e.is_registered(addr::HUD_SHOW_SUBTITLE) {
+        return false;
+    }
+    let mut bytes: Vec<u8> = text
+        .chars()
+        .map(|c| if (c as u32) < 0x100 { c as u8 } else { b'?' })
+        .filter(|b| *b != 0)
+        .collect();
+    bytes.truncate(addr::SUBTITLE_MAX);
+    let at = [0, 4, 8].map(|o| e.mem.u32(player.wrapping_add(addr::REF_POS_OFFSET + o)));
+    let len = (bytes.len() as u32 + 4) & !3;
+    e.with_stack(len, |e, buffer| {
+        e.mem.set_cstr(buffer.addr(), &bytes);
+        e.call(
+            addr::HUD_SHOW_SUBTITLE,
+            &args![
+                hud,
+                buffer.addr(),
+                0u32,
+                0u32,
+                0u32,
+                at[0],
+                at[1],
+                at[2],
+                0u32,
+                0u32
+            ],
+        )
+        .bool()
+    })
+}
+
+/// `text` in parts a subtitle holds ([`addr::SUBTITLE_MAX`] characters, one byte each in the
+/// game), each cut at a space where it can be.
+pub fn subtitle_parts(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest: Vec<char> = text.trim().chars().collect();
+    while rest.len() > addr::SUBTITLE_MAX {
+        let cut = rest[..=addr::SUBTITLE_MAX]
+            .iter()
+            .rposition(|c| *c == ' ')
+            .unwrap_or(addr::SUBTITLE_MAX);
+        out.push(
+            rest[..cut]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string(),
+        );
+        rest = rest[cut..]
+            .iter()
+            .collect::<String>()
+            .trim_start()
+            .chars()
+            .collect();
+    }
+    if !rest.is_empty() {
+        out.push(rest.into_iter().collect());
+    }
+    out
+}
+
+/// Whether the HUD has a subtitle queued (one of co-op's, or an NPC's).
+pub fn subtitle_showing(e: &mut Engine) -> bool {
+    let hud = e.mem.u32(addr::HUD_SINGLETON);
+    hud != 0 && e.mem.u32(hud + addr::HUD_SUBTITLES_OFFSET + 8) != 0
+}
+
 /// Whether this game's player is busy: a menu is open (the Pip-Boy, a trade, a conversation of
 /// its own) or the player is in a fight. Another player's conversation is then not shown line by
 /// line (S42, the owner's choice of 2026-11-21).

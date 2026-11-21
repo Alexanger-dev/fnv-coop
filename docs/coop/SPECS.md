@@ -1555,8 +1555,26 @@ the session ended); the NPC's copy keeps following its game while it is open.
   window on her and showed both lines (none as text), closed it when the guest's conversation
   ended, ran no result of it (both games at VCG02 stage 10), and Sunny stood in the same place on
   the same package, in no conversation, in both games afterwards.
-- A player far from the NPC (not in its cell) gets the lines as HUD text, held back while busy (a
+- A player far from the NPC (not in its cell) gets the lines as text, held back while busy (a
   menu open, or in a fight) with an "is talking to" and a "finished talking to" notice instead
-  (DECISIONS.md D9, 2026-11-21).
+  (DECISIONS.md D9, 2026-11-21). The text is the game's own subtitles since 2026-11-21 (the owner:
+  the Pip-Boy notification cut the lines short): `HUDMainMenu::ShowSubtitle` (`00774fd0`, no
+  sound, placed at the player), the player's choice ("Player 2: ...") then each response after
+  the NPC's name, a long one split at spaces into 259-character parts, one subtitle at a time
+  (the game counts each one's time from when it is queued, so co-op queues the next only once
+  the HUD has none, or after 600 steps of an NPC's own), none while busy; with the game's
+  subtitles off, HUD messages as before.
+
+**Step 2, the merged option list (in progress, 2026-11-21).** The protocol (`coop_core::dialogue`):
+each player in the conversation sends `Options` (the infos its player may say for the next step,
+at most 64); the table merges them, the initiator's first in its order, each option's owners the
+initiator first, and sends `Menu` when the list changed; a player picks one of its own options as
+before (`Pick`, the info its game said: the table now takes a pick from any player in the
+conversation who offered options for the step, not only the initiator); a player picks another's
+option with `Want`, and the table sends `Ask` to its first owner still in the conversation, one at
+a time, refused to the picker when no one offers it, when the owner leaves, or after 10 s. A pick
+clears the step's options. Still to do: the games' own options read from their windows, the
+others' shown there with the owner's name, clicks sent as `Want` or said, and the initiator's
+window showing a line another player's game said.
 - Not yet: the watcher's own options (step 2), votes (step 3), rewards (step 4). Lines of no shared
   quest are not sent between players yet (S16), so they are not shown to a watcher.

@@ -1015,6 +1015,17 @@ pub const HUD_UPDATE_COMPASS: u32 = 0x0077_9070;
 pub const HUD_GET_COMPASS_ANGLE: u32 = 0x0077_8b80;
 /// The HUD (`HUDMainMenu *`), 0 when there is none.
 pub const HUD_SINGLETON: u32 = 0x011d_96c0;
+/// `HUDMainMenu::ShowSubtitle` (`thiscall`: the HUD, the text, a `BSSoundHandle` by value (three
+/// words), a position by value (three floats), the speaker, a "first" byte; `00774fd0`,
+/// `hudmainmenu.rs`): queues a subtitle, as an NPC's speech does, when subtitles are on (the
+/// general subtitles setting, `011d8928`); its time is the sound's or, without one, the text's
+/// length times `fSubtitleSpeed`. Whether it was queued. The HUD shows one at a time, the nearest
+/// to the player of those whose time has not run out (counted from when each was queued).
+pub const HUD_SHOW_SUBTITLE: u32 = 0x0077_4fd0;
+/// The HUD's queued subtitles (`BSSimpleArray`; its count at +8).
+pub const HUD_SUBTITLES_OFFSET: u32 = 0x198;
+/// What `HUDMainMenu::ShowSubtitle` keeps of a subtitle's text: 0x104 bytes with the end.
+pub const SUBTITLE_MAX: usize = 0x103;
 /// `HUDMainMenu::iCompassDisplayWidth` (+0x214) and `iCompassHalfAngle` (+0x218).
 pub const HUD_COMPASS_DISPLAY_WIDTH_OFFSET: u32 = 0x214;
 /// See [`HUD_COMPASS_DISPLAY_WIDTH_OFFSET`].

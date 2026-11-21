@@ -1,6 +1,6 @@
 //! Guest side of the dialogue protocol: what the dialogue UI needs to know.
 
-use super::{CloseReason, Deny, DialogueMsg, HEARTBEAT_MS};
+use super::{CloseReason, Deny, DialogueMsg, MenuItem, HEARTBEAT_MS};
 use crate::ids::{FormId, PlayerId};
 
 /// The session this machine currently sees.
@@ -20,6 +20,19 @@ pub struct View {
     pub reported: bool,
 }
 
+/// The table asks this player's game to say one of its options, picked by another player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Asked {
+    /// Session.
+    pub session: u32,
+    /// Step.
+    pub step: u32,
+    /// The option (an info).
+    pub choice: u32,
+    /// Who picked it.
+    pub by: PlayerId,
+}
+
 /// Dialogue state for one machine.
 #[derive(Clone, Debug)]
 pub struct DialogueClient {
@@ -35,6 +48,10 @@ pub struct DialogueClient {
     pub refused: u32,
     /// The newest refused pick: (session, choice).
     pub last_refused: Option<(u32, u32)>,
+    /// The conversation's merged options for the next step (S42 step 2).
+    menu: Option<(u32, u32, Vec<MenuItem>)>,
+    /// An option of ours another player picked, for this game to say.
+    asked: Option<Asked>,
 }
 
 impl DialogueClient {
@@ -49,7 +66,48 @@ impl DialogueClient {
             last_closed: None,
             refused: 0,
             last_refused: None,
+            menu: None,
+            asked: None,
         }
+    }
+
+    /// The conversation's merged options for the next step, when the table sent them.
+    pub fn menu(&self) -> Option<&[MenuItem]> {
+        let v = self.view.as_ref()?;
+        self.menu
+            .as_ref()
+            .filter(|(session, step, _)| {
+                *session == v.session && *step == v.step + 1 && v.playing.is_none()
+            })
+            .map(|(_, _, items)| items.as_slice())
+    }
+
+    /// An option of ours another player picked, for this game to say (taken once).
+    pub fn take_asked(&mut self) -> Option<Asked> {
+        let v = self.view?;
+        self.asked
+            .take()
+            .filter(|a| a.session == v.session && a.step == v.step + 1 && v.playing.is_none())
+    }
+
+    /// This player's options for the next step (S42 step 2): the infos its player may say.
+    pub fn options(&self, choices: Vec<u32>) -> Option<DialogueMsg> {
+        let v = self.view.as_ref().filter(|v| v.playing.is_none())?;
+        Some(DialogueMsg::Options {
+            session: v.session,
+            step: v.step + 1,
+            choices,
+        })
+    }
+
+    /// Picks another player's option of the merged list: the table asks its owner to say it.
+    pub fn want(&self, choice: u32) -> Option<DialogueMsg> {
+        let v = self.view.as_ref().filter(|v| v.playing.is_none())?;
+        Some(DialogueMsg::Want {
+            session: v.session,
+            step: v.step + 1,
+            choice,
+        })
     }
 
     /// Current session, if any.
@@ -79,12 +137,10 @@ impl DialogueClient {
         (req, DialogueMsg::Open { req, npc })
     }
 
-    /// Picks the next choice; only the initiator between steps may.
+    /// Picks the next choice (the info this game said), between steps: the initiator, or since
+    /// S42 step 2 any player in the conversation who offered options (the table decides).
     pub fn pick(&mut self, choice: u32) -> Option<DialogueMsg> {
-        let v = self
-            .view
-            .as_ref()
-            .filter(|v| v.initiator == self.me && v.playing.is_none())?;
+        let v = self.view.as_ref().filter(|v| v.playing.is_none())?;
         Some(DialogueMsg::Pick {
             session: v.session,
             step: v.step + 1,
@@ -149,6 +205,30 @@ impl DialogueClient {
                     self.last_refused = Some((session, choice));
                 }
             }
+            DialogueMsg::Menu {
+                session,
+                step,
+                items,
+            } => {
+                if self.view.is_some_and(|v| v.session == session) {
+                    self.menu = Some((session, step, items));
+                }
+            }
+            DialogueMsg::Ask {
+                session,
+                step,
+                choice,
+                by,
+            } => {
+                if self.view.is_some_and(|v| v.session == session) {
+                    self.asked = Some(Asked {
+                        session,
+                        step,
+                        choice,
+                        by,
+                    });
+                }
+            }
             DialogueMsg::Picked {
                 session,
                 step,
@@ -162,6 +242,8 @@ impl DialogueClient {
                     v.step = step;
                     v.playing = Some(choice);
                     v.reported = false;
+                    self.menu = None;
+                    self.asked = None;
                 }
             }
             DialogueMsg::StepEnd { session, step } => {
@@ -176,6 +258,8 @@ impl DialogueClient {
             DialogueMsg::Closed { session, reason } => {
                 if self.view.map_or(false, |v| v.session == session) {
                     self.view = None;
+                    self.menu = None;
+                    self.asked = None;
                 }
                 self.last_closed = Some((session, reason));
             }
@@ -236,11 +320,21 @@ mod tests {
     }
 
     #[test]
-    fn spectator_cannot_pick_or_close_but_reports_lines() {
+    fn spectator_cannot_close_but_may_pick_and_reports_lines() {
         let mut c = DialogueClient::new(PlayerId(2));
         start(&mut c, 1);
         assert!(c.is_spectator());
-        assert!(c.pick(1).is_none() && c.close().is_none() && c.heartbeat(99_999).is_none());
+        assert!(c.close().is_none() && c.heartbeat(99_999).is_none());
+        // S42 step 2: a spectator's pick goes to the table, which takes it from a player who
+        // offered options for the step.
+        assert!(matches!(
+            c.pick(1),
+            Some(DialogueMsg::Pick {
+                session: 4,
+                step: 1,
+                choice: 1
+            })
+        ));
         c.on_msg(
             DialogueMsg::Picked {
                 session: 4,
@@ -322,5 +416,138 @@ mod tests {
             0,
         );
         assert_eq!(c.denied, Some((req, Deny::Busy)));
+    }
+
+    #[test]
+    fn the_menu_and_an_ask_are_for_the_next_step_of_this_session_only() {
+        let mut c = DialogueClient::new(PlayerId(2));
+        start(&mut c, 1);
+        let item = MenuItem {
+            choice: 7,
+            owners: vec![PlayerId(1)],
+        };
+        assert!(matches!(
+            c.options(vec![7, 8]),
+            Some(DialogueMsg::Options { session: 4, step: 1, ref choices }) if *choices == [7, 8]
+        ));
+        assert!(matches!(
+            c.want(7),
+            Some(DialogueMsg::Want {
+                session: 4,
+                step: 1,
+                choice: 7
+            })
+        ));
+        // Another session's menu and ask: not ours.
+        c.on_msg(
+            DialogueMsg::Menu {
+                session: 5,
+                step: 1,
+                items: vec![item.clone()],
+            },
+            1,
+        );
+        c.on_msg(
+            DialogueMsg::Ask {
+                session: 5,
+                step: 1,
+                choice: 7,
+                by: PlayerId(1),
+            },
+            1,
+        );
+        assert!(c.menu().is_none());
+        assert!(c.take_asked().is_none());
+        c.on_msg(
+            DialogueMsg::Menu {
+                session: 4,
+                step: 1,
+                items: vec![item.clone()],
+            },
+            1,
+        );
+        c.on_msg(
+            DialogueMsg::Ask {
+                session: 4,
+                step: 1,
+                choice: 7,
+                by: PlayerId(1),
+            },
+            1,
+        );
+        assert_eq!(c.menu(), Some(&[item.clone()][..]));
+        assert_eq!(
+            c.take_asked(),
+            Some(Asked {
+                session: 4,
+                step: 1,
+                choice: 7,
+                by: PlayerId(1)
+            })
+        );
+        assert!(c.take_asked().is_none(), "taken once");
+        // A menu for a later step is not this one's.
+        c.on_msg(
+            DialogueMsg::Menu {
+                session: 4,
+                step: 2,
+                items: vec![item.clone()],
+            },
+            1,
+        );
+        assert!(c.menu().is_none());
+        // Picked: the step's menu and ask are gone; none while it plays.
+        c.on_msg(
+            DialogueMsg::Menu {
+                session: 4,
+                step: 1,
+                items: vec![item.clone()],
+            },
+            1,
+        );
+        c.on_msg(
+            DialogueMsg::Ask {
+                session: 4,
+                step: 1,
+                choice: 7,
+                by: PlayerId(1),
+            },
+            1,
+        );
+        c.on_msg(
+            DialogueMsg::Picked {
+                session: 4,
+                step: 1,
+                choice: 9,
+            },
+            2,
+        );
+        assert!(c.menu().is_none() && c.take_asked().is_none());
+        assert!(c.options(vec![1]).is_none() && c.want(1).is_none() && c.pick(1).is_none());
+        // Closed: gone too.
+        c.on_msg(
+            DialogueMsg::StepEnd {
+                session: 4,
+                step: 1,
+            },
+            3,
+        );
+        c.on_msg(
+            DialogueMsg::Menu {
+                session: 4,
+                step: 2,
+                items: vec![item.clone()],
+            },
+            4,
+        );
+        assert!(c.menu().is_some());
+        c.on_msg(
+            DialogueMsg::Closed {
+                session: 4,
+                reason: CloseReason::Finished,
+            },
+            5,
+        );
+        assert!(c.menu().is_none());
     }
 }
