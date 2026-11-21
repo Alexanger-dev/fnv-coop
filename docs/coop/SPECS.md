@@ -1573,8 +1573,28 @@ before (`Pick`, the info its game said: the table now takes a pick from any play
 conversation who offered options for the step, not only the initiator); a player picks another's
 option with `Want`, and the table sends `Ask` to its first owner still in the conversation, one at
 a time, refused to the picker when no one offers it, when the owner leaves, or after 10 s. A pick
-clears the step's options. Still to do: the games' own options read from their windows, the
-others' shown there with the owner's name, clicks sent as `Want` or said, and the initiator's
-window showing a line another player's game said.
-- Not yet: the watcher's own options (step 2), votes (step 3), rewards (step 4). Lines of no shared
-  quest are not sent between players yet (S16), so they are not shown to a watcher.
+clears the step's options.
+
+The games' side so far (step 2b, `coop_engine::choices`, step C-15): the game builds a window's
+option list itself (`LoadTopicsList`, one row per topic of the topic manager, each with the info
+whose conditions hold for this game's player). The game calls it directly (from `LoadNextScreen`,
+called directly by `DoIdle`, `DoClick`, `Create`), so co-op wraps only its own calls and, after
+each of those three dispatched steps, takes a new list by the time `LoadTopicsList` stamps on the
+menu (`uiIgnoreInputStartTime`, +0x10c), only while the window lists it (state 2): reading the
+list moves the topic manager's current topic, which the game reads in every other state (read at
+the window's opening, the greeting was lost and the conversation closed, in a first two-game
+run). Each list: its infos are this game's own options (the session sends them to the table, only
+from a list built after the step's pick); the other players' options it lacks are added as rows
+after the game's own, `<prompt or topic name> (Player N)`, built again when they change. A
+watching window lists its player's own options once the step is over and the table has a list
+(`watch::show_topics`: the topic manager's `LoadNextTopicList`, the text hidden,
+`LoadTopicsList`, state 2); a later line is put to it as before. A click on an added row is noted
+and not said; a row of a watching window is not said here (read only until step 2c). Checked:
+unit tests and mutation checks (all killed); two headless games (`/tmp/s_opts.sh`): the guest
+talked to Sunny, the host stood by; after her greeting the host's window listed the host's six
+options, both games sent theirs, the host's click on a row was held, and the window closed when
+the guest said goodbye. Still to do (step 2c): a click on one's own option said by one's game and
+sent as the step's pick, another's option sent as `Want` and said by its owner's game on `Ask`,
+and the initiator's window showing a line another player's game said.
+- Not yet: clicks from every player (step 2c), votes (step 3), rewards (step 4). Lines of no
+  shared quest are not sent between players yet (S16), so they are not shown to a watcher.
