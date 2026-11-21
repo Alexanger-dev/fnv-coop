@@ -6,6 +6,7 @@
 
 mod client;
 mod host;
+pub mod votes;
 
 use serde::{Deserialize, Serialize};
 

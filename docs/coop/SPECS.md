@@ -1637,5 +1637,21 @@ every other game shows it, holds, and lists its own options when the step is ove
 - Known limit until step 3: two clicks at the same moment, one from each player, are both said
   in their games; the table takes the first, so the other player's game said a line the others did
   not see. Step 3's votes hold every click until the choice is made.
-- Not yet: votes (step 3), rewards (step 4). Lines of no shared quest are not sent between
+- Step 3a (2026-11-21): which lines are voted on, as a rule on a line's data
+  (`coop_core::dialogue::votes`: `classify` on `LineFacts`, `with_follow_ups`) and a tool that
+  lists every line a player can pick in the game's plugins with its verdict (`coop-votelist OUT.tsv
+  FalloutNV.esm DeadMoney.esm ...`; `--dump FORMID PLUGIN...` shows a record's subrecords). Voted
+  on: the goodbye mark, the speech challenge mark, a condition comparing one of the player's skills
+  or S.P.E.C.I.A.L. (`GetActorValue` 14 on the target or `PlayerREF`, any comparison: the failure
+  line too), and result script commands that move a quest, give or take, start a fight or change a
+  faction, or send someone off (`AddScriptPackage`, `MoveTo`); a result script with no source text
+  is voted on to be safe. Not voted on, noted: variables set, menus opened (D10). A line counts what
+  the lines that follow it on their own do (`TCFU`, followed further): Sunny's "[END TUTORIAL]"
+  does nothing itself, her next line ends the tutorial. A line a player can pick: an info of a
+  topic of type Topic (`DIAL` `DATA` byte 0 = 0) that is top-level (byte 1 bit `0x02`) or a choice
+  (`TCLT`) or added topic (`NAME`) of some info, not `GREETING`. Run on the base game and the four
+  story DLCs plus Gun Runners' Arsenal (the owner's files): 13,990 lines, 5,857 voted on, 8,133 not
+  (the combat remarks such as `PLAYERFIREWEAPON`, greetings and follow-ups are not picked, 14,924).
+  The list went to the owner to check against lines known from play.
+- Not yet: votes (step 3b), rewards (step 4). Lines of no shared quest are not sent between
   players yet (S16), so they are not shown to a watcher.

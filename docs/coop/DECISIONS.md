@@ -332,3 +332,22 @@ lines gets its "finished talking to" notice when the player is free after it end
 player's view moved to another player's conversation). The NPC's name is its base form's
 (`TESFullName::GetFullName`), "someone" without one. A player who walks up joins the window from
 the next line (step 1).
+
+## D10 (2026-11-21): the grey lines of the vote rule
+
+**Question.** S42 votes on the lines that matter (ends the conversation, moves a quest, gives or
+takes, a fight, a check). Two kinds of line were left for the council: (1) a line whose only effect
+is setting a script variable (1,116 lines: Sunny's "What other towns are nearby?" unlocks "NCR?",
+Doc Mitchell's personality test counts toward his tag skill suggestion); (2) a line that opens a
+menu for one player (95: barter, repair, crafting, a companion's things). Options for (1): vote on
+all; no vote; vote when a voted line later reads the variable. For (2): vote; no vote, the menu
+for the picker only; no vote, a menu for each player.
+
+**Decision.** (1) No vote, 3-0: such lines are a question's bookkeeping; what the variable unlocks
+is voted on when it happens; tracing reads would miss cases silently. A line found to matter can
+be put on a hand-kept list of lines forced to a vote. (2) No vote, the menu opens only for the
+player who picked it, 2-1: a vendor's stock and a companion's things are shared, so two menus at
+once would edit one container in two games; the other player picks the same line after. The
+third member voted for a menu each, with the conversation waiting for both and the stock kept by
+the host. The picker's game runs the line, the others skip its result (R1), so this is how the
+game behaves already. Both kinds stay noted on the verdict (`Verdict::NoVote`).

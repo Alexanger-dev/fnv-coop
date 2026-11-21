@@ -1,0 +1,12 @@
+[package]
+name = "coop-votelist"
+version = "0.1.0"
+description = "Lists every dialogue line of the game's plugins with its co-op vote verdict (S42 step 3)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+esm = { path = "../esm" }
+coop-core = { path = "../coop-core" }
