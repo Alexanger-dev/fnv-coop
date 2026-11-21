@@ -459,10 +459,14 @@ pub struct Held {
 /// One frame of an actor the host runs, on a guest: its AI kept off, moved to `pos` and
 /// `heading` (radians), and its health set to `health` (never below 1 here: a death comes as a
 /// death, through the game's kill). `None`, and nothing done, when the actor is not in this
-/// game now, has no 3D here, or is dead here.
+/// game now, has no 3D here, or is dead here, or `pos` is not in a cell this game has loaded
+/// ([`live::place_loaded`]: the actor is then left to this game, which parks it as it walks out).
 pub fn hold(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32, health: f32) -> Option<Held> {
     let a = actors::actor(e, id)?;
     if e.mem.u32(a.wrapping_add(addr::REF_LOADED_OFFSET)) == 0 || actors::dead(e, id)? {
+        return None;
+    }
+    if !live::place_loaded(e, pos) {
         return None;
     }
     let flag = a.wrapping_add(addr::ACTOR_PROCESS_ME_OFFSET);
@@ -501,9 +505,13 @@ pub fn place_of_ptr(e: &mut Engine, actor: u32) -> [f32; 3] {
 
 /// Puts an actor this game runs itself at the host's place and heading (radians), its AI left
 /// on (switched on again if a hold had it off), and has it pick its package again from there, so
-/// it goes on in its own way, animated by its own game. `None` as [`place_of`].
+/// it goes on in its own way, animated by its own game. `None` as [`place_of`], and when `pos` is
+/// not in a cell this game has loaded ([`live::place_loaded`]).
 pub fn nudge(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32; 3]> {
     place_of(e, id)?;
+    if !live::place_loaded(e, pos) {
+        return None;
+    }
     let a = actors::actor(e, id)?;
     e.mem
         .set_u8(a.wrapping_add(addr::ACTOR_PROCESS_ME_OFFSET), 1);
@@ -522,9 +530,13 @@ pub fn nudge(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f3
 
 /// Moves an actor this game runs itself to the host's place and heading (radians) and nothing
 /// else: its AI stays as it is and it is not told to think again. For an actor led frame by frame
-/// because its own game keeps taking it elsewhere. `None` as [`place_of`].
+/// because its own game keeps taking it elsewhere. `None` as [`place_of`], and when `pos` is not
+/// in a cell this game has loaded ([`live::place_loaded`]: the actor is then its own AI's).
 pub fn lead(e: &mut Engine, id: u32, pos: [f32; 3], heading: f32) -> Option<[f32; 3]> {
     place_of(e, id)?;
+    if !live::place_loaded(e, pos) {
+        return None;
+    }
     let a = actors::actor(e, id)?;
     for (axis, v) in (*b"XYZ").into_iter().zip(pos) {
         e.call(addr::SET_POS_BASE, &args![a, u32::from(axis), v.to_bits()]);
@@ -550,13 +562,14 @@ pub fn in_dialogue(e: &mut Engine, id: u32) -> bool {
 /// Brings an actor that is in another space of this game into this game's player's space, at
 /// `pos` there: the game's own `MoveTo` to the player with the difference as offsets. For a copy
 /// the host's actor left behind by walking through a door. False when the actor or the player is
-/// not in this game now, or the program has no such function.
+/// not in this game now, `pos` is not in a cell this game has loaded ([`live::place_loaded`]: the
+/// game would park it again at once, PC run 36), or the program has no such function.
 pub fn bring(e: &mut Engine, id: u32, pos: [f32; 3]) -> bool {
     let player = e.mem.u32(addr::PLAYER_SINGLETON);
     let Some(a) = actors::actor(e, id) else {
         return false;
     };
-    if player == 0 || !e.is_registered(addr::MOVE_TO_FUNCTION_BASE) {
+    if player == 0 || !e.is_registered(addr::MOVE_TO_FUNCTION_BASE) || !live::place_loaded(e, pos) {
         return false;
     }
     let at = [0, 4, 8].map(|o| e.mem.f32(player.wrapping_add(addr::REF_POS_OFFSET + o)));
@@ -782,6 +795,7 @@ mod tests {
     #[test]
     fn a_held_actor_has_its_ai_off_and_is_where_and_as_healthy_as_it_is_told() {
         let mut s = story();
+        s.move_player(HOUSE, [0.0; 3], 0.0);
         s.place_actor(RAIDER, HOUSE, [1.0, 2.0, 3.0], 0.5);
         let h = hold(&mut s.e, RAIDER, [10.0, 20.0, 30.0], 1.0, 62.0).unwrap();
         assert_eq!((h.woke, h.pos), (true, [10.0, 20.0, 30.0]));
@@ -803,6 +817,50 @@ mod tests {
         assert_eq!(hold(&mut s.e, RAIDER, [0.0; 3], 0.0, 50.0), None);
         assert_eq!(s.actor_view(RAIDER).pos, [10.0, 20.0, 30.0]);
         assert!(!release(&mut s.e, 0x9999));
+    }
+
+    /// PC run 36: co-op moved Sunny's copy, in the guest's game, to the first well while the guest
+    /// stood at the bottles, far outside the cells the guest's game has loaded; the game parked
+    /// her again each time, then stopped walking her along a path it had not got. No way co-op
+    /// moves an actor takes it to a place this game has not loaded.
+    #[test]
+    fn an_actor_is_moved_only_to_a_place_this_game_has_loaded() {
+        const OUTSIDE: u32 = 0x0010_5b00;
+        let mut s = story();
+        let at = [100.0, 200.0, 0.0];
+        // Two squares from the player's: loaded. Three: not.
+        let near = [2.0 * 4096.0 + 10.0, 50.0, 0.0];
+        let far = [3.0 * 4096.0 + 10.0, 50.0, 0.0];
+        let moves = |s: &mut Story, to: [f32; 3]| {
+            s.place_actor(RAIDER, OUTSIDE, at, 0.0);
+            let held = hold(&mut s.e, RAIDER, to, 0.0, 50.0).is_some();
+            s.place_actor(RAIDER, OUTSIDE, at, 0.0);
+            let led = lead(&mut s.e, RAIDER, to, 0.0).is_some();
+            s.place_actor(RAIDER, OUTSIDE, at, 0.0);
+            let nudged = nudge(&mut s.e, RAIDER, to, 0.0).is_some();
+            s.place_actor(RAIDER, OUTSIDE, at, 0.0);
+            let brought = bring(&mut s.e, RAIDER, to);
+            let pos = s.actor_view(RAIDER).pos;
+            ([held, led, nudged, brought], pos)
+        };
+        // No player in the world: nothing is loaded.
+        assert_eq!(moves(&mut s, near).0, [false; 4]);
+        s.move_player(OUTSIDE, [0.0; 3], 0.0);
+        assert_eq!(moves(&mut s, near), ([true; 4], near));
+        let (done, pos) = moves(&mut s, far);
+        assert_eq!(done, [false; 4]);
+        assert_eq!(pos, at, "left where it was");
+        // Off the map: no cell there, nothing asked of it.
+        s.place_actor(RAIDER, OUTSIDE, at, 0.0);
+        assert!(lead(&mut s.e, RAIDER, [1.0e9, 0.0, 0.0], 0.0).is_none());
+        // The player walked on: the place is loaded now.
+        s.move_player(OUTSIDE, [2.0 * 4096.0, 0.0, 0.0], 0.0);
+        assert_eq!(moves(&mut s, far).0, [true; 4]);
+        // Indoors, a place within the reach of the cells the game keeps loaded.
+        s.move_player(HOUSE, [0.0; 3], 0.0);
+        s.place_actor(RAIDER, HOUSE, at, 0.0);
+        assert!(lead(&mut s.e, RAIDER, [8000.0, 0.0, 0.0], 0.0).is_some());
+        assert!(lead(&mut s.e, RAIDER, [9000.0, 0.0, 0.0], 0.0).is_none());
     }
 }
 

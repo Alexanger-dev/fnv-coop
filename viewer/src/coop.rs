@@ -1017,7 +1017,7 @@ impl Coop {
             Role::Host(h) => {
                 let s = &h.social;
                 format!(
-                    "co-op host social: conversations {} (guests' results run {}, left {}, greetings left to the owner's game {}), lines watched {} (in the window {}, windows closed {}, results not run there {}), party saves {} ({} files), parts given back {}, rests passed {} ({} h)",
+                    "co-op host social: conversations {} (guests' results run {}, left {}, greetings left to the owner's game {}), lines watched {} (in the window {}, windows closed {}, results not run there {}; from afar {} shown, {} held while busy, {} notices), party saves {} ({} files), parts given back {}, rests passed {} ({} h)",
                     s.talker.opened,
                     s.enactor.enacted,
                     s.enactor.left,
@@ -1026,6 +1026,9 @@ impl Coop {
                     s.talker.lines_windowed,
                     s.talker.windows_closed,
                     coop_engine::watch::counts(e).1,
+                    s.talker.lines_far_shown,
+                    s.talker.lines_far_held,
+                    s.talker.far_notices,
                     s.party.saved,
                     s.party.files_written,
                     s.party.given_back,
@@ -1036,7 +1039,7 @@ impl Coop {
             Role::Guest(Some(g)) => {
                 let s = &g.social;
                 format!(
-                    "co-op guest social: conversations {} (refused {}, not started {}, greetings left to the owner's game {}), results held for the host {held}, run here as own {own}, with no quest known {unknown}, lines watched {} (in the window {}, windows closed {}, results not run there {}), part sent {} time(s), put back {}, rests passed {} ({} h)",
+                    "co-op guest social: conversations {} (refused {}, not started {}, greetings left to the owner's game {}), results held for the host {held}, run here as own {own}, with no quest known {unknown}, lines watched {} (in the window {}, windows closed {}, results not run there {}; from afar {} shown, {} held while busy, {} notices), part sent {} time(s), put back {}, rests passed {} ({} h)",
                     s.talker.opened,
                     s.talker.denied,
                     s.talker.blocked,
@@ -1045,6 +1048,9 @@ impl Coop {
                     s.talker.lines_windowed,
                     s.talker.windows_closed,
                     coop_engine::watch::counts(e).1,
+                    s.talker.lines_far_shown,
+                    s.talker.lines_far_held,
+                    s.talker.far_notices,
                     s.party.uploads,
                     s.party.restored,
                     s.rester.passed,

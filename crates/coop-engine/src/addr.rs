@@ -665,6 +665,9 @@ pub const TES_SINGLETON: u32 = 0x011d_ea10;
 /// `TES::IsCellLoaded` (`thiscall`, the TES, a cell, 0; `004511e0`): whether the game has the cell
 /// in its loaded grid (or is the interior it shows), so that what is in it is drawn.
 pub const CELL_IS_LOADED: u32 = 0x0045_11e0;
+/// `TESWorldSpace::GetCellFromWorldCoord` (`thiscall`: the world space, the address of an `x`,
+/// `y` pair of floats; `00587550`, `tesworldspace.rs`): the exterior cell holding the point, or 0.
+pub const WORLD_CELL_FROM_COORD: u32 = 0x0058_7550;
 /// See [`TES_SINGLETON`].
 pub const TES_RUN_SCRIPTS: u32 = 0x0045_5490;
 // vats: V.A.T.S. with several players, damage outside `Actor::HitMe` (docs/coop/SPECS.md S21,

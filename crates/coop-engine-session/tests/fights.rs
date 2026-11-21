@@ -1706,6 +1706,63 @@ fn a_copy_is_brought_a_few_times_at_most() {
         .any(|l| l.contains("left to this game from now")));
 }
 
+/// PC run 36 (the owner, 2026-11-21): the guest stood at the bottles while the host met Sunny at
+/// the first well, far outside the cells the guest's game has loaded. The guest's copy, parked by
+/// its game, was brought to her place there three times (and parked again each time), then the
+/// guest's game stopped. A copy is brought only to a place this game has loaded; a place it has
+/// not does not use up one of its tries, so it is brought once the player comes within reach.
+#[test]
+fn a_copy_is_brought_only_to_a_place_this_game_has_loaded() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    let well = [0.0, 14_000.0, 0.0];
+    p.host.move_player(DESERT, [0.0, 13_800.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, DESERT, well, 0.5);
+    p.guest.move_player(DESERT, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.frames(400);
+    let f = p.guest_fight();
+    assert_eq!(f.brings, 0);
+    assert!(!f.lines.iter().any(|l| l.contains("left to this game")));
+    assert_eq!(p.guest.actor_view(RAIDER).pos, [900.0, 900.0, 0.0]);
+    // The guest walks towards the well: within the loaded cells, she is brought there.
+    p.guest.move_player(DESERT, [0.0, 9_000.0, 0.0], 0.0);
+    p.frames(80);
+    assert_eq!(p.guest_fight().brings, 1);
+    assert!(close(p.guest.actor_view(RAIDER).pos, well));
+}
+
+/// PC run 36: a copy walking back to its owner's place stops when the way there leaves the cells
+/// this game has loaded (the player walked off): it is its own AI's again, its movement no longer
+/// forced, and it is not moved.
+#[test]
+fn a_copy_walking_back_stops_when_its_way_is_not_loaded_here() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("state")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.gd.fight.as_mut().unwrap().lead_on = false;
+    p.host.move_player(DESERT, [0.0, 100.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, DESERT, [10.0, 20.0, 0.0], 0.5);
+    p.guest.move_player(DESERT, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, DESERT, [60.0, 20.0, 0.0], 2.0);
+    p.frames(60);
+    p.guest.move_actor(RAIDER, [610.0, 20.0, 0.0], 2.0);
+    p.frames(40);
+    assert_eq!(p.guest.forced_moves(RAIDER), Some(0x101), "walking back");
+    // The guest walks far off: the copy's way is no longer in this game's loaded cells.
+    p.guest.move_player(DESERT, [0.0, 20_000.0, 0.0], 0.0);
+    p.frames(2);
+    let was = p.guest.actor_view(RAIDER).pos;
+    p.frames(20);
+    assert_eq!(p.guest.forced_moves(RAIDER), None);
+    assert!(close(p.guest.actor_view(RAIDER).pos, was));
+    // Its owner's place far out of this game's cells: not put there, nor counted as put.
+    let snaps = p.guest_fight().following.snaps;
+    p.host.move_actor(RAIDER, [10.0, 30_000.0, 0.0], 0.5);
+    p.frames(20);
+    assert!(close(p.guest.actor_view(RAIDER).pos, was));
+    assert_eq!(p.guest_fight().following.snaps, snaps);
+}
+
 /// A held actor (not followed) moves between two states in steps (smooth.rs), and with the steps
 /// off it jumps from one state to the next.
 #[test]

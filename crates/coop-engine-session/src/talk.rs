@@ -60,7 +60,8 @@ pub struct Talker {
     pub lines_marked: u32,
     /// Other players' lines shown here.
     pub lines_shown: u32,
-    /// Other players' lines not shown: this player is not with the NPC.
+    /// Other players' lines said while this player was not with the NPC (shown as text, or held
+    /// back while busy: [`Self::lines_far_shown`], [`Self::lines_far_held`]).
     pub lines_far: u32,
     /// Other players' lines shown in this game's own dialogue window (S42), not as text.
     pub lines_windowed: u32,
@@ -69,12 +70,39 @@ pub struct Talker {
     pub windows_closed: u32,
     /// The conversation the window shows: (session, the steps since its last new line).
     watched: Option<(u32, u32)>,
+    /// Another player's conversation this player is far from (S42: shown as text, held back
+    /// while this player is busy).
+    far: Option<Far>,
+    /// "... finished talking to ...", waiting for this player to be free, oldest first.
+    finished: Vec<(PlayerId, u32)>,
+    /// Other players' lines shown as text to this player, far from the NPC.
+    pub lines_far_shown: u32,
+    /// Other players' lines held back: this player was far from the NPC and busy.
+    pub lines_far_held: u32,
+    /// "... is talking to ..." and "... finished talking to ..." notices shown instead.
+    pub far_notices: u32,
     /// A quest of this player's own and one of its stages: until that stage is done in this game
     /// the player is in its own opening, and its conversations are its own (each game has its own
     /// Doc Mitchell for it): none of its lines goes to the protocol, and no NPC is refused to it.
     pub opening: Option<(u32, u8)>,
     /// Lines of this player's conversations kept its own because its opening runs.
     pub opening_lines: u32,
+}
+
+/// Another player's conversation, as this player, far from the NPC, follows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Far {
+    session: u32,
+    initiator: PlayerId,
+    npc: u32,
+    /// "... is talking to ..." was shown (once per conversation).
+    told: bool,
+    /// A line was held back: the end is told when this player is free.
+    held: bool,
+}
+
+fn player_name(p: PlayerId) -> String {
+    format!("Player {}", u32::from(p.0) + 1)
 }
 
 /// A watching window whose conversation has said nothing new for this many steps (frames) is
@@ -86,7 +114,7 @@ pub const WATCH_QUIET_STEPS: u32 = 18_000;
 fn messages(initiator: PlayerId, text: &str, prompt: &str) -> Vec<String> {
     let mut out = Vec::new();
     if !prompt.is_empty() {
-        out.push(format!("Player {}: {prompt}", u32::from(initiator.0) + 1));
+        out.push(format!("{}: {prompt}", player_name(initiator)));
     }
     out.extend(
         text.split(" | ")
@@ -157,6 +185,25 @@ impl Talker {
     ) {
         coop_engine::watch::step(e);
         let view = client.view().copied().filter(|v| v.initiator != me);
+        // The far conversation is over: its end is told when lines were held back.
+        if let Some(f) = self.far {
+            if view.map_or(true, |v| v.session != f.session) {
+                self.far = None;
+                if f.held {
+                    self.finished.push((f.initiator, f.npc));
+                }
+            }
+        }
+        if !self.finished.is_empty() && !talk::busy(e) {
+            for (who, npc) in std::mem::take(&mut self.finished) {
+                let name = talk::name_of(e, npc).unwrap_or_else(|| "someone".into());
+                talk::show(
+                    e,
+                    &format!("{} finished talking to {name}.", player_name(who)),
+                );
+                self.far_notices += 1;
+            }
+        }
         // The window's conversation is over, another began, or this player left the NPC.
         if let Some((session, quiet)) = self.watched {
             let over = view.map_or(true, |v| v.session != session || !talk::near(e, v.npc.0));
@@ -197,7 +244,41 @@ impl Talker {
                     self.lines_shown += 1;
                 }
             } else {
+                // Far from the NPC (S42, the owner's choice of 2026-11-21): the line as text, or,
+                // while this player is busy, held back and a word that the conversation goes on.
                 self.lines_far += 1;
+                let f = self.far.filter(|f| f.session == v.session).unwrap_or(Far {
+                    session: v.session,
+                    initiator: v.initiator,
+                    npc: v.npc.0,
+                    told: false,
+                    held: false,
+                });
+                let f = if talk::busy(e) {
+                    self.lines_far_held += 1;
+                    if !f.told {
+                        let name = talk::name_of(e, v.npc.0).unwrap_or_else(|| "someone".into());
+                        talk::show(
+                            e,
+                            &format!("{} is talking to {name}.", player_name(v.initiator)),
+                        );
+                        self.far_notices += 1;
+                    }
+                    Far {
+                        told: true,
+                        held: true,
+                        ..f
+                    }
+                } else {
+                    if let Some((text, prompt)) = talk::line(e, choice) {
+                        for m in messages(v.initiator, &text, &prompt) {
+                            talk::show(e, &m);
+                        }
+                        self.lines_far_shown += 1;
+                    }
+                    f
+                };
+                self.far = Some(f);
             }
         }
         out.extend(client.line_done());

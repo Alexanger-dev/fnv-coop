@@ -782,7 +782,20 @@ impl Fight {
         let off = dist(here, place.pos);
         // Off the path (it was its own AI's a moment ago): it catches up quickly, never jumps,
         // unless it is so far that only a jump makes sense.
-        let to = if off > SNAP_DIST {
+        let snap = off > SNAP_DIST;
+        let to = if snap || off <= CATCH_DIST {
+            place.pos
+        } else {
+            let step = CATCH_SPEED * self.following.dt_ms as f32 / 1000.0;
+            let f = (step / off).min(1.0);
+            [0, 1, 2].map(|i| here[i] + (place.pos[i] - here[i]) * f)
+        };
+        self.following.gliding.remove(&id);
+        // Refused (a place this game has not loaded, PC run 36): not moved, nor counted as put.
+        if fight::lead(e, id, to, place.heading).is_none() {
+            return false;
+        }
+        if snap {
             self.following.snaps += 1;
             if self.following.snaps <= 60 {
                 self.say(format!(
@@ -790,17 +803,6 @@ impl Fight {
                     place.pos[0], place.pos[1], place.pos[2]
                 ));
             }
-            place.pos
-        } else if off > CATCH_DIST {
-            let step = CATCH_SPEED * self.following.dt_ms as f32 / 1000.0;
-            let f = (step / off).min(1.0);
-            [0, 1, 2].map(|i| here[i] + (place.pos[i] - here[i]) * f)
-        } else {
-            place.pos
-        };
-        self.following.gliding.remove(&id);
-        if fight::lead(e, id, to, place.heading).is_none() {
-            return false;
         }
         self.gait(e, id, place.moves);
         self.following.leads += 1;
@@ -825,7 +827,10 @@ impl Fight {
         let to = [0, 1, 2].map(|i| here[i] + (place.pos[i] - here[i]) * f);
         // Heading 0 faces +Y, turning clockwise.
         let heading = (place.pos[0] - here[0]).atan2(place.pos[1] - here[1]);
-        fight::lead(e, id, to, heading);
+        if fight::lead(e, id, to, heading).is_none() {
+            self.following.gliding.remove(&id);
+            return false;
+        }
         self.gait(e, id, WALK_FORWARD);
         true
     }
@@ -1505,9 +1510,9 @@ impl Fight {
             // the scene plays out where this game has it.
             let here = actors::actor(e, id).map(|a| fight::space_of(e, a));
             let elsewhere = here.is_some() && here != Some(s.cell.0);
-            if let Some((_, at)) = mine.filter(|(space, _)| elsewhere && *space == s.cell.0) {
+            if mine.is_some_and(|(space, _)| elsewhere && space == s.cell.0) {
                 let to = s.pos.map(dequant_pos);
-                if dist(at, to) <= live::LOADED_REACH
+                if live::place_loaded(e, to)
                     && s.flags & FLAG_DEAD == 0
                     && actors::dead(e, id) == Some(false)
                     && self.bring_due(id, now_ms)
@@ -1844,6 +1849,9 @@ impl Fight {
                         .get(&id)
                         .map_or(true, |t| now_ms.saturating_sub(*t) >= BRING_EVERY_MS);
                     let times = self.brought_times.get(&id).copied().unwrap_or(0);
+                    let to = s.pos.map(dequant_pos);
+                    // Only to a place this game has loaded (PC run 36): one it has not would be
+                    // parked again at once, and would not count as a try.
                     if self.follow
                         && self.bring_on
                         && due
@@ -1851,6 +1859,7 @@ impl Fight {
                         && a.alive
                         && s.flags & FLAG_DEAD == 0
                         && actors::dead(e, id) == Some(false)
+                        && live::place_loaded(e, to)
                     {
                         self.brought.insert(id, now_ms);
                         self.brought_times.insert(id, times + 1);
@@ -1859,7 +1868,6 @@ impl Fight {
                                 "co-op fights: actor {id:08x} has been brought {BRING_AT_MOST} times and leaves again each time: left to this game from now"
                             ));
                         }
-                        let to = s.pos.map(dequant_pos);
                         if fight::bring(e, id, to) {
                             self.brings += 1;
                             if self.brings <= 60 {

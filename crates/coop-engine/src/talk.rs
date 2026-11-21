@@ -299,6 +299,30 @@ pub fn show(e: &mut Engine, text: &str) -> bool {
     true
 }
 
+/// Whether this game's player is busy: a menu is open (the Pip-Boy, a trade, a conversation of
+/// its own) or the player is in a fight. Another player's conversation is then not shown line by
+/// line (S42, the owner's choice of 2026-11-21).
+pub fn busy(e: &mut Engine) -> bool {
+    let Some(player) = crate::live::player(e) else {
+        return false;
+    };
+    let menu = e.is_registered(addr::INTERFACE_IS_IN_MENU_MODE)
+        && e.call(addr::INTERFACE_IS_IN_MENU_MODE, &args![]).bool();
+    menu || (e.is_registered(addr::ACTOR_IN_COMBAT)
+        && e.call(addr::ACTOR_IN_COMBAT, &args![player]).bool())
+}
+
+/// The name of reference `id`'s base form (an NPC's name), `None` when it has none here.
+pub fn name_of(e: &mut Engine, id: u32) -> Option<String> {
+    let r = forms::form(e, id)?;
+    let base = e.mem.u32(r.wrapping_add(addr::REF_BASE_FORM_OFFSET));
+    if base == 0 || !e.is_registered(addr::FULL_NAME_TEXT) {
+        return None;
+    }
+    let text = e.call(addr::FULL_NAME_TEXT, &args![base]).u32();
+    Some(text_at(e, text)).filter(|n| !n.trim().is_empty())
+}
+
 /// Whether reference `npc` is in this game now and in the cell the player is in.
 pub fn near(e: &mut Engine, npc: u32) -> bool {
     let (Some(player), Some(r)) = (crate::live::player(e), forms::form(e, npc)) else {

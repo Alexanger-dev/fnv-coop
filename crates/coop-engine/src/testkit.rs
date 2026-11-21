@@ -141,6 +141,25 @@ const PLAYER_VTABLE: u32 = 0x0141_f000;
 const CANNOT_MOVE_FN: u32 = 0x0130_0000;
 /// `TESObjectCELL::pWorldSpace` (+0xc0, as the game), and where a test world space keeps a cell of
 /// its own.
+/// The exterior cells the stand-in `GetCellFromWorldCoord` names: a token for each square of
+/// [`GRID_CELL`] units (only ever asked whether it is loaded). As the game's `uGridsToLoad` of 5,
+/// the squares within [`GRID_LOADED`] of the player's are loaded.
+const GRID: u32 = 0x7000_0000;
+const GRID_CELL: f32 = 4096.0;
+const GRID_LOADED: i32 = 2;
+
+fn grid_square(x: f32, y: f32) -> (i32, i32) {
+    (
+        (x / GRID_CELL).floor() as i32,
+        (y / GRID_CELL).floor() as i32,
+    )
+}
+
+fn grid_token(x: f32, y: f32) -> u32 {
+    let (cx, cy) = grid_square(x, y);
+    GRID | (((cx + 0x400) as u32 & 0x7ff) << 11) | ((cy + 0x400) as u32 & 0x7ff)
+}
+
 const CELL_WORLD_OFFSET: u32 = 0xc0;
 const WORLD_CELL_OFFSET: u32 = 0x10;
 /// The form type of a world space in the test data (anything but a cell's).
@@ -586,13 +605,39 @@ impl Story {
         e.register(addr::MOBILE_IS_IN_DIALOGUE, |e, a| {
             eax(e.mem.u32(a[0] + DIALOGUE_OFFSET))
         });
-        // A cell is loaded unless a test let it go. The game reads the cell: none is a fault.
+        // A cell is loaded unless a test let it go. The game reads the cell: none is a fault. An
+        // exterior square (`GetCellFromWorldCoord`'s) is loaded within two of the player's.
         e.register(addr::CELL_IS_LOADED, |e, a| {
             let cell = a[1];
             assert_ne!(cell, 0, "TES::IsCellLoaded of no cell");
+            if cell & 0xffc0_0000 == GRID {
+                let (cx, cy) = (
+                    ((cell >> 11) & 0x7ff) as i32 - 0x400,
+                    (cell & 0x7ff) as i32 - 0x400,
+                );
+                let (px, py) = grid_square(
+                    e.mem.f32(PLAYER + addr::REF_POS_OFFSET),
+                    e.mem.f32(PLAYER + addr::REF_POS_OFFSET + 4),
+                );
+                let near = (cx - px).abs() <= GRID_LOADED && (cy - py).abs() <= GRID_LOADED;
+                return eax(u32::from(
+                    near && e.mem.u32(PLAYER + addr::REF_CELL_OFFSET) != 0,
+                ));
+            }
             eax(u32::from(
                 e.mem.u32(UNLOADED) != cell && e.mem.u32(UNLOADED + 4) != cell,
             ))
+        });
+        // The game's `TESWorldSpace::GetCellFromWorldCoord`: the square holding the point; none
+        // off the map.
+        e.register(addr::WORLD_CELL_FROM_COORD, |e, a| {
+            assert_ne!(a[0], 0, "GetCellFromWorldCoord of no world space");
+            let (x, y) = (e.mem.f32(a[1]), e.mem.f32(a[1] + 4));
+            let (cx, cy) = grid_square(x, y);
+            if cx.abs() >= 0x400 || cy.abs() >= 0x400 {
+                return eax(0);
+            }
+            eax(grid_token(x, y))
         });
         // The game's `MoveTo`: the reference goes to the target's cell, at its place plus the
         // offsets.

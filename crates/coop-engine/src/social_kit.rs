@@ -29,6 +29,11 @@ const REST_CLICKS: u32 = KIT + 0xc;
 const CANCEL_CLICKS: u32 = KIT + 0x10;
 const HOUR_STEPS: u32 = KIT + 0x14;
 const SCRIPT_PASSES: u32 = KIT + 0x18;
+/// Names given to references' base forms ([`Story::set_name`]): each base form here is its name's
+/// text, which the stand-in `GetFullName` gives back.
+const NAMES: u32 = KIT + 0x800;
+const NAME_SLOT: u32 = 0x40;
+const NAMES_GIVEN: u32 = KIT + 0x20;
 /// The dialogue menu, the sleep and wait menu, its hours tile, and a save's name.
 const DIALOG_MENU: u32 = KIT + 0x100;
 const SLEEP_MENU: u32 = KIT + 0x200;
@@ -229,6 +234,10 @@ pub(crate) fn register(e: &mut Engine) {
     e.register(addr::PLAYER_SET_WAIT, set_wait);
     e.register(addr::PLAYER_WAIT_HOUR, wait_hour);
     e.register(addr::TES_RUN_SCRIPTS, run_scripts);
+    e.register(addr::FULL_NAME_TEXT, |_, a| Ret {
+        eax: a[0],
+        ..Ret::default()
+    });
 }
 
 impl Story {
@@ -351,6 +360,18 @@ impl Story {
     pub fn said(&mut self, id: u32) -> u32 {
         let info = self.info_at(id);
         self.e.mem.u32(info + INFO_SAID)
+    }
+
+    /// Gives reference `reference` a base form named `name`.
+    pub fn set_name(&mut self, reference: u32, name: &str) {
+        assert!(name.len() < NAME_SLOT as usize);
+        let r = forms::form(&mut self.e, reference).expect("a reference of the story");
+        let n = self.e.mem.u32(NAMES_GIVEN);
+        assert!(n < 16);
+        self.e.mem.set_u32(NAMES_GIVEN, n + 1);
+        let base = NAMES + NAME_SLOT * n;
+        self.e.mem.set_cstr(base, name.as_bytes());
+        self.e.mem.set_u32(r + addr::REF_BASE_FORM_OFFSET, base);
     }
 
     /// The HUD messages shown so far, in order.

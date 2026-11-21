@@ -25,6 +25,8 @@ const SUNNY: u32 = 0x0010_4e85;
 const CHET: u32 = 0x0010_4f25;
 const SALOON: u32 = 0x0010_5a00;
 const STORE: u32 = 0x0010_5a01;
+/// The inventory's menu class (one of the Pip-Boy's menus).
+const INVENTORY: u32 = 1002;
 /// Sunny's line of the shared story: said, it sets MQ's stage 10; ended, stage 20.
 const SHARED_LINE: u32 = 0x0010_9001;
 /// A line of the player's own quest: said, it sets OWN's stage 5.
@@ -170,6 +172,165 @@ fn party_dir(name: &str) -> PathBuf {
 
 // ---- Conversations ----
 
+/// S42 (the owner's choice of 2026-11-21, "option 3"): a player far from another player's
+/// conversation sees its lines as text, but not while busy (a menu open, or in a fight): then one
+/// word that the conversation goes on, and once free again and the conversation over, one word
+/// that it ended; nothing of it afterwards.
+#[test]
+fn a_far_player_who_is_busy_is_told_of_the_conversation_not_shown_its_lines() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.set_name(SUNNY, "Sunny Smiles");
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    // The host has its inventory open.
+    w.host.open_menu(INVENTORY);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert_eq!(w.host.messages(), ["Player 2 is talking to Sunny Smiles."]);
+    // Its next line: held back too, and nothing more said of it.
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.run(5);
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.run(10);
+    let t = &w.hd.social.talker;
+    assert_eq!(
+        (t.lines_far_held, t.lines_far_shown, t.far_notices),
+        (2, 0, 1)
+    );
+    assert_eq!(w.host.messages().len(), 1);
+    // The conversation ends while the host is still busy: its end waits for the host.
+    w.guests[0].game.say(PLAIN_LINE, true);
+    w.guests[0].game.leave();
+    w.run(10);
+    assert_eq!(w.host.messages().len(), 1);
+    w.host.close_menu();
+    w.run(2);
+    assert_eq!(
+        w.host.messages(),
+        [
+            "Player 2 is talking to Sunny Smiles.",
+            "Player 2 finished talking to Sunny Smiles."
+        ]
+    );
+    w.run(20);
+    assert_eq!(w.host.messages().len(), 2);
+    assert_eq!(w.hd.social.talker.far_notices, 2);
+}
+
+/// Two conversations one after the other while the far player is busy: each is told, and each
+/// end once the player is free; an NPC with no name is "someone".
+#[test]
+fn a_busy_far_player_is_told_of_each_conversation() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.set_name(SUNNY, "Sunny Smiles");
+    w.host.set_name(CHET, "");
+    w.host.place(CHET, SALOON);
+    w.guests[0].game.place(CHET, SALOON);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    w.host.open_menu(INVENTORY);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.run(5);
+    // Straight on to Chet, a frame later.
+    w.guests[0].game.leave();
+    w.run(1);
+    assert!(w.guests[0].game.talk_to(CHET));
+    w.guests[0].game.say_as(CHET, PLAIN_LINE, false);
+    w.run(10);
+    w.guests[0].game.say_as(CHET, PLAIN_LINE, true);
+    w.guests[0].game.leave();
+    w.run(10);
+    w.host.close_menu();
+    w.run(2);
+    assert_eq!(
+        w.host.messages(),
+        [
+            "Player 2 is talking to Sunny Smiles.",
+            "Player 2 is talking to someone.",
+            "Player 2 finished talking to Sunny Smiles.",
+            "Player 2 finished talking to someone."
+        ]
+    );
+}
+
+/// A third player starts a conversation while the busy far player is told of another's: the
+/// first counts as over for the far player (it is shown one conversation at a time), and both
+/// ends are told once it is free.
+#[test]
+fn a_busy_far_player_told_of_a_second_players_conversation_is_told_both_ends() {
+    let mut w = World::new(&["Sunny", "Chet"]);
+    w.host.set_name(SUNNY, "Sunny Smiles");
+    w.host.set_name(CHET, "Chet");
+    w.host.place(CHET, SALOON);
+    for g in &mut w.guests {
+        g.game.place(CHET, SALOON);
+    }
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    w.host.open_menu(INVENTORY);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert!(w.guests[1].game.talk_to(CHET));
+    w.guests[1].game.say_as(CHET, PLAIN_LINE, false);
+    w.run(10);
+    w.host.close_menu();
+    w.run(2);
+    assert_eq!(
+        w.host.messages(),
+        [
+            "Player 2 is talking to Sunny Smiles.",
+            "Player 3 is talking to Chet.",
+            "Player 2 finished talking to Sunny Smiles."
+        ]
+    );
+}
+
+/// A far player in a fight is busy too: told of the conversation, not shown its lines.
+#[test]
+fn a_far_player_in_a_fight_is_told_of_the_conversation_not_shown_its_lines() {
+    let mut w = World::new(&["Sunny"]);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    w.host.set_combat(coop_engine::actors::PLAYER_REF_ID, CHET);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert_eq!(w.host.messages(), ["Player 2 is talking to someone."]);
+    assert_eq!(w.hd.social.talker.lines_far_held, 1);
+    // The fight over, the next line comes as text again.
+    w.host.set_combat(coop_engine::actors::PLAYER_REF_ID, 0);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.run(5);
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.run(10);
+    assert_eq!(
+        w.host.messages(),
+        ["Player 2 is talking to someone.", "Howdy."]
+    );
+}
+
+/// A far player free for the whole conversation sees every line and is not told it ended.
+#[test]
+fn a_far_player_who_is_free_sees_the_lines_and_no_notice() {
+    let mut w = World::new(&["Sunny"]);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.guests[0].game.leave();
+    w.run(20);
+    assert_eq!(w.host.messages().len(), 3, "{:?}", w.host.messages());
+    assert!(!w.host.messages().iter().any(|m| m.contains("talking to")));
+    assert_eq!(w.hd.social.talker.far_notices, 0);
+}
+
 #[test]
 fn a_guests_line_runs_once_on_the_host_and_the_others_see_it() {
     let mut w = World::new(&["Sunny", "Chet"]);
@@ -186,18 +347,18 @@ fn a_guests_line_runs_once_on_the_host_and_the_others_see_it() {
     assert_eq!(w.guests[0].game.said(SHARED_LINE), 1);
     assert_eq!(w.guests[0].driver.social.talker.opened, 1);
     w.assert_in_step();
-    // The guest standing by saw what was chosen and each response; the host, elsewhere, did not.
-    assert_eq!(
-        w.guests[1].game.messages(),
-        [
-            "Player 2: Where is Sunny?",
-            "Head on up to the saloon.",
-            "I will meet you there."
-        ]
-    );
+    // The guest standing by saw what was chosen and each response; so did the host, elsewhere
+    // and free (S42, the owner's choice of 2026-11-21: far off, the lines come as text).
+    let lines = [
+        "Player 2: Where is Sunny?",
+        "Head on up to the saloon.",
+        "I will meet you there.",
+    ];
+    assert_eq!(w.guests[1].game.messages(), lines);
     assert_eq!(w.guests[1].driver.social.talker.lines_shown, 1);
-    assert!(w.host.messages().is_empty());
+    assert_eq!(w.host.messages(), lines);
     assert_eq!(w.hd.social.talker.lines_far, 1);
+    assert_eq!(w.hd.social.talker.lines_far_shown, 1);
     // The line counts as said in every game, near or far (the owner, 2026-11-16: a line the
     // game says once was said again to the player whose game had not said it).
     assert!(talk::said(&mut w.guests[1].game.e, SHARED_LINE));

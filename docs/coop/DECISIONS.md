@@ -280,3 +280,55 @@ the copy is its own AI's after 1.5 s still, a crouched one excepted, and walks b
 A copy whose package is aimed at the player is only walked back, as before; a copy in a conversation
 here is left to it (D6, condition 3). The 30 s "kept standing" after repeated strays is gone (C covers
 it).
+
+## D8 (2026-11-21): co-op moves a copy only to a place its game has loaded
+
+**Question.** PC run 36: the guest stood at the bottles while the host met Sunny at the first well,
+about 14,000 units off. The guest's game parked Sunny's copy (in no cell) as she walked out of its
+loaded cells, as it parks any actor; co-op brought her back to the host's Sunny's place there three
+times, the game parked her again each time, and then the game's AI, walking her along a path that
+place had not got (`VirtualActorPathHandler::GetNextNodeLocation` under
+`HighProcess::ProcessAccompany`, an AI thread), read no path and stopped the guest's game. The guest's
+log also had her put on her path every frame thousands of units off there. Options: (A) every way
+co-op moves a copy (bring, hold, lead, nudge, the walk back, an avatar's rehome) only to a place this
+game has loaded; farther, the copy is left parked as the game parks it, and placed when its place
+comes within reach; (B) hide far copies (`Disable`) and show them near; (C) have the AI skip a
+missing path.
+
+**Decision: A, 3 votes to 0.** B writes the disabled flag into saves, scripts can read it, and NPCs
+would blink in and out; C hides the crash and keeps its cause (the owner's rule: no shortcuts). One
+member asked for the game's own loaded-cell test where it can be had rather than only the
+8192-unit reach (it depends on the game's grid setting); the others agreed.
+
+**As built.** `coop_engine::live::place_loaded`: outdoors, the exterior cell holding the place
+(`TESWorldSpace::GetCellFromWorldCoord`, `00587550`) must be in the game's loaded grid
+(`TES::IsCellLoaded`); indoors, or without those functions, the place must be within `LOADED_REACH`
+of the player. `fight::bring`, `hold`, `lead`, `nudge` and `live::rehome` refuse any other place; a
+guest's bring through a door checks first, so a refused place does not use up one of its three
+tries; a walk back stops when its next step is refused; a refused step along the owner's path is
+neither made nor logged as "put on it" (the guest's log of PC run 36 had such lines every frame).
+Checked in two headless games (`/tmp/s_crash.sh`: the host does the bottles talk, the guest stays at
+the bottles, the host meets Sunny at the first well): no crash, the copy never brought to a place
+the guest's game had not loaded, and once the guest walked to the well the copy stood where the
+host's Sunny stood (-67071, -9298); the guest got the host's line at the well as text.
+
+## D9 (2026-11-21): what a player far from another's conversation sees
+
+**Question.** S42 leaves a far player out of a conversation (no window, no vote). What should that
+player see? Options: (1) nothing (quest updates only); (2) each line as HUD text; (3) as 2, but
+while the player is busy (a menu open, or in a fight) one "Player N is talking to NPC." instead of
+the lines, and "Player N finished talking to NPC." once free and the conversation over; (4) pull
+the far player in (teleport, or the conversation waits).
+
+**Decision: 3, 3 votes to 1** (story experience and stability for 3, simplicity for 2; Claude for
+3); agreed by the owner. Two new players follow the story without being pulled out of a fight or a
+menu; the text touches no far NPC.
+
+**As built.** `Talker::watch` (`coop-engine-session/src/talk.rs`): a line of a conversation whose NPC
+is not in this player's cell is shown as text (what the talker chose, then each response), unless
+`coop_engine::talk::busy` (`InterfaceManager::IsInMenuMode`, or the player's `IsInCombat`); then the
+first held line of the conversation shows the "is talking to" notice, and a conversation with held
+lines gets its "finished talking to" notice when the player is free after it ended (or after the
+player's view moved to another player's conversation). The NPC's name is its base form's
+(`TESFullName::GetFullName`), "someone" without one. A player who walks up joins the window from
+the next line (step 1).

@@ -1555,5 +1555,8 @@ the session ended); the NPC's copy keeps following its game while it is open.
   window on her and showed both lines (none as text), closed it when the guest's conversation
   ended, ran no result of it (both games at VCG02 stage 10), and Sunny stood in the same place on
   the same package, in no conversation, in both games afterwards.
+- A player far from the NPC (not in its cell) gets the lines as HUD text, held back while busy (a
+  menu open, or in a fight) with an "is talking to" and a "finished talking to" notice instead
+  (DECISIONS.md D9, 2026-11-21).
 - Not yet: the watcher's own options (step 2), votes (step 3), rewards (step 4). Lines of no shared
   quest are not sent between players yet (S16), so they are not shown to a watcher.

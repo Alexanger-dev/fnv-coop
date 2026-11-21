@@ -246,9 +246,55 @@ fn near_player(e: &mut Engine, pos: [f32; 3]) -> bool {
     }
 }
 
+/// Whether `pos`, in this player's space, is in a cell this game has loaded: outdoors, the
+/// exterior cell holding it (`TESWorldSpace::GetCellFromWorldCoord`) is in the game's loaded grid
+/// (`TES::IsCellLoaded`); indoors, or without those functions, it is within [`LOADED_REACH`] of
+/// the player. False when the player is not in the world.
+///
+/// Co-op moves another game's actor here only to such a place (PC run 36): the game itself parks
+/// an actor that walks out of its loaded cells, and one moved by co-op to a place the game has not
+/// loaded was parked again each time, until the game's AI, walking it along a path that place has
+/// not got, read no path and stopped the game (`VirtualActorPathHandler::GetNextNodeLocation`
+/// under `HighProcess::ProcessAccompany`: Sunny's copy, in the guest's game, as she led the host
+/// to the first well and the guest stood at the bottles).
+pub fn place_loaded(e: &mut Engine, pos: [f32; 3]) -> bool {
+    let Some(p) = player(e) else {
+        return false;
+    };
+    let cell = e.mem.u32(p.wrapping_add(addr::REF_CELL_OFFSET));
+    if cell == 0 || e.mem.u32(p.wrapping_add(addr::REF_LOADED_OFFSET)) == 0 {
+        return false;
+    }
+    let exact = [
+        addr::CELL_IS_INTERIOR,
+        addr::CELL_GET_WORLD_SPACE,
+        addr::WORLD_CELL_FROM_COORD,
+        addr::CELL_IS_LOADED,
+    ]
+    .iter()
+    .all(|f| e.is_registered(*f));
+    if !exact || e.call(addr::CELL_IS_INTERIOR, &args![cell]).bool() {
+        return near_player(e, pos);
+    }
+    let world = e.call(addr::CELL_GET_WORLD_SPACE, &args![cell]).u32();
+    if world == 0 {
+        return near_player(e, pos);
+    }
+    let there = e.with_stack(8, |e, at| {
+        e.mem.set_f32(at.addr(), pos[0]);
+        e.mem.set_f32(at.addr() + 4, pos[1]);
+        e.call(addr::WORLD_CELL_FROM_COORD, &args![world, at.addr()])
+            .u32()
+    });
+    let tes = e.mem.u32(addr::TES_SINGLETON);
+    there != 0
+        && e.call(addr::CELL_IS_LOADED, &args![tes, there, 0u32])
+            .bool()
+}
+
 /// Brings reference `r` to `pos` with the game's `MoveTo` to the local player (the difference as
 /// offsets), which puts it in the cell there. False when the player is not in the world, `pos` is
-/// farther than [`LOADED_REACH`] from it, or the program has no such function.
+/// not in a cell this game has loaded ([`place_loaded`]), or the program has no such function.
 fn rehome(e: &mut Engine, r: u32, pos: [f32; 3]) -> bool {
     let p = match player(e) {
         Some(p) if e.mem.u32(p.wrapping_add(addr::REF_LOADED_OFFSET)) != 0 => p,
@@ -257,11 +303,10 @@ fn rehome(e: &mut Engine, r: u32, pos: [f32; 3]) -> bool {
     if !e.is_registered(addr::MOVE_TO_FUNCTION_BASE) {
         return false;
     }
-    let at = [0, 4, 8].map(|o| e.mem.f32(p.wrapping_add(addr::REF_POS_OFFSET + o)));
-    let far = (0..2).map(|i| (pos[i] - at[i]).powi(2)).sum::<f32>().sqrt();
-    if far > LOADED_REACH {
+    if !place_loaded(e, pos) {
         return false;
     }
+    let at = [0, 4, 8].map(|o| e.mem.f32(p.wrapping_add(addr::REF_POS_OFFSET + o)));
     let off = [0, 1, 2].map(|i| (pos[i] - at[i]).to_bits());
     e.call(
         addr::MOVE_TO_FUNCTION_BASE,
