@@ -234,12 +234,26 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-6",
     },
+    // DialogMenu::DoClick: a click on another player's option of the conversation is not this
+    // game's to say (S42 step 2).
+    Entry {
+        addr: 0x0076_24f0,
+        owners: COOP,
+        step: "C-15",
+    },
     // HUDMainMenu::UpdateCompass (compass, landmarks, objectives, actor ticks): the other
     // players get a mark of their own on the compass, in a colour the game's HUD does not use.
     // DialogMenu::DoIdle: a window showing another player's conversation stays on its line
     // until the next one comes (S42).
     Entry {
         addr: 0x0076_2950,
+        owners: COOP,
+        step: "C-15",
+    },
+    // DialogMenu::LoadTopicsList: this game's own options are noted, and the other players'
+    // added with their names (S42 step 2).
+    Entry {
+        addr: 0x0076_38b0,
         owners: COOP,
         step: "C-15",
     },

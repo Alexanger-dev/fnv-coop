@@ -1538,6 +1538,49 @@ pub const INFO_SAID_OFFSET: u32 = 0x22;
 pub const ACTOR_END_DIALOGUE_SLOT: u32 = 0x288;
 /// `DialogMenu::DoIdle` (`thiscall`, the menu): its dialogue state machine, once a frame.
 pub const DIALOG_MENU_DO_IDLE: u32 = 0x0076_2950;
+/// `DialogMenu::DoClick` (`thiscall`: the menu, the clicked id, the tile; `007624f0`,
+/// `dialogmenu.rs`): a click on one of the list box's rows (id -1) selects the topic at the
+/// row's index (trait `0xfac`) and says it.
+pub const DIALOG_MENU_DO_CLICK: u32 = 0x0076_24f0;
+/// `DialogMenu::LoadTopicsList` (`thiscall`, the menu; `007638b0`): empties the list box and adds
+/// one row per topic of the topic manager (`FirstTopic(1)`, `NextTopic`), the row's index its
+/// place in that list.
+pub const DIALOG_MENU_LOAD_TOPICS_LIST: u32 = 0x0076_38b0;
+/// `DialogMenu::uiIgnoreInputStartTime`: set to the time by every `LoadTopicsList` (clicks are
+/// ignored for 500 ms after), cleared by `DoClick` once that has passed.
+pub const DIALOG_MENU_IGNORE_INPUT_OFFSET: u32 = 0x10c;
+/// The dialogue menu's list box of options (an embedded `ListBox<int>`).
+pub const DIALOG_MENU_LIST_OFFSET: u32 = 0x40;
+/// The trait the menu's root tile shows the response text by (`"_ShowingText"`), a global
+/// holding its id.
+pub const DIALOG_SHOWING_TEXT_TRAIT: u32 = 0x011d_9500;
+/// `ListBox<int>::AddItem` (`thiscall`: the list box, the row's data (its index), the text, 0,
+/// 0; `00764430`): the new row's tile.
+pub const LIST_BOX_ADD_ITEM: u32 = 0x0076_4430;
+/// `ListBox<int>::Synchronize` (`thiscall`, the list box; `00764930`).
+pub const LIST_BOX_SYNCHRONIZE: u32 = 0x0076_4930;
+/// Whether a tile is one of the list box's rows (`thiscall`: the list box, the tile; `007242f0`).
+pub const LIST_BOX_BELONGS_TO: u32 = 0x0072_42f0;
+/// `Tile::SetName` (`thiscall`: the tile, the characters; `00707e10`).
+pub const TILE_SET_NAME: u32 = 0x0070_7e10;
+/// The row trait a dialogue row's index is kept in.
+pub const TILE_TRAIT_LIST_INDEX: u32 = 0xfac;
+/// `Tile::TextToTrait` (`cdecl`, the characters; `00a01860`): a trait's id from its name.
+pub const TILE_TEXT_TO_TRAIT: u32 = 0x00a0_1860;
+/// The game's `"_line_alpha"` (a row's brightness, by `LoadTopicsList`).
+pub const LINE_ALPHA_TEXT: u32 = 0x0107_27cc;
+/// `MenuTopicManager::NextTopic` (`thiscall`, the manager; `0083e3e0`): moves its current topic
+/// on; whether there is one.
+pub const TOPICS_NEXT_TOPIC: u32 = 0x0083_e3e0;
+/// `MenuTopicManager::LoadNextTopicList` (`thiscall`, the manager; `0083ec30`): the list of
+/// topics to choose from after the current one (its choices, or the NPC's topics), each with
+/// the info whose conditions hold for this game's player.
+pub const TOPICS_LOAD_NEXT_TOPIC_LIST: u32 = 0x0083_ec30;
+/// The characters of a form's name (`thiscall` on its `TESFullName`, the form + 0x18;
+/// `00408da0`, as `LoadTopicsList` reads a prompt's).
+pub const FULL_NAME_CHARS: u32 = 0x0040_8da0;
+/// A form's `TESFullName` (+0x18).
+pub const FORM_FULL_NAME_OFFSET: u32 = 0x18;
 /// `DialogMenu::LoadNextScreen` (`thiscall`, the menu and a byte: after a speech challenge):
 /// says the current topic's next response, or moves the conversation on; the new state.
 pub const DIALOG_MENU_LOAD_NEXT_SCREEN: u32 = 0x0076_2ff0;

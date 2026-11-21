@@ -124,6 +124,66 @@ pub fn watching(e: &mut Engine) -> Option<u32> {
     state(e, |s| (s.npc != 0 && !s.left).then_some(s.npc))
 }
 
+/// Whether `menu` (a pointer) is the open window showing another player's conversation.
+pub(crate) fn is_window(e: &mut Engine, menu: u32) -> bool {
+    let (npc, open) = state(e, |s| (s.npc, s.open));
+    if npc == 0 || !open || menu == 0 || e.mem.u32(addr::DIALOG_MENU_OPEN) != menu {
+        return false;
+    }
+    let actor = actors::actor(e, npc);
+    actor.is_some() && open_speaker(e) == actor
+}
+
+/// The window, its line said and nothing more waiting, lists this game's player's own options
+/// next (S42 step 2), as the game lists them after a line: the topic manager's next list
+/// (`LoadNextTopicList`, the line's choices or the NPC's topics, each with the info whose
+/// conditions hold for this game's player), the text hidden, `LoadTopicsList` (which adds the
+/// other players' options, [`crate::choices`]), state 2. A line that comes later is put to the
+/// window as before. False, and nothing done, when the window is not open, still says its line,
+/// has lines waiting, lists its options already, or has none to list.
+pub fn show_topics(e: &mut Engine) -> bool {
+    let (npc, open, waiting) = state(e, |s| (s.npc, s.open, !s.queue.is_empty()));
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if npc == 0 || !open || waiting || !is_window(e, menu) {
+        return false;
+    }
+    let needed = [
+        addr::TOPICS_LOAD_NEXT_TOPIC_LIST,
+        addr::TOPICS_FIRST_TOPIC,
+        addr::DIALOG_MENU_LOAD_TOPICS_LIST,
+        addr::TILE_SET_INT,
+    ];
+    if !needed.iter().all(|f| e.is_registered(*f)) {
+        return false;
+    }
+    let speaker = open_speaker(e).unwrap_or(0);
+    let at = menu + addr::DIALOG_MENU_STATE_OFFSET;
+    if !matches!(e.mem.u32(at), 1 | 3)
+        || more_to_say(e)
+        || e.mem.u8(speaker + addr::REF_LINE_DONE_OFFSET) == 0
+    {
+        return false;
+    }
+    let topics = e.mem.u32(menu + addr::DIALOG_MENU_TOPICS_OFFSET);
+    e.call(addr::TOPICS_LOAD_NEXT_TOPIC_LIST, &args![topics]);
+    if !e
+        .call(addr::TOPICS_FIRST_TOPIC, &args![topics, 1u32])
+        .bool()
+    {
+        log(|| format!("window on {npc:08x}: no options of this player's to list"));
+        return false;
+    }
+    let root = e.mem.u32(menu + 4);
+    let showing = e.mem.u32(addr::DIALOG_SHOWING_TEXT_TRAIT);
+    if root != 0 {
+        e.call(addr::TILE_SET_INT, &args![root, showing, 0u32]);
+    }
+    e.call(addr::DIALOG_MENU_LOAD_TOPICS_LIST, &args![menu]);
+    e.mem.set_u32(at, 2);
+    log(|| format!("window on {npc:08x} lists its options"));
+    true
+}
+
 /// Whether `DialogMenu::Create` runs for the watching window now (co-op's refusals do not apply).
 pub(crate) fn opening(e: &mut Engine) -> bool {
     state(e, |s| s.opening)
@@ -389,7 +449,9 @@ pub(crate) fn do_idle(e: &mut Engine, a: &[u32]) -> Ret {
         && e.mem.u32(addr::DIALOG_MENU_OPEN) == menu
         && e.mem.u32(menu + addr::DIALOG_MENU_SPEAKER_OFFSET) == actor.unwrap_or(0);
     if !ours {
-        return e.call_next(addr::DIALOG_MENU_DO_IDLE, a);
+        let r = e.call_next(addr::DIALOG_MENU_DO_IDLE, a);
+        crate::choices::after_game(e);
+        return r;
     }
     let speaker = actor.unwrap_or(0);
     let at = menu + addr::DIALOG_MENU_STATE_OFFSET;
@@ -399,6 +461,7 @@ pub(crate) fn do_idle(e: &mut Engine, a: &[u32]) -> Ret {
         e.mem.set_f32(addr::DIALOG_COUNTDOWN, HOLD_SECONDS);
     }
     let r = e.call_next(addr::DIALOG_MENU_DO_IDLE, a);
+    crate::choices::after_game(e);
     if e.mem.u32(addr::DIALOG_MENU_OPEN) != menu || !matches!(e.mem.u32(at), 1..=3) {
         return r;
     }
@@ -708,6 +771,135 @@ mod tests {
     /// The speaker has done saying its line (its voice ended).
     fn line_done(e: &mut Engine) {
         e.mem.set_u8(ACTOR + addr::REF_LINE_DONE_OFFSET, 1);
+    }
+
+    /// The game's next topic list (this player's options, when `have` is set) and its
+    /// `LoadTopicsList`, counted; `TILE_SET_INT` noted (the root's "showing text").
+    fn with_option_list(e: &mut Engine, have: bool) {
+        const NEXT_LISTS: u32 = BASE + 0x6020;
+        e.mem.set_u32(NEXT_LISTS, 0);
+        e.mem.set_u32(NEXT_LISTS + 4, 0);
+        e.mem.set_u32(NEXT_LISTS + 8, u32::from(have));
+        e.mem.set_u32(MENU + 4, BASE + 0x6080);
+        e.mem.set_u32(addr::DIALOG_SHOWING_TEXT_TRAIT, 0x77);
+        e.mem.set_u32(BASE + 0x6080, 1);
+        e.register(addr::TOPICS_LOAD_NEXT_TOPIC_LIST, |e, _| {
+            e.mem.set_u32(NEXT_LISTS, e.mem.u32(NEXT_LISTS) + 1);
+            Ret::default()
+        });
+        // FirstTopic: with the flag, whether this player has options in the next list.
+        e.register(addr::TOPICS_FIRST_TOPIC, |e, a| {
+            if a[1] == 1 {
+                return eax(e.mem.u32(NEXT_LISTS + 8) * e.mem.u32(NEXT_LISTS));
+            }
+            let first = e.mem.u32(e.mem.u32(a[0] + 4));
+            e.mem.set_u32(a[0], first);
+            eax(u32::from(first != 0))
+        });
+        e.register(addr::DIALOG_MENU_LOAD_TOPICS_LIST, |e, _| {
+            e.mem.set_u32(NEXT_LISTS + 4, e.mem.u32(NEXT_LISTS + 4) + 1);
+            Ret::default()
+        });
+        e.register(addr::TILE_SET_INT, |e, a| {
+            if a[1] == 0x77 {
+                e.mem.set_u32(a[0], a[2]);
+            }
+            Ret::default()
+        });
+    }
+
+    fn option_lists(e: &Engine) -> (u32, u32) {
+        (e.mem.u32(BASE + 0x6020), e.mem.u32(BASE + 0x6024))
+    }
+
+    /// S42 step 2: the window, its line said, lists this player's own options as the game does
+    /// after a line; not while it says one, has one waiting, or lists them already.
+    #[test]
+    fn a_window_whose_line_is_said_lists_this_players_own_options() {
+        let mut e = world();
+        with_option_list(&mut e, true);
+        assert!(!show_topics(&mut e), "no window");
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        idle(&mut e, 1);
+        assert!(!show_topics(&mut e), "the line is being said");
+        line_done(&mut e);
+        assert!(!show_topics(&mut e), "its second response to come");
+        // Its second response said, then held.
+        while said(&e).len() < 2 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        idle(&mut e, 10);
+        assert_eq!(menu_state(&mut e), 3, "held on the line");
+        assert!(!show_topics(&mut e), "the second response is being said");
+        line_done(&mut e);
+        // A line waiting: it comes first.
+        state(&mut e, |s| s.queue.push_back(IDS[1]));
+        assert!(!show_topics(&mut e));
+        state(&mut e, |s| s.queue.clear());
+        assert!(show_topics(&mut e));
+        assert_eq!(menu_state(&mut e), 2);
+        assert_eq!(option_lists(&e), (1, 1));
+        assert_eq!(e.mem.u32(BASE + 0x6080), 0, "the text hidden");
+        // Listing already: nothing more.
+        assert!(!show_topics(&mut e));
+        idle(&mut e, 10);
+        assert_eq!(menu_state(&mut e), 2, "not held back on the line");
+        assert_eq!(option_lists(&e), (1, 1));
+        // The next line is put to the window as before.
+        assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Window);
+        idle(&mut e, 1);
+        assert_eq!(said(&e).last(), Some(&INFOS[1]));
+        assert_eq!(menu_state(&mut e), 3);
+    }
+
+    #[test]
+    fn a_window_whose_player_has_no_options_stays_on_its_line() {
+        let mut e = world();
+        with_option_list(&mut e, false);
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        while said(&e).len() < 2 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        idle(&mut e, 10);
+        line_done(&mut e);
+        assert!(!show_topics(&mut e));
+        assert_eq!(menu_state(&mut e), 3);
+        assert_eq!(option_lists(&e), (1, 0));
+    }
+
+    /// The rows of a window showing another player's conversation are not said here (S42 step
+    /// 2, read only); once the window is gone, a click is the game's again.
+    #[test]
+    fn a_click_in_the_watching_window_is_not_said_here() {
+        const CLICKS: u32 = BASE + 0x6030;
+        let mut e = world();
+        e.register(addr::LIST_BOX_BELONGS_TO, |_, _| eax(1));
+        e.register(addr::TILE_GET_FLOAT, |_, _| Ret::default());
+        e.register(addr::DIALOG_MENU_DO_CLICK, |e, _| {
+            e.mem.set_u32(CLICKS, e.mem.u32(CLICKS) + 1);
+            Ret::default()
+        });
+        crate::choices::install(&mut e);
+        let click = |e: &mut Engine| {
+            let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+            e.call(
+                addr::DIALOG_MENU_DO_CLICK,
+                &args![menu, -1i32 as u32, BASE + 0x6040],
+            );
+        };
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        idle(&mut e, 1);
+        click(&mut e);
+        assert_eq!(e.mem.u32(CLICKS), 0);
+        assert_eq!(crate::choices::counts(&mut e).2, 1);
+        // The window closed and a window of this player's own open: its clicks are its own.
+        assert!(end_watch(&mut e));
+        idle(&mut e, 4);
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, MENU);
+        click(&mut e);
+        assert_eq!(e.mem.u32(CLICKS), 1);
     }
 
     #[test]

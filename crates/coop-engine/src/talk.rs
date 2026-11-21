@@ -528,7 +528,9 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
     // The window watching another player's conversation (S42): the NPC is that player's, and
     // this game only shows it.
     if crate::watch::opening(e) {
-        return e.call_next(addr::DIALOG_MENU_CREATE, a);
+        let r = e.call_next(addr::DIALOG_MENU_CREATE, a);
+        crate::choices::after_game(e);
+        return r;
     }
     let speaker = a.first().copied().unwrap_or(0);
     let t = e.ext_free::<Talk>();
@@ -566,7 +568,9 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
             return Ret::default();
         }
     }
-    e.call_next(addr::DIALOG_MENU_CREATE, a)
+    let r = e.call_next(addr::DIALOG_MENU_CREATE, a);
+    crate::choices::after_game(e);
+    r
 }
 
 /// Takes a refused conversation with `speaker` out of the game's queue of menus to open. The

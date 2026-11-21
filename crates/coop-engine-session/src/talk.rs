@@ -89,6 +89,21 @@ pub struct Talker {
     pub subtitles_shown: u32,
     /// Lines shown as HUD messages instead (the game's subtitles are off).
     pub subtitles_as_messages: u32,
+    /// S42 step 2: the options last sent to the table (session, step, infos).
+    offered: Option<(u32, u32, Vec<u32>)>,
+    /// The game's option lists built when the step being played was first seen: options are
+    /// sent only from a list built after it.
+    list_mark: Option<(u32, u32, u64)>,
+    /// Whether the window has the other players' options of a conversation.
+    foreign_set: bool,
+    /// Option lists sent to the table.
+    pub options_sent: u32,
+    /// Watching windows that listed this player's options.
+    pub windows_listed: u32,
+    /// The other players' options put to the window (each time they changed).
+    pub menus_shown: u32,
+    /// Clicks on another player's option (S42 step 2c says them; until then not said).
+    pub foreign_clicks: u32,
     /// A quest of this player's own and one of its stages: until that stage is done in this game
     /// the player is in its own opening, and its conversations are its own (each game has its own
     /// Doc Mitchell for it): none of its lines goes to the protocol, and no NPC is refused to it.
@@ -222,7 +237,84 @@ impl Talker {
         talk::set_busy(e, busy);
         self.watch(e, me, client, &mut out);
         self.drive(e, client, &mut out);
+        self.options(e, me, client, &mut out);
         out
+    }
+
+    /// S42 step 2: this player's own options to the table, when its window (its own
+    /// conversation's, or the one showing another player's) lists them between two steps; the
+    /// other players' options to the window, with their names; a watching window lists its
+    /// options once the table has the conversation's list.
+    fn options(
+        &mut self,
+        e: &mut Engine,
+        me: PlayerId,
+        client: &mut DialogueClient,
+        out: &mut Vec<DialogueMsg>,
+    ) {
+        if coop_engine::choices::take_clicked(e).is_some() {
+            self.foreign_clicks += 1;
+        }
+        let view = client.view().copied();
+        let mine = view.filter(|v| {
+            if v.initiator == me {
+                talk::menu_npc(e) == Some(v.npc.0)
+            } else {
+                self.watched.is_some_and(|(s, _)| s == v.session)
+                    && coop_engine::watch::watching(e) == Some(v.npc.0)
+            }
+        });
+        let Some(v) = mine else {
+            if std::mem::take(&mut self.foreign_set) {
+                coop_engine::choices::set_foreign(e, Vec::new());
+            }
+            self.offered = None;
+            self.list_mark = None;
+            return;
+        };
+        let foreign: Vec<(u32, String)> = client
+            .menu()
+            .unwrap_or_default()
+            .iter()
+            .filter(|i| !i.owners.contains(&me))
+            .filter_map(|i| Some((i.choice, player_name(*i.owners.first()?))))
+            .collect();
+        self.foreign_set = !foreign.is_empty();
+        if coop_engine::choices::set_foreign(e, foreign) {
+            self.menus_shown += 1;
+        }
+        let lists = coop_engine::choices::counts(e).0;
+        if v.playing.is_some() {
+            if self
+                .list_mark
+                .map_or(true, |(s, step, _)| (s, step) != (v.session, v.step))
+            {
+                self.list_mark = Some((v.session, v.step, lists));
+            }
+            return;
+        }
+        if v.initiator != me && client.menu().is_some() && coop_engine::watch::show_topics(e) {
+            self.windows_listed += 1;
+        }
+        let lists = coop_engine::choices::counts(e).0;
+        let fresh = self.list_mark.map_or(true, |(s, step, at)| {
+            (s, step) != (v.session, v.step) || lists > at
+        });
+        if !fresh {
+            return;
+        }
+        let Some(own) = coop_engine::choices::own(e) else {
+            return;
+        };
+        let key = (v.session, v.step + 1, own.clone());
+        if self.offered.as_ref() == Some(&key) {
+            return;
+        }
+        if let Some(msg) = client.options(own) {
+            out.push(msg);
+            self.offered = Some(key);
+            self.options_sent += 1;
+        }
     }
 
     /// A line of another player's conversation: shown once, and reported done.

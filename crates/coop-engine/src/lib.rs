@@ -35,6 +35,7 @@ pub mod gate;
 pub mod journal;
 pub mod live;
 // look: the other player's avatar as that player (docs/coop/SPECS.md S35).
+pub mod choices;
 pub mod look;
 pub mod puppet;
 pub mod quest;
@@ -144,6 +145,7 @@ pub fn install(e: &mut Engine) {
     compass::install(e);
     // another player's conversation shown in this game's own window
     watch::install(e);
+    choices::install(e);
     // voiceui: the speaking players' ticks
     voicemark::install(e);
     // companions
