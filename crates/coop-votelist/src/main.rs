@@ -11,12 +11,13 @@
 //! its result scripts (`SCTX`). The lines that follow a line on their own (`TCFU`, followed
 //! further) count as that line's (`with_follow_ups`): Sunny's "[END TUTORIAL]" does nothing
 //! itself, the line she says after it ends the tutorial.
+//! Last, `settle`: the owner's exceptions (quests each player has on their own, named lines).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-use coop_core::dialogue::votes::{classify, with_follow_ups, LineFacts, Verdict};
+use coop_core::dialogue::votes::{classify, settle, with_follow_ups, LineFacts, Verdict};
 use esm::{sig, FormId, FourCC, Plugin, RecordEntry, Subrecord};
 
 const QSTI: FourCC = FourCC::new(b"QSTI");
@@ -151,6 +152,8 @@ struct Row {
     own: Verdict,
     follow: Verdict,
     verdict: Verdict,
+    /// The owner's exception that decided the verdict, if one did.
+    exception: String,
 }
 
 fn clean(text: &str) -> String {
@@ -297,6 +300,7 @@ fn lines(game: &Game, at: usize, picked: &HashSet<Key>) -> Vec<Line> {
                 answer: clean(&answer),
                 verdict: own.clone(),
                 follow: Verdict::NoVote(Vec::new()),
+                exception: String::new(),
                 own,
             },
         });
@@ -388,7 +392,18 @@ fn main() {
         }
         let follow = follow_verdicts(read[i].key, &by_key, &read);
         let row = &mut read[i].row;
-        row.verdict = with_follow_ups(&row.own, &follow);
+        // Form IDs in the rule's list are the base game's (its mod index 0 in the game too).
+        let base = row.plugin.eq_ignore_ascii_case("FalloutNV.esm");
+        let id = if base {
+            u32::from_str_radix(&row.form, 16).unwrap_or(0)
+        } else {
+            0
+        };
+        let merged = with_follow_ups(&row.own, &follow);
+        row.verdict = settle(merged.clone(), &row.quest, id);
+        if row.verdict != merged {
+            row.exception = row.verdict.reasons();
+        }
         row.follow = with_follow_ups(&Verdict::NoVote(Vec::new()), &follow);
     }
     for (i, line) in read.into_iter().enumerate() {
@@ -401,14 +416,14 @@ fn main() {
             .cmp(&(&b.plugin, &b.quest, &b.speaker, &b.topic, &b.form))
     });
     let mut text = String::from(
-        "Plugin\tLine ID\tQuest\tSpeaker\tTopic\tOption\tNPC answer\tVerdict\tReasons (this line)\tReasons (the lines that follow it)\n",
+        "Plugin\tLine ID\tQuest\tSpeaker\tTopic\tOption\tNPC answer\tVerdict\tReasons (this line)\tReasons (the lines that follow it)\tException\n",
     );
     let mut counts: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
     let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
     for r in &all {
         let _ = writeln!(
             text,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.plugin,
             r.form,
             r.quest,
@@ -418,7 +433,8 @@ fn main() {
             r.answer,
             r.verdict.name(),
             r.own.reasons(),
-            r.follow.reasons()
+            r.follow.reasons(),
+            r.exception
         );
         *counts
             .entry((r.plugin.clone(), r.verdict.name()))

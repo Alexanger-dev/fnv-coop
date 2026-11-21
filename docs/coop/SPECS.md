@@ -1653,5 +1653,14 @@ every other game shows it, holds, and lists its own options when the step is ove
   story DLCs plus Gun Runners' Arsenal (the owner's files): 13,990 lines, 5,857 voted on, 8,133 not
   (the combat remarks such as `PLAYERFIREWEAPON`, greetings and follow-ups are not picked, 14,924).
   The list went to the owner to check against lines known from play.
+- The owner's corrections to the list (2026-11-21, D11): a free item (`player.AddItem`) is not
+  voted on unless the line also does something voted on (a quest moved, started or failed), and
+  every player in the conversation gets it (step 4); Doc Mitchell's tutorial (`VCG01`) is each
+  player's own, none of its lines voted on (`OWN_QUESTS`); Sunny's "I ran out of ammo." and her two
+  "I wanted to ask you some questions." lines that only end the conversation are not voted on by
+  name (`NOT_VOTED`). The final verdict is `settle(with_follow_ups(classify(..)), quest, form id)`.
+  175 lines changed from vote to no vote (165 by the free item rule): 5,682 voted on, 8,308 not.
+  Asked of the owner: whether every line that only ends the conversation ("Goodbye.", 1,534 lines)
+  is voted on.
 - Not yet: votes (step 3b), rewards (step 4). Lines of no shared quest are not sent between
   players yet (S16), so they are not shown to a watcher.

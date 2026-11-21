@@ -351,3 +351,16 @@ once would edit one container in two games; the other player picks the same line
 third member voted for a menu each, with the conversation waiting for both and the stock kept by
 the host. The picker's game runs the line, the others skip its result (R1), so this is how the
 game behaves already. Both kinds stay noted on the verdict (`Verdict::NoVote`).
+
+## D11 (2026-11-21): the owner's corrections to the vote list
+
+**Question.** The owner checked the list of lines (S42 step 3a) against the lines known from play.
+
+**Decision (the owner).** (1) Free items are not voted on, as long as the line does not start,
+move or fail a quest: Sunny supplying ammo is a gift, and every player in the conversation gets
+the same items (30 rounds for each). A line that starts, moves or fails a quest is voted on. (2)
+Doc Mitchell's tutorial is each player's own: his test only picks the three suggested tag
+skills, which each player allocates for their own build, so none of its lines is voted on, his
+goodbye included. (3) Sunny's "I wanted to ask you some questions." while her quest runs only has
+her say to finish first: not voted on; nor her "I ran out of ammo.". Rule: `settle` with
+`OWN_QUESTS` and `NOT_VOTED`, and the gift reason (`Reason::GivesItem`) in `classify`.

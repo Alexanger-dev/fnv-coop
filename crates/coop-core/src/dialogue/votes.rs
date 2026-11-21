@@ -7,7 +7,8 @@
 //! - it ends the conversation (the goodbye mark);
 //! - it moves a quest (`SetStage`, `CompleteQuest`, `StartQuest`, `StopQuest`, an objective
 //!   completed or shown, every objective completed or failed);
-//! - it gives or takes something (items or caps, XP, perks, karma, reputation, a skill);
+//! - it gives or takes something (items or caps, XP, perks, karma, reputation, a skill), but an
+//!   item given to the player (`player.AddItem`) is not voted on by itself;
 //! - it starts a fight or turns someone hostile or friendly (`StartCombat`, `SetEnemy`, `Kill`,
 //!   a faction joined or left);
 //! - it sends someone off (`AddScriptPackage`, `MoveTo`: an NPC walks away, the player is taken
@@ -23,6 +24,19 @@
 //! picked it, whose game runs the line (the other games skip its result, R1); the other can pick
 //! it after. Both stay noted on the verdict ([`Verdict::NoVote`]). A line whose result script this
 //! reader cannot read (only its compiled form) is voted on, to be safe.
+//!
+//! The owner's corrections after reading the list (2026-11-21):
+//!
+//! - A free item (`player.AddItem`) is not voted on unless the line also moves a quest (or does
+//!   anything else voted on): Sunny's "I ran out of ammo." Every player in the conversation gets
+//!   the item (step 4).
+//! - Doc Mitchell's tutorial (`VCG01`, the character's creation) is each player's own: none of
+//!   its lines are voted on, the test's answers and his goodbye included ([`OWN_QUESTS`]).
+//! - A few lines are not voted on by name ([`NOT_VOTED`]): Sunny's "I wanted to ask you some
+//!   questions." while her quest runs only ends the conversation ("let's just finish this
+//!   first"); her "I ran out of ammo." ends it with free ammo.
+//!
+//! The final verdict on a line is [`settle`] of [`with_follow_ups`] of [`classify`].
 //!
 //! The rule reads facts about a line ([`LineFacts`]) that the game's data gives, so the same rule
 //! serves the offline list (`coop-votelist`, from the plugin files) and the game.
@@ -66,6 +80,13 @@ pub enum Reason {
     OpensMenu(String),
     /// Noted, not voted on: a script variable set (`set a.b to ...`).
     SetsVariable(String),
+    /// Noted, not voted on: an item given to the player, by this command; every player in the
+    /// conversation gets it.
+    GivesItem(String),
+    /// Not voted on: a line of a quest each player has on their own ([`OWN_QUESTS`]).
+    OwnQuest(String),
+    /// Not voted on: a line the owner named ([`NOT_VOTED`]), for this reason.
+    Named(&'static str),
 }
 
 impl Reason {
@@ -82,12 +103,22 @@ impl Reason {
             Reason::UnreadableScript => "result script not readable here".into(),
             Reason::OpensMenu(c) => format!("opens a menu for the player who picks it ({c})"),
             Reason::SetsVariable(v) => format!("sets a script variable ({v})"),
+            Reason::GivesItem(c) => format!("gives a free item, every player gets it ({c})"),
+            Reason::OwnQuest(q) => format!("each player's own ({q})"),
+            Reason::Named(why) => format!("named by the owner: {why}"),
         }
     }
 
     /// Whether the reason is only noted: the line is not voted on for it.
     fn is_note(&self) -> bool {
-        matches!(self, Reason::OpensMenu(_) | Reason::SetsVariable(_))
+        matches!(
+            self,
+            Reason::OpensMenu(_)
+                | Reason::SetsVariable(_)
+                | Reason::GivesItem(_)
+                | Reason::OwnQuest(_)
+                | Reason::Named(_)
+        )
     }
 }
 
@@ -180,9 +211,9 @@ const MENUS: &[&str] = &[
 
 /// The commands of a script's source text: per statement, the command's name in lower case
 /// (after a reference and a dot, `player.AddItem` gives `additem`; control words such as `if` come
-/// out as names no list holds), and for `set a.b to ...` statements the variable set. Comments
-/// (after `;`) are left out.
-fn statements(text: &str) -> Vec<(String, Option<String>)> {
+/// out as names no list holds) with the reference it is run on (`player`, none for the speaker),
+/// and for `set a.b to ...` statements the variable set. Comments (after `;`) are left out.
+fn statements(text: &str) -> Vec<Statement> {
     let mut out = Vec::new();
     for line in text.lines() {
         let code = line.split(';').next().unwrap_or("");
@@ -193,13 +224,42 @@ fn statements(text: &str) -> Vec<(String, Option<String>)> {
         let first = first.to_ascii_lowercase();
         if first == "set" {
             let var = words.next().unwrap_or("").to_string();
-            out.push(("set".into(), Some(var)));
+            out.push(Statement {
+                name: "set".into(),
+                var: Some(var),
+                on: None,
+            });
             continue;
         }
-        let name = first.rsplit('.').next().unwrap_or(&first).to_string();
-        out.push((name, None));
+        let (on, name) = match first.rsplit_once('.') {
+            Some((on, name)) => (Some(on.to_string()), name.to_string()),
+            None => (None, first),
+        };
+        out.push(Statement {
+            name,
+            var: None,
+            on,
+        });
     }
     out
+}
+
+/// One statement of a script.
+struct Statement {
+    /// The command's name, lower case.
+    name: String,
+    /// For `set`: the variable set.
+    var: Option<String>,
+    /// The reference it is run on, lower case.
+    on: Option<String>,
+}
+
+/// Commands that give the player an item, when run on the player.
+const GIFTS: &[&str] = &["additem", "additemhealthpercent"];
+
+/// Whether a reference is the player.
+fn is_player(on: Option<&str>) -> bool {
+    matches!(on, Some("player" | "playerref"))
 }
 
 /// The verdict on a line.
@@ -215,9 +275,11 @@ pub fn classify(f: &LineFacts) -> Verdict {
         reasons.push(Reason::SkillCheck);
     }
     for text in &f.scripts {
-        for (cmd, var) in statements(text) {
+        for Statement { name: cmd, var, on } in statements(text) {
             reasons.push(if let Some(var) = var {
                 Reason::SetsVariable(var)
+            } else if GIFTS.contains(&cmd.as_str()) && is_player(on.as_deref()) {
+                Reason::GivesItem(cmd)
             } else if QUEST.contains(&cmd.as_str()) {
                 Reason::ChangesQuest(cmd)
             } else if GIVES.contains(&cmd.as_str()) {
@@ -249,6 +311,38 @@ pub fn with_follow_ups(own: &Verdict, follow_ups: &[Verdict]) -> Verdict {
         reasons.extend(r.iter().cloned());
     }
     Verdict::of(reasons)
+}
+
+/// Quests each player has on their own: their lines are not voted on. Doc Mitchell's tutorial,
+/// the character's creation: his test's answers only suggest the tag skills, which each player
+/// picks for their own build.
+pub const OWN_QUESTS: &[&str] = &["VCG01"];
+
+/// Lines not voted on by name (the owner, 2026-11-21): form IDs of `FalloutNV.esm` (the same in
+/// the game: its mod index is 0), with the reason.
+pub const NOT_VOTED: &[(u32, &str)] = &[
+    (0x0010_B753, "Sunny gives free ammo; every player gets it"),
+    (
+        0x0010_B754,
+        "Sunny says to finish the quest first; nothing changes",
+    ),
+    (
+        0x0015_F508,
+        "Sunny says to finish the quest first; nothing changes",
+    ),
+];
+
+/// The final verdict on a line of quest `quest` (its editor ID) and form ID `line` (a
+/// `FalloutNV.esm` form ID, 0 for a line of another plugin), from its verdict with its follow-ups:
+/// a line of a quest each player has on their own, or one named, is not voted on.
+pub fn settle(verdict: Verdict, quest: &str, line: u32) -> Verdict {
+    if let Some(own) = OWN_QUESTS.iter().find(|q| q.eq_ignore_ascii_case(quest)) {
+        return Verdict::NoVote(vec![Reason::OwnQuest((*own).to_string())]);
+    }
+    if let Some(&(_, why)) = NOT_VOTED.iter().find(|(id, _)| *id == line) {
+        return Verdict::NoVote(vec![Reason::Named(why)]);
+    }
+    verdict
 }
 
 #[cfg(test)]
@@ -289,8 +383,8 @@ mod tests {
         assert!(v.reasons().contains("moves a quest (setstage)"));
         for (text, reason) in [
             (
-                "player.AddItem Caps001 100",
-                Reason::GivesOrTakes("additem".into()),
+                "player.AddPerk Toughness",
+                Reason::GivesOrTakes("addperk".into()),
             ),
             ("RewardXP 50", Reason::GivesOrTakes("rewardxp".into())),
             ("StartCombat player", Reason::Fight("startcombat".into())),
@@ -374,6 +468,82 @@ mod tests {
                 Reason::ChangesQuest("setstage".into())
             ])
         );
+    }
+
+    #[test]
+    fn a_free_item_alone_is_not_voted_on_unless_the_line_moves_a_quest() {
+        // Sunny's "I ran out of ammo.": ends the conversation, gives ammo.
+        let ammo = LineFacts {
+            goodbye: true,
+            scripts: vec!["player.additem Ammo556mm 30".into()],
+            ..LineFacts::default()
+        };
+        assert_eq!(
+            classify(&ammo),
+            Verdict::Vote(vec![Reason::EndsConversation])
+        );
+        let free = script("Player.AddItem Ammo556mm 30");
+        let given = classify(&free);
+        assert_eq!(
+            given,
+            Verdict::NoVote(vec![Reason::GivesItem("additem".into())])
+        );
+        assert!(given.reasons().contains("every player gets it"));
+        assert_eq!(
+            classify(&script("PlayerREF.AddItemHealthPercent Gun 1 0.5")),
+            Verdict::NoVote(vec![Reason::GivesItem("additemhealthpercent".into())])
+        );
+        // Given with a quest moved: voted on.
+        assert_eq!(
+            classify(&script("player.additem Caps001 50\nSetStage VMS01 30")),
+            Verdict::Vote(vec![Reason::ChangesQuest("setstage".into())])
+        );
+        // Given to someone else, or taken: voted on as before.
+        for (text, cmd) in [
+            ("SunnyREF.AddItem Ammo556mm 30", "additem"),
+            ("AddItem Ammo556mm 30", "additem"),
+            ("player.RemoveItem Caps001 100", "removeitem"),
+        ] {
+            assert_eq!(
+                classify(&script(text)),
+                Verdict::Vote(vec![Reason::GivesOrTakes(cmd.into())])
+            );
+        }
+    }
+
+    #[test]
+    fn doc_mitchells_tutorial_and_named_lines_are_not_voted_on() {
+        let vote = Verdict::Vote(vec![Reason::EndsConversation]);
+        // Doc Mitchell's test answers and his goodbye (VCG01).
+        assert_eq!(
+            settle(vote.clone(), "VCG01", 0x0010_55B0),
+            Verdict::NoVote(vec![Reason::OwnQuest("VCG01".into())])
+        );
+        assert_eq!(
+            settle(vote.clone(), "vcg01", 0),
+            Verdict::NoVote(vec![Reason::OwnQuest("VCG01".into())])
+        );
+        // Sunny's "I wanted to ask you some questions." while her quest runs.
+        for line in [0x0010_B754, 0x0015_F508] {
+            let settled = settle(vote.clone(), "VCG02", line);
+            assert_eq!(settled.name(), "no vote");
+            assert!(settled.reasons().contains("finish the quest first"));
+        }
+        // Any other line keeps its verdict; a line of another plugin (0) is never named.
+        assert_eq!(settle(vote.clone(), "VCG02", 0x0010_A1E5), vote);
+        assert!(settle(vote.clone(), "VCG02", 0x0010_B753)
+            .reasons()
+            .contains("free ammo"));
+        assert_eq!(settle(vote.clone(), "VCG02", 0), vote);
+        let none = Verdict::NoVote(vec![]);
+        assert_eq!(settle(none.clone(), "VCG02", 0x0010_A1E5), none);
+        // A settled verdict merged again stays not voted on.
+        for settled in [
+            settle(vote.clone(), "VCG01", 0),
+            settle(vote.clone(), "VCG02", 0x0010_B754),
+        ] {
+            assert_eq!(with_follow_ups(&settled, &[]).name(), "no vote");
+        }
     }
 
     #[test]
