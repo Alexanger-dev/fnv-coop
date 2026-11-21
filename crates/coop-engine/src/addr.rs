@@ -634,6 +634,11 @@ pub const SAVE_GAME_SITE: u32 = 0x0084_7c45;
 /// See [`SAVE_GAME_SITE`].
 pub const LOAD_GAME_SITE: u32 = 0x0084_8c3c;
 
+/// The seam at the start of `TESObjectREFR::Activate` (`0057318e`, words: the reference, the
+/// activator; `tesobjectrefr_p4.rs`, engine-core's seam table): every activation, the player's
+/// talking to an actor included (an actor's own greeting queues its menu without it).
+pub const REFR_ACTIVATE_SITE: u32 = 0x0057_318e;
+
 /// `SleepWaitMenu::DoClick` (`thiscall`: menu, button id, tile; `RET 8`; `007c0220`,
 /// `sleepwaitmenu.rs`): button 4 starts the rest, button 5 cancels and closes the menu.
 pub const SLEEP_WAIT_DO_CLICK: u32 = 0x007c_0220;

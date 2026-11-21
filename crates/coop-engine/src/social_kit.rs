@@ -361,6 +361,20 @@ impl Story {
             .call(addr::INFO_RUN_RESULT, &args![info, u32::from(end), speaker]);
     }
 
+    /// The player activates (talks to) `npc`, as the activate key does: the activation's seam,
+    /// then the conversation asked of the game ([`Self::talk_to`]); whether a menu opened.
+    pub fn activate(&mut self, npc: u32) -> bool {
+        let r = forms::form(&mut self.e, npc).expect("a reference of the story");
+        let player = self.e.mem.u32(addr::PLAYER_SINGLETON);
+        self.e.site(addr::REFR_ACTIVATE_SITE, &[r, player]);
+        self.talk_to(npc)
+    }
+
+    /// The player clicks `[Leave conversation]` (S42, D12).
+    pub fn click_leave(&mut self) {
+        crate::choices::note_leave_click(&mut self.e);
+    }
+
     /// The conversation ends by itself (the menu's own goodbye).
     pub fn leave(&mut self) {
         self.e.mem.set_u32(addr::DIALOG_MENU_OPEN, 0);

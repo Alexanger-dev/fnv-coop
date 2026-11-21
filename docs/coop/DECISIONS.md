@@ -364,3 +364,18 @@ skills, which each player allocates for their own build, so none of its lines is
 goodbye included. (3) Sunny's "I wanted to ask you some questions." while her quest runs only has
 her say to finish first: not voted on; nor her "I ran out of ammo.". Rule: `settle` with
 `OWN_QUESTS` and `NOT_VOTED`, and the gift reason (`Reason::GivesItem`) in `classify`.
+
+## D12 (2026-11-21): who is in a conversation
+
+**Question.** The owner: talking to a vendor must not force the other player into the
+conversation. Until then every player in the NPC's cell got the window and was held in it (its
+only way out a line that ended it for both). Options: (A) opt-in: nobody pulled in, subtitles
+and a word, joining by talking to the NPC; (B) opt-out: pulled in as before, with a
+`[Leave conversation]` row; (C) A and B together; (D) pulled in only when right by the NPC, with
+the row.
+
+**Decision.** C, council 3-0, agreed by the owner: opt-in by talking to the NPC, and a
+`[Leave conversation]` row to step out at any time without ending it for the others. Only the
+players in a conversation take part and vote; one who leaves drops out of any open vote; when
+the starter leaves, the player in it longest leads. Free items a player gets in a conversation go
+to every player, in it or not (the owner). SPECS S42, "Joining and leaving".

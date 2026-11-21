@@ -35,6 +35,7 @@ pub(crate) fn install(e: &mut Engine) {
         }
     }
     e.on_site(saves::SAVE, saves::save_site);
+    e.on_site(talk::ACTIVATE, talk::activate_site);
     e.on_site(saves::LOAD, saves::load_site);
     // The slots, before the threads start.
     let _ = e.ext_free::<talk::Talk>();

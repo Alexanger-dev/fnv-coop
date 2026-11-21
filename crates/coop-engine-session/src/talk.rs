@@ -4,14 +4,19 @@
 //! - [`Talker`] runs on every machine. What this game's own conversation says
 //!   (`coop_engine::talk`'s events) becomes the protocol's moves: the first shared line asks the
 //!   host for the NPC (`Open`), each line said is a `Pick` of its info, its end a `LineDone`, the
-//!   menu closing a `Close`. A machine that watches another player's conversation shows each
-//!   line picked when its player is in the NPC's cell: in the game's own dialogue window on its
-//!   NPC (`coop_engine::watch`, S42), else (another menu open, the player closed the window)
-//!   as the game's own HUD messages. It reports the line done at once, so the talker never
-//!   waits for a watcher. The window closes when the conversation ends, the player leaves the
-//!   NPC's cell, or nothing new is said for [`WATCH_QUIET_STEPS`]. The NPC another
-//!   player talks to is named busy to the game, which then opens no menu on it; a conversation
-//!   the host refuses is closed through the game.
+//!   menu closing a `Close`. A player takes part only in a conversation it started or joined
+//!   (S42, D12): talking to the NPC of another player's conversation joins it (the NPC is named
+//!   busy to the game, which opens no menu on it, and the refusal becomes a `Join`). A machine
+//!   in another player's conversation shows each line picked in the game's own dialogue window
+//!   on its NPC when its player is in the NPC's cell (`coop_engine::watch`, S42), else as
+//!   subtitles; a player not in it follows it as subtitles (held back while busy), with a word
+//!   that it may join. Each window of a conversation another player is in too ends its list with
+//!   `[Leave conversation]`: this player is out (its window closed, the table told), and the
+//!   conversation goes on for the others; closing the window does the same. A machine reports
+//!   another player's line done at once, so the talker never waits for a watcher. The window
+//!   closes when the conversation ends, the player leaves it or the NPC's cell, or nothing new
+//!   is said for [`WATCH_QUIET_STEPS`]; a conversation the host refuses is closed through the
+//!   game.
 //! - [`Enactor`] runs on the host: a guest's pick of a line of the shared story has its result
 //!   run in the host's game, once, when the protocol says so (the begin result at the pick, the
 //!   end result once every machine has reported the line done).
@@ -48,6 +53,21 @@ pub struct Talker {
     pub denied: u32,
     /// Conversations the game did not start here because another player has the NPC.
     pub blocked: u32,
+    /// Other players' conversations this player joined (it talked to the NPC, S42 D12).
+    pub joins: u32,
+    /// Conversations this player left (`[Leave conversation]`, or it closed the window).
+    pub leaves: u32,
+    /// "... is talking to ... Talk to them to join." shown to a player near a conversation it is
+    /// not in.
+    pub join_hints: u32,
+    /// Windows opened on a conversation's last line for a player who joined between two steps.
+    pub join_windows: u32,
+    /// The conversation whose join hint was shown.
+    hinted: Option<u32>,
+    /// The NPC this player talked to, to join its conversation, until the table took it in.
+    joining: Option<u32>,
+    /// The step whose last line was shown to a player who joined: (session, step).
+    join_shown: Option<(u32, u32)>,
     /// Conversations a copy of an actor another game runs began itself with this player, left to
     /// the owner's game (it greets its own player).
     pub not_greeted: u32,
@@ -252,20 +272,69 @@ impl Talker {
                         self.greet_asks.push(npc);
                     }
                 }
+                // Talking to the NPC of another player's conversation joins it (S42, D12); the
+                // NPC's own greeting does not (an actor came to greet this player while busy).
+                Event::Asked { npc } => {
+                    if let Some(msg) = client.join(FormId(npc)) {
+                        coop_engine::watch::forget_left(e);
+                        out.push(msg);
+                        self.joins += 1;
+                        self.joining = Some(npc);
+                    }
+                }
+                // The menu the game then asked for is refused, as joining shows the
+                // conversation in its own window.
+                Event::Blocked { npc } if self.joining == Some(npc) => {}
                 Event::Blocked { .. } => {
                     self.blocked += 1;
                     talk::show(e, "Another player is talking to them.");
                 }
             }
         }
-        // The NPC another player talks to gets no menu here.
-        // (In this player's opening the game refuses no NPC: `talk::set_own_opening`.)
-        let busy = client.view().filter(|v| v.initiator != me).map(|v| v.npc.0);
-        talk::set_busy(e, busy);
+        // A join the table took in (or a conversation that ended first): done.
+        if let Some(npc) = self.joining {
+            if client.join(FormId(npc)).is_none() {
+                self.joining = None;
+            }
+        }
+        // The NPCs of the conversations this player is not in get no menu here (talking to one
+        // joins it). (In this player's opening the game refuses no NPC: `talk::set_own_opening`.)
+        talk::set_busy(e, client.busy_npcs().into_iter().map(|n| n.0));
+        self.leave(e, client, &mut out);
         self.watch(e, me, client, &mut out);
         self.drive(e, client, &mut out);
         self.options(e, me, client, &mut out);
         out
+    }
+
+    /// S42, D12: this player out of its conversation, by the `[Leave conversation]` row or by
+    /// closing the watching window: its window closed, the table told; the conversation goes on
+    /// for the others. The row is in each window of a conversation another player is in too (not
+    /// for a player alone in it: its goodbye ends it).
+    fn leave(&mut self, e: &mut Engine, client: &mut DialogueClient, out: &mut Vec<DialogueMsg>) {
+        let clicked = coop_engine::choices::take_leave(e);
+        let closed = coop_engine::watch::take_left(e);
+        if (clicked || closed) && client.joined() {
+            let own = client.is_initiator();
+            let npc = client.view().map(|v| v.npc.0);
+            if let Some(msg) = client.leave() {
+                out.push(msg);
+                self.leaves += 1;
+            }
+            if clicked {
+                if own {
+                    coop_engine::watch::leave_own_window(e);
+                } else {
+                    coop_engine::watch::end_watch(e);
+                }
+            }
+            self.watched = None;
+            // Nothing more of it is this player's to say.
+            self.queue.retain(|q| Some(q.npc) != npc);
+            self.awaiting = None;
+        }
+        let row = client.joined() && client.players_in().len() > 1;
+        coop_engine::choices::set_leave(e, row);
     }
 
     /// Whether the story is settled after step `v`'s line, for this player's window to list its
@@ -347,8 +416,11 @@ impl Talker {
                 out.extend(client.line_done());
             }
         }
+        let joined = client.joined();
         let mine = view.filter(|v| {
-            if v.initiator == me {
+            if !joined {
+                false
+            } else if v.initiator == me {
                 talk::menu_npc(e) == Some(v.npc.0)
             } else {
                 self.watched.is_some_and(|(s, _)| s == v.session)
@@ -433,7 +505,12 @@ impl Talker {
     ) {
         coop_engine::watch::step(e);
         self.show_subtitles(e);
-        let view = client.view().copied().filter(|v| v.initiator != me);
+        // Another player's conversation, or this player's own it left.
+        let joined = client.joined();
+        let view = client
+            .view()
+            .copied()
+            .filter(|v| v.initiator != me || !joined);
         // The far conversation is over: its end is told when lines were held back.
         if let Some(f) = self.far {
             if view.map_or(true, |v| v.session != f.session) {
@@ -458,6 +535,14 @@ impl Talker {
             let over = view.map_or(true, |v| v.session != session || !talk::near(e, v.npc.0));
             let quiet = quiet + 1;
             if over || quiet >= WATCH_QUIET_STEPS {
+                if std::env::var_os("NV_COOP_TALK_LOG").is_some() {
+                    let near = view.map(|v| talk::near(e, v.npc.0));
+                    eprintln!(
+                        "co-op talk: window on conversation {session} closed: now {:?}, near {near:?}, quiet {quiet}, last ended {:?}",
+                        view.map(|v| v.session),
+                        client.last_closed
+                    );
+                }
                 self.watched = None;
                 if coop_engine::watch::end_watch(e) {
                     self.windows_closed += 1;
@@ -469,6 +554,24 @@ impl Talker {
         let Some(v) = view else {
             return;
         };
+        // Joined between two steps: the window opens on the conversation's last line, then lists
+        // the options.
+        if joined
+            && self.watched.is_none()
+            && v.playing.is_none()
+            && self.join_shown != Some((v.session, v.step))
+            && talk::near(e, v.npc.0)
+        {
+            if let Some(last) = client.last_choice() {
+                self.join_shown = Some((v.session, v.step));
+                if coop_engine::watch::watch_line(e, v.npc.0, last)
+                    == coop_engine::watch::Outcome::Window
+                {
+                    self.watched = Some((v.session, 0));
+                    self.join_windows += 1;
+                }
+            }
+        }
         let Some(choice) = v.playing.filter(|_| !v.reported) else {
             return;
         };
@@ -484,13 +587,29 @@ impl Talker {
             if talk::mark_said(e, choice) {
                 self.lines_marked += 1;
             }
-            let window = talk::near(e, v.npc.0)
+            let near = talk::near(e, v.npc.0);
+            let window = joined
+                && near
                 && coop_engine::watch::watch_line(e, v.npc.0, choice)
                     == coop_engine::watch::Outcome::Window;
+            // Near a conversation this player is not in: a word that it may join, once.
+            if !joined && near && self.hinted != Some(v.session) && !talk::busy(e) {
+                self.hinted = Some(v.session);
+                let who = client.players_in().first().copied().unwrap_or(v.initiator);
+                let name = talk::name_of(e, v.npc.0).unwrap_or_else(|| "someone".into());
+                talk::show(
+                    e,
+                    &format!(
+                        "{} is talking to {name}. Talk to them to join.",
+                        player_name(who)
+                    ),
+                );
+                self.join_hints += 1;
+            }
             if window {
                 self.watched = Some((v.session, 0));
                 self.lines_windowed += 1;
-            } else if talk::near(e, v.npc.0) {
+            } else if joined && near {
                 if let Some((text, prompt)) = talk::line(e, choice) {
                     let name = talk::name_of(e, v.npc.0);
                     self.queue_subtitles(messages(v.initiator, name.as_deref(), &text, &prompt));
@@ -570,7 +689,7 @@ impl Talker {
             self.say_lines(client, v, out);
             return;
         }
-        if !client.is_initiator() {
+        if !(client.is_initiator() && client.joined()) {
             self.awaiting = None;
             self.closing = false;
             // The first shared line of a conversation asks the host for the NPC.

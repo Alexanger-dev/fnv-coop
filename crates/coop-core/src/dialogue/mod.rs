@@ -194,6 +194,24 @@ pub enum DialogueMsg {
         /// The refused choice.
         choice: u32,
     },
+    /// A player joins a conversation another player started (S42, D12: it talked to the NPC).
+    Join {
+        /// Session.
+        session: u32,
+    },
+    /// A player leaves a conversation (its "[Leave conversation]", or it walked away); the
+    /// conversation goes on for the others, and ends when no one is left in it.
+    Leave {
+        /// Session.
+        session: u32,
+    },
+    /// Host: the players now in a conversation (after a join or a leave), in the order they came.
+    Joined {
+        /// Session.
+        session: u32,
+        /// The players in it.
+        players: Vec<PlayerId>,
+    },
 }
 
 /// What the game must do on the host.

@@ -33,12 +33,28 @@ pub struct Asked {
     pub by: PlayerId,
 }
 
+/// What this machine knows of one open conversation.
+#[derive(Clone, Debug)]
+struct Known {
+    view: View,
+    /// The players in it (S42, D12), the initiator first while it is in.
+    joined: Vec<PlayerId>,
+    /// Its merged options: (step, options).
+    menu: Option<(u32, Vec<MenuItem>)>,
+    /// The info of its last step picked.
+    last: Option<u32>,
+}
+
 /// Dialogue state for one machine.
+///
+/// It follows every open conversation; the one it shows ([`Self::view`]) is the one its player
+/// is in, else the newest (S42, D12: a player takes part only in a conversation it started or
+/// joined, and follows the others as text).
 #[derive(Clone, Debug)]
 pub struct DialogueClient {
     me: PlayerId,
     next_req: u32,
-    view: Option<View>,
+    sessions: std::collections::BTreeMap<u32, Known>,
     last_beat: u64,
     /// Newest denial of one of our opens.
     pub denied: Option<(u32, Deny)>,
@@ -48,9 +64,8 @@ pub struct DialogueClient {
     pub refused: u32,
     /// The newest refused pick: (session, choice).
     pub last_refused: Option<(u32, u32)>,
-    /// The conversation's merged options for the next step (S42 step 2).
-    menu: Option<(u32, u32, Vec<MenuItem>)>,
-    /// An option of ours another player picked, for this game to say.
+    /// An option of ours another player picked, for this game to say (only for the shown
+    /// conversation's next step: [`Self::take_asked`]).
     asked: Option<Asked>,
 }
 
@@ -60,31 +75,52 @@ impl DialogueClient {
         DialogueClient {
             me,
             next_req: 1,
-            view: None,
+            sessions: Default::default(),
             last_beat: 0,
             denied: None,
             last_closed: None,
             refused: 0,
             last_refused: None,
-            menu: None,
             asked: None,
         }
     }
 
+    /// The conversation shown: the one this player is in, else the newest.
+    fn current(&self) -> Option<&Known> {
+        self.sessions
+            .values()
+            .find(|k| k.joined.contains(&self.me))
+            .or_else(|| self.sessions.values().next_back())
+    }
+
+    fn current_mut(&mut self) -> Option<&mut Known> {
+        let me = self.me;
+        let id = self
+            .sessions
+            .iter()
+            .find(|(_, k)| k.joined.contains(&me))
+            .or_else(|| self.sessions.iter().next_back())
+            .map(|(id, _)| *id)?;
+        self.sessions.get_mut(&id)
+    }
+
+    /// The conversation shown, when this player is in it.
+    fn mine(&self) -> Option<&Known> {
+        self.current().filter(|k| k.joined.contains(&self.me))
+    }
+
     /// The conversation's merged options for the next step, when the table sent them.
     pub fn menu(&self) -> Option<&[MenuItem]> {
-        let v = self.view.as_ref()?;
-        self.menu
+        let k = self.current()?;
+        k.menu
             .as_ref()
-            .filter(|(session, step, _)| {
-                *session == v.session && *step == v.step + 1 && v.playing.is_none()
-            })
-            .map(|(_, _, items)| items.as_slice())
+            .filter(|(step, _)| *step == k.view.step + 1 && k.view.playing.is_none())
+            .map(|(_, items)| items.as_slice())
     }
 
     /// An option of ours another player picked, for this game to say (taken once).
     pub fn take_asked(&mut self) -> Option<Asked> {
-        let v = self.view?;
+        let v = self.current()?.view;
         self.asked
             .take()
             .filter(|a| a.session == v.session && a.step == v.step + 1 && v.playing.is_none())
@@ -92,7 +128,7 @@ impl DialogueClient {
 
     /// This player's options for the next step (S42 step 2): the infos its player may say.
     pub fn options(&self, choices: Vec<u32>) -> Option<DialogueMsg> {
-        let v = self.view.as_ref().filter(|v| v.playing.is_none())?;
+        let v = self.view().filter(|v| v.playing.is_none())?;
         Some(DialogueMsg::Options {
             session: v.session,
             step: v.step + 1,
@@ -102,7 +138,7 @@ impl DialogueClient {
 
     /// Picks another player's option of the merged list: the table asks its owner to say it.
     pub fn want(&self, choice: u32) -> Option<DialogueMsg> {
-        let v = self.view.as_ref().filter(|v| v.playing.is_none())?;
+        let v = self.view().filter(|v| v.playing.is_none())?;
         Some(DialogueMsg::Want {
             session: v.session,
             step: v.step + 1,
@@ -110,24 +146,77 @@ impl DialogueClient {
         })
     }
 
-    /// Current session, if any.
+    /// The conversation shown, if any.
     pub fn view(&self) -> Option<&View> {
-        self.view.as_ref()
+        self.current().map(|k| &k.view)
     }
 
-    /// True when this machine picks.
+    /// Whether this player is in the conversation shown (it started or joined it, and has not
+    /// left).
+    pub fn joined(&self) -> bool {
+        self.mine().is_some()
+    }
+
+    /// The players in the conversation shown.
+    pub fn players_in(&self) -> &[PlayerId] {
+        self.current().map_or(&[], |k| k.joined.as_slice())
+    }
+
+    /// The info of the shown conversation's last step picked (a player who joins between two
+    /// steps is shown it first).
+    pub fn last_choice(&self) -> Option<u32> {
+        self.current()?.last
+    }
+
+    /// The NPCs of the conversations this player is not in: busy to it, and talking to one joins
+    /// its conversation.
+    pub fn busy_npcs(&self) -> Vec<FormId> {
+        self.sessions
+            .values()
+            .filter(|k| !k.joined.contains(&self.me))
+            .map(|k| k.view.npc)
+            .collect()
+    }
+
+    /// Joins the conversation with `npc` this player is not in (it talked to the NPC), when it
+    /// is in none.
+    pub fn join(&self, npc: FormId) -> Option<DialogueMsg> {
+        if self.joined() {
+            return None;
+        }
+        let k = self.sessions.values().find(|k| k.view.npc == npc)?;
+        Some(DialogueMsg::Join {
+            session: k.view.session,
+        })
+    }
+
+    /// Leaves the conversation this player is in: out of it here at once (no more window), and
+    /// the table told.
+    pub fn leave(&mut self) -> Option<DialogueMsg> {
+        let me = self.me;
+        let k = self
+            .sessions
+            .values_mut()
+            .find(|k| k.joined.contains(&me))?;
+        k.joined.retain(|p| *p != me);
+        Some(DialogueMsg::Leave {
+            session: k.view.session,
+        })
+    }
+
+    /// True when this machine started the conversation shown.
     pub fn is_initiator(&self) -> bool {
-        self.view.map_or(false, |v| v.initiator == self.me)
+        self.view().is_some_and(|v| v.initiator == self.me)
     }
 
-    /// True when this machine only watches (banner, read-only list).
+    /// True when another player started the conversation shown.
     pub fn is_spectator(&self) -> bool {
-        self.view.map_or(false, |v| v.initiator != self.me)
+        self.view().is_some_and(|v| v.initiator != self.me)
     }
 
     /// True while the initiator's UI must wait for the host's end script.
     pub fn ui_blocked(&self) -> bool {
-        self.view.map_or(false, |v| v.playing.is_some())
+        self.view().is_some_and(|v| v.playing.is_some())
     }
 
     /// Asks to talk to `npc`.
@@ -140,7 +229,7 @@ impl DialogueClient {
     /// Picks the next choice (the info this game said), between steps: the initiator, or since
     /// S42 step 2 any player in the conversation who offered options (the table decides).
     pub fn pick(&mut self, choice: u32) -> Option<DialogueMsg> {
-        let v = self.view.as_ref().filter(|v| v.playing.is_none())?;
+        let v = self.view().filter(|v| v.playing.is_none())?;
         Some(DialogueMsg::Pick {
             session: v.session,
             step: v.step + 1,
@@ -150,10 +239,10 @@ impl DialogueClient {
 
     /// Reports the current step's lines finished (voice and subtitle done).
     pub fn line_done(&mut self) -> Option<DialogueMsg> {
-        let v = self
-            .view
-            .as_mut()
-            .filter(|v| v.playing.is_some() && !v.reported)?;
+        let v = &mut self
+            .current_mut()
+            .filter(|k| k.view.playing.is_some() && !k.view.reported)?
+            .view;
         v.reported = true;
         Some(DialogueMsg::LineDone {
             session: v.session,
@@ -161,31 +250,32 @@ impl DialogueClient {
         })
     }
 
-    /// Ends the conversation (initiator).
+    /// Ends the conversation (initiator, while in it).
     pub fn close(&mut self) -> Option<DialogueMsg> {
-        let v = self.view.as_ref().filter(|v| v.initiator == self.me)?;
-        Some(DialogueMsg::Close { session: v.session })
+        let v = self.mine()?.view;
+        (v.initiator == self.me).then_some(DialogueMsg::Close { session: v.session })
     }
 
     /// Ends the conversation: this player's line, the last step's, ended it in its game (S42 step
     /// 2c; the table takes it from the initiator or the last step's picker).
     pub fn end(&mut self) -> Option<DialogueMsg> {
-        let v = self.view.as_ref()?;
+        let v = self.mine()?.view;
         Some(DialogueMsg::Close { session: v.session })
     }
 
-    /// Keep-alive when due (initiator).
+    /// Keep-alive when due (any player in the conversation: it goes on when its initiator left).
     pub fn heartbeat(&mut self, now_ms: u64) -> Option<DialogueMsg> {
-        let v = self.view.as_ref().filter(|v| v.initiator == self.me)?;
+        let session = self.mine()?.view.session;
         if now_ms.saturating_sub(self.last_beat) < HEARTBEAT_MS {
             return None;
         }
         self.last_beat = now_ms;
-        Some(DialogueMsg::Heartbeat { session: v.session })
+        Some(DialogueMsg::Heartbeat { session })
     }
 
     /// Applies a host message.
     pub fn on_msg(&mut self, msg: DialogueMsg, now_ms: u64) {
+        let shown = self.view().map(|v| v.session);
         match msg {
             DialogueMsg::Started {
                 session,
@@ -193,21 +283,31 @@ impl DialogueClient {
                 initiator,
                 ..
             } => {
-                self.view = Some(View {
+                self.sessions.insert(
                     session,
-                    npc,
-                    initiator,
-                    step: 0,
-                    playing: None,
-                    reported: false,
-                });
-                self.last_beat = now_ms;
+                    Known {
+                        view: View {
+                            session,
+                            npc,
+                            initiator,
+                            step: 0,
+                            playing: None,
+                            reported: false,
+                        },
+                        joined: vec![initiator],
+                        menu: None,
+                        last: None,
+                    },
+                );
+                if initiator == self.me {
+                    self.last_beat = now_ms;
+                }
             }
             DialogueMsg::Denied { req, reason } => self.denied = Some((req, reason)),
             DialogueMsg::Refused {
                 session, choice, ..
             } => {
-                if self.view.is_some_and(|v| v.session == session) {
+                if shown == Some(session) {
                     self.refused += 1;
                     self.last_refused = Some((session, choice));
                 }
@@ -217,8 +317,8 @@ impl DialogueClient {
                 step,
                 items,
             } => {
-                if self.view.is_some_and(|v| v.session == session) {
-                    self.menu = Some((session, step, items));
+                if let Some(k) = self.sessions.get_mut(&session) {
+                    k.menu = Some((step, items));
                 }
             }
             DialogueMsg::Ask {
@@ -227,7 +327,7 @@ impl DialogueClient {
                 choice,
                 by,
             } => {
-                if self.view.is_some_and(|v| v.session == session) {
+                if shown == Some(session) {
                     self.asked = Some(Asked {
                         session,
                         step,
@@ -241,33 +341,34 @@ impl DialogueClient {
                 step,
                 choice,
             } => {
-                if let Some(v) = self
-                    .view
-                    .as_mut()
-                    .filter(|v| v.session == session && step > v.step)
+                if let Some(k) = self
+                    .sessions
+                    .get_mut(&session)
+                    .filter(|k| step > k.view.step)
                 {
-                    v.step = step;
-                    v.playing = Some(choice);
-                    v.reported = false;
-                    self.menu = None;
-                    self.asked = None;
+                    k.view.step = step;
+                    k.view.playing = Some(choice);
+                    k.view.reported = false;
+                    k.menu = None;
+                    k.last = Some(choice);
                 }
             }
             DialogueMsg::StepEnd { session, step } => {
-                if let Some(v) = self
-                    .view
-                    .as_mut()
-                    .filter(|v| v.session == session && v.step == step)
+                if let Some(k) = self
+                    .sessions
+                    .get_mut(&session)
+                    .filter(|k| k.view.step == step)
                 {
-                    v.playing = None;
+                    k.view.playing = None;
+                }
+            }
+            DialogueMsg::Joined { session, players } => {
+                if let Some(k) = self.sessions.get_mut(&session) {
+                    k.joined = players;
                 }
             }
             DialogueMsg::Closed { session, reason } => {
-                if self.view.map_or(false, |v| v.session == session) {
-                    self.view = None;
-                    self.menu = None;
-                    self.asked = None;
-                }
+                self.sessions.remove(&session);
                 self.last_closed = Some((session, reason));
             }
             _ => {}
@@ -397,6 +498,16 @@ mod tests {
     fn heartbeat_cadence_and_close() {
         let mut c = DialogueClient::new(PlayerId(1));
         start(&mut c, 1);
+        // Another player's conversation starting does not put this one's heartbeat off.
+        c.on_msg(
+            DialogueMsg::Started {
+                session: 2,
+                npc: FormId(9),
+                initiator: PlayerId(2),
+                req: 1,
+            },
+            HEARTBEAT_MS - 1,
+        );
         assert!(c.heartbeat(HEARTBEAT_MS - 1).is_none());
         assert!(c.heartbeat(HEARTBEAT_MS).is_some());
         assert!(c.heartbeat(HEARTBEAT_MS + 1).is_none());
@@ -407,8 +518,17 @@ mod tests {
             },
             5,
         );
-        assert!(c.view().is_none());
+        // The other conversation is shown now; once it ends too, none.
+        assert_eq!(c.view().map(|v| v.session), Some(2));
         assert_eq!(c.last_closed, Some((4, CloseReason::InitiatorLeft)));
+        c.on_msg(
+            DialogueMsg::Closed {
+                session: 2,
+                reason: CloseReason::Finished,
+            },
+            6,
+        );
+        assert!(c.view().is_none());
     }
 
     #[test]
@@ -556,5 +676,132 @@ mod tests {
             5,
         );
         assert!(c.menu().is_none());
+    }
+
+    fn started(c: &mut DialogueClient, session: u32, npc: u32, initiator: u8) {
+        c.on_msg(
+            DialogueMsg::Started {
+                session,
+                npc: FormId(npc),
+                initiator: PlayerId(initiator),
+                req: 1,
+            },
+            0,
+        );
+    }
+
+    #[test]
+    fn a_player_shows_its_own_conversation_else_the_newest_and_joins_by_the_npc() {
+        let mut c = DialogueClient::new(PlayerId(2));
+        assert!(c.join(NPC).is_none() && c.busy_npcs().is_empty());
+        // Player 1 talks to NPC 1: shown, not joined, busy to this player.
+        started(&mut c, 4, 1, 1);
+        assert_eq!(c.view().unwrap().session, 4);
+        assert!(!c.joined());
+        assert_eq!(c.players_in(), [PlayerId(1)]);
+        assert_eq!(c.busy_npcs(), [FormId(1)]);
+        assert!(c.close().is_none() && c.end().is_none() && c.heartbeat(99_999).is_none());
+        assert!(c.leave().is_none());
+        // Player 3 talks to NPC 5: the newest is shown.
+        started(&mut c, 6, 5, 3);
+        assert_eq!(c.view().unwrap().session, 6);
+        assert_eq!(c.busy_npcs(), [FormId(1), FormId(5)]);
+        // Talking to NPC 1 joins session 4 (not one of an NPC without a conversation).
+        assert!(c.join(FormId(9)).is_none());
+        assert_eq!(c.join(FormId(1)), Some(DialogueMsg::Join { session: 4 }));
+        c.on_msg(
+            DialogueMsg::Joined {
+                session: 4,
+                players: vec![PlayerId(1), PlayerId(2)],
+            },
+            1,
+        );
+        // In it: shown, in charge of its end and its heartbeat, and NPC 1 no longer busy.
+        assert!(c.joined());
+        assert_eq!(c.view().unwrap().session, 4);
+        assert_eq!(c.players_in(), [PlayerId(1), PlayerId(2)]);
+        assert_eq!(c.busy_npcs(), [FormId(5)]);
+        assert!(c.join(FormId(5)).is_none(), "one conversation at a time");
+        assert!(c.close().is_none(), "not its initiator");
+        assert_eq!(c.end(), Some(DialogueMsg::Close { session: 4 }));
+        assert_eq!(
+            c.heartbeat(HEARTBEAT_MS),
+            Some(DialogueMsg::Heartbeat { session: 4 })
+        );
+        // Its last line, for a player joining between steps.
+        assert_eq!(c.last_choice(), None);
+        c.on_msg(
+            DialogueMsg::Picked {
+                session: 4,
+                step: 1,
+                choice: 7,
+            },
+            2,
+        );
+        c.on_msg(
+            DialogueMsg::Picked {
+                session: 6,
+                step: 1,
+                choice: 8,
+            },
+            2,
+        );
+        assert_eq!(c.last_choice(), Some(7));
+        assert_eq!(c.view().unwrap().playing, Some(7));
+        // Leaving: out at once, the newest shown again, the table told.
+        assert_eq!(c.leave(), Some(DialogueMsg::Leave { session: 4 }));
+        assert!(!c.joined());
+        assert_eq!(c.view().unwrap().session, 6);
+        assert_eq!(c.last_choice(), Some(8));
+        assert!(c.leave().is_none());
+        // Its lines are reported for the shown one.
+        assert_eq!(
+            c.line_done(),
+            Some(DialogueMsg::LineDone {
+                session: 6,
+                step: 1
+            })
+        );
+        // Session 6 ends: session 4 is shown, as it stands.
+        c.on_msg(
+            DialogueMsg::Closed {
+                session: 6,
+                reason: CloseReason::Finished,
+            },
+            3,
+        );
+        let v = c.view().unwrap();
+        assert_eq!((v.session, v.step, v.playing), (4, 1, Some(7)));
+    }
+
+    #[test]
+    fn the_initiator_who_left_neither_closes_nor_beats_and_an_ask_is_for_the_shown_one() {
+        let mut c = DialogueClient::new(PlayerId(1));
+        started(&mut c, 4, 1, 1);
+        assert!(c.joined() && c.close().is_some());
+        c.leave();
+        assert!(c.is_initiator() && !c.joined());
+        assert!(c.close().is_none() && c.end().is_none() && c.heartbeat(99_999).is_none());
+        // Another session's ask and refusal are not this one's.
+        started(&mut c, 3, 2, 0);
+        c.on_msg(
+            DialogueMsg::Ask {
+                session: 3,
+                step: 1,
+                choice: 7,
+                by: PlayerId(0),
+            },
+            1,
+        );
+        c.on_msg(
+            DialogueMsg::Refused {
+                session: 3,
+                step: 1,
+                choice: 7,
+            },
+            1,
+        );
+        assert!(c.take_asked().is_none());
+        assert_eq!(c.refused, 0);
     }
 }

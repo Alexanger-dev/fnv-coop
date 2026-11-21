@@ -1496,6 +1496,8 @@ changes") and agreed with those changes:
 - Every player near the NPC is in the same conversation: one window, every line heard, so a
   player new to the game knows what it is about. A player far away, in combat, loading or fast
   travelling is not in it (may join by walking up); a player who leaves mid-conversation drops out.
+  Changed by D12 (2026-11-21): a player takes part only in a conversation it started or joined by
+  talking to the NPC; the others follow it as subtitles, and anyone in it may leave it.
 - The options are the union of each player's own: each game checks its own player's conditions
   (low Intelligence lines, skill and speech checks) and sends the infos its player may say. An
   option only one player has is labelled with that player's name, e.g. `ICE CREAM! (Alex)`, and
@@ -1661,6 +1663,46 @@ every other game shows it, holds, and lists its own options when the step is ove
   name (`NOT_VOTED`). The final verdict is `settle(with_follow_ups(classify(..)), quest, form id)`.
   175 lines changed from vote to no vote (165 by the free item rule): 5,682 voted on, 8,308 not.
   Asked of the owner: whether every line that only ends the conversation ("Goodbye.", 1,534 lines)
-  is voted on.
+  is voted on (less pressing with D12: it matters only when both players chose to be in it).
+- Joining and leaving (2026-11-21, D12, option C: council 3-0, agreed by the owner). The table
+  keeps who is in each conversation (`Session::joined`: the initiator, then whoever joined, in
+  that order; `DialogueMsg::Join`, `Leave`, and `Joined` telling everyone who is in). Only players
+  in it pick, offer options, ask for another's option and hold a step's end; the barrier waits for
+  them alone. Its lead is the initiator while in it, else the player in it longest: it picks with
+  no options offered first and may end it (and will decide a tie, step 3b). A player who leaves or
+  is gone takes its options, its ask and its part in the step with it; the conversation ends when
+  no one is left in it. Any player in it keeps it alive (`Heartbeat`). A player may be in one
+  conversation at a time; once out, it may start its own.
+  - Each game follows every open conversation (`DialogueClient`): the one shown is the one its
+    player is in, else the newest. The NPCs of the conversations it is not in are busy to the
+    game.
+  - Talking to one (the player's activation: co-op's handler at the activation's seam
+    `0057318e`, shared with the script extender's OnActivate, notes `Event::Asked`) joins its
+    conversation. An NPC's own greeting queues its menu without an activation and joins nothing
+    (two-game run: after the guest left, Sunny's greeting pulled it back in and its game, with no
+    window, ended the conversation). The window opens on the conversation's last line, then lists
+    the options (`join_windows`).
+  - A player not in it gets the lines as subtitles (held back while busy, as a far player's),
+    and near the NPC once "Player N is talking to NAME. Talk to them to join."
+  - A window of a conversation another player is in too ends its list with `[Leave conversation]`
+    (`choices::set_leave`, `take_leave`): the player's window closes (the starter's own with no
+    line's result run, `watch::leave_own_window`), the table is told, and the conversation goes on
+    for the others; closing the watching window does the same (`watch::take_left`). A player
+    alone in it has no such row (its goodbye ends it).
+  - Free items for a player who did not join (the owner, 2026-11-21): they go to every player
+    (step 4).
+  - Checked: unit tests and mutation checks (redundant checks removed, tests tightened; the
+    window-only paths, the player closing the window and the rejoin's forgetting, checked in two
+    games instead); session tests; two headless games: `/tmp/s_join.sh` (the guest talks to
+    Sunny; the host, near, got no window and the join word; the host activated Sunny and joined,
+    its window opened on her last line with the options and the leave row, the guest's window
+    got the row too; the host left, its window closed in three seconds, the guest's went on
+    without the row; the guest's goodbye ended it, Sunny free on the same package in both, the
+    quest the same) and `/tmp/s_join2.sh` (the guest, the starter, left; Sunny's greeting did not
+    pull it back; the host, alone in it with no leave row, asked a question, got Sunny's answer
+    and the next options while the guest followed as subtitles; the host's goodbye ended it,
+    Sunny free in both).
+  - Known limit (told to the owner): the subtitle of a chosen line names the conversation's
+    starter, not the player who chose it.
 - Not yet: votes (step 3b), rewards (step 4). Lines of no shared quest are not sent between
   players yet (S16), so they are not shown to a watcher.

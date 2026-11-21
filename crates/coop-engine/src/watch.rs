@@ -74,6 +74,9 @@ struct State {
     open: bool,
     /// The player closed the window on `npc`'s conversation.
     left: bool,
+    /// The player closed the window, not yet told to the session ([`take_left`]: it leaves the
+    /// conversation).
+    left_new: bool,
     /// Lines (info form ids) waiting, oldest first.
     queue: VecDeque<u32>,
     /// The line shown now and since when (the game's milliseconds).
@@ -492,6 +495,35 @@ pub fn close_own_window(e: &mut Engine) -> bool {
     true
 }
 
+/// Whether the player closed the watching window (not co-op, not the game's own line) since the
+/// last call: it leaves the conversation (S42, D12).
+pub fn take_left(e: &mut Engine) -> bool {
+    state(e, |s| std::mem::take(&mut s.left_new))
+}
+
+/// The player joined the conversation again (it talked to the NPC): a window it closed before
+/// is forgotten, so the conversation's lines are shown in one again.
+pub fn forget_left(e: &mut Engine) {
+    state(e, |s| {
+        if s.left && !s.open {
+            *s = State::default();
+        }
+    });
+}
+
+/// This player's own conversation window closed as co-op closes one (its goodbye state cleared,
+/// so no line's result runs): its player left the conversation, which goes on for the others
+/// (S42, D12). Whether one was open (not the watching window).
+pub fn leave_own_window(e: &mut Engine) -> bool {
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if menu == 0 || is_window(e, menu) || crate::talk::menu_npc(e).is_none() {
+        return false;
+    }
+    clear_injected(e);
+    close_menu(e, menu);
+    true
+}
+
 /// Whether the window this game drove was closed by the game (its player's line ended the
 /// conversation) since the last call.
 pub fn take_ended(e: &mut Engine) -> bool {
@@ -517,6 +549,7 @@ pub fn step(e: &mut Engine) {
             let driving = s.driving;
             s.open = false;
             s.left = !driving;
+            s.left_new = !driving;
             s.ended = driving;
             s.driving = false;
             s.queue.clear();
@@ -1247,6 +1280,33 @@ mod tests {
         assert!(!holds_injected(&mut e));
     }
 
+    /// The starter leaves its own conversation, which goes on for the others (S42, D12): its
+    /// window closes with no line's result run; the watching window is not its own.
+    #[test]
+    fn this_players_own_window_closes_when_it_leaves_and_runs_no_result() {
+        let mut e = world();
+        assert!(!leave_own_window(&mut e), "no window");
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, MENU);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_SPEAKER_OFFSET, ACTOR);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_TOPICS_OFFSET, TOPICS);
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 2);
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_GOODBYE_OFFSET, 2);
+        assert!(inject(&mut e, IDS[1]));
+        assert!(leave_own_window(&mut e));
+        assert_eq!(menu_state(&mut e), 4);
+        assert_eq!(e.mem.u32(MENU + addr::DIALOG_MENU_GOODBYE_OFFSET), 0);
+        assert_eq!(e.mem.u32(RESULTS), 0);
+        assert!(!holds_injected(&mut e));
+        // The watching window: not this player's own.
+        let mut e = world();
+        e.mem.set_u32(GREETING, INFOS[0]);
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        assert!(!leave_own_window(&mut e));
+        assert_eq!(watching(&mut e), Some(NPC));
+    }
+
     /// The window this game drove closed by the game (its player's line ended the conversation):
     /// told once, and not taken for the player leaving.
     #[test]
@@ -1440,12 +1500,28 @@ mod tests {
         e.call(addr::DIALOG_MENU_CLOSE, &[]);
         e.mem.set_f32(MENU + addr::DIALOG_MENU_ELAPSED_OFFSET, 0.0);
         e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 4);
+        assert!(!take_left(&mut e), "not yet seen closed");
         idle(&mut e, 2);
         assert_eq!(counts(&mut e).2, 1);
+        assert!(
+            take_left(&mut e),
+            "told once: the player leaves the conversation"
+        );
+        assert!(!take_left(&mut e));
         assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Left);
         assert_eq!(e.mem.u32(CREATES), 2);
-        // The conversation over, the next one is shown again.
+        // The player joined again: the next line is shown in a window.
+        forget_left(&mut e);
+        assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Window);
+        assert_eq!(e.mem.u32(CREATES), 3);
+        // Forgetting does nothing to an open window.
+        forget_left(&mut e);
+        assert_eq!(watching(&mut e), Some(NPC));
+        // A window closed by co-op is not the player's leaving.
         end_watch(&mut e);
+        idle(&mut e, 2);
+        assert!(!take_left(&mut e));
+        // The conversation over, the next one is shown again.
         assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Window);
     }
 

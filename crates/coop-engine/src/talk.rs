@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError, RwLock};
 
-use engine_core::extend::{Owner, WrapSlot};
+use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 
 use crate::{actors, addr, forms, gate};
@@ -37,6 +37,8 @@ use crate::{actors, addr, forms, gate};
 pub(crate) const RUN_RESULT: WrapSlot = WrapSlot::new(Owner::Coop, addr::INFO_RUN_RESULT);
 /// Co-op's place in front of `DialogMenu::Create`.
 pub(crate) const CREATE: WrapSlot = WrapSlot::new(Owner::Coop, addr::DIALOG_MENU_CREATE);
+/// Co-op's place at the start of `TESObjectREFR::Activate`.
+pub(crate) const ACTIVATE: SiteSlot = SiteSlot::new(Owner::Coop, addr::REFR_ACTIVATE_SITE);
 
 /// The most events kept between two takes (a conversation makes a few per line).
 const EVENTS_MAX: usize = 256;
@@ -68,6 +70,13 @@ pub enum Event {
     /// A conversation with this reference was refused: another player is talking to it.
     Blocked {
         /// The speaker's reference id.
+        npc: u32,
+    },
+    /// This game's player talked to (activated) an actor another player is talking to: it joins
+    /// that conversation (S42, D12). An actor's own greeting is not this: the game queues its
+    /// menu without an activation, and it is only [`Event::Blocked`].
+    Asked {
+        /// The actor's reference id.
         npc: u32,
     },
 }
@@ -525,6 +534,29 @@ fn greets(e: &mut Engine, speaker: u32) -> bool {
         && e.call(addr::PACKAGE_TYPE, &args![package]).u32() & 0xff == addr::PACKAGE_TYPE_DIALOGUE
 }
 
+/// The seam at `0057318e`, the start of every activation. Its words: the reference, the
+/// activator. This game's player activating an actor another player talks to is noted
+/// ([`Event::Asked`]); the activation goes on (the game then refuses its menu: busy).
+pub(crate) fn activate_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let &[reference, activator, ..] = a else {
+        return None;
+    };
+    let player = e.mem.u32(addr::PLAYER_SINGLETON);
+    if reference == 0 || player == 0 || activator != player {
+        return None;
+    }
+    let npc = e.mem.u32(reference.wrapping_add(addr::FORM_ID_OFFSET));
+    let t = e.ext_free::<Talk>();
+    if t.busy
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(&npc)
+    {
+        t.push(Event::Asked { npc });
+    }
+    None
+}
+
 /// The wrap at `00761a20`. Its words: the speaker, a word for the topic manager, a target.
 pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
     // The window watching another player's conversation (S42): the NPC is that player's, and
@@ -550,8 +582,9 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
                 .contains(&npc);
+            let queued = queued(e, speaker);
             eprintln!(
-                "co-op talk: conversation with {npc:08x} asked of the game: a copy {copy}, came to greet {greets}, busy {busy}"
+                "co-op talk: conversation with {npc:08x} asked of the game: a copy {copy}, came to greet {greets}, busy {busy}, queued {queued}"
             );
         }
         if crate::puppet::is_copy(e, npc) && greets(e, speaker) {
@@ -575,6 +608,14 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
     r
 }
 
+/// Whether the game's queue of menus to open holds a conversation with `speaker` (an NPC's
+/// greeting waits there until its menu is made).
+fn queued(e: &mut Engine, speaker: u32) -> bool {
+    e.mem.is_mapped(addr::QUEUED_MENU_FIRST + 3)
+        && e.mem.u32(addr::QUEUED_MENU_KIND) == addr::QUEUED_MENU_DIALOGUE
+        && e.mem.u32(addr::QUEUED_MENU_FIRST) == speaker
+}
+
 /// Takes a refused conversation with `speaker` out of the game's queue of menus to open. The
 /// game tries a queued menu again on every frame until it is made, so a refused one stayed
 /// queued and opened later, when what refused it had changed: Sunny, told to walk outside
@@ -582,10 +623,7 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
 /// queued, and stood there in both games until that player answered (the owner, 2026-11-16);
 /// Doc Mitchell turned to the second player the moment the first was done.
 fn unqueue(e: &mut Engine, speaker: u32) {
-    if e.mem.is_mapped(addr::QUEUED_MENU_FIRST + 3)
-        && e.mem.u32(addr::QUEUED_MENU_KIND) == addr::QUEUED_MENU_DIALOGUE
-        && e.mem.u32(addr::QUEUED_MENU_FIRST) == speaker
-    {
+    if queued(e, speaker) {
         e.mem.set_u32(addr::QUEUED_MENU_KIND, 0);
         e.mem.set_u32(addr::QUEUED_MENU_FIRST, 0);
     }

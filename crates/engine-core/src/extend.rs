@@ -436,10 +436,11 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
-    // TESObjectREFR::Activate 00573170: OnActivate (xNVSE's TESObjectREFR_ActivateHook).
+    // TESObjectREFR::Activate 00573170: OnActivate (xNVSE's TESObjectREFR_ActivateHook);
+    // co-op: a player who talks to the NPC of another player's conversation joins it (S42, D12).
     Entry {
         addr: 0x0057_318e,
-        owners: NVSE,
+        owners: NVSE_COOP,
         step: "I-9",
     },
     // The dropped reference made in 005750a0: OnDrop, OnDropItem (xNVSE's DroppedItemHook).

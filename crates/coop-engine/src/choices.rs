@@ -19,6 +19,10 @@
 //! game as any click, in the window showing another player's conversation too ([`crate::watch`]:
 //! its results are then this game's, and the line it said is the step's pick). [`say`] clicks a
 //! row of this game's own when the table asks this game to say it.
+//!
+//! A player in a conversation with another player gets a last row, `[Leave conversation]`
+//! ([`set_leave`], S42 D12): a click on it is noted ([`take_leave`]) and the game does nothing
+//! with it (the session closes this player's window and tells the table).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -38,6 +42,8 @@ pub(crate) const DO_CLICK: WrapSlot = WrapSlot::new(Owner::Coop, addr::DIALOG_ME
 pub const ROWS_MAX: usize = 64;
 /// Most characters of an added row's text (the game formats its own into 0x200 bytes).
 const ROW_TEXT_MAX: usize = 0x1f0;
+/// The row that takes the player out of a conversation others go on with.
+pub const LEAVE_TEXT: &str = "[Leave conversation]";
 
 #[derive(Debug, Default)]
 struct State {
@@ -51,6 +57,12 @@ struct State {
     rows: Vec<u32>,
     /// An added row clicked: its info.
     clicked: Option<u32>,
+    /// Whether the window gets the `[Leave conversation]` row.
+    leave: bool,
+    /// The `[Leave conversation]` row's index in the window's list, when added.
+    leave_row: Option<usize>,
+    /// The `[Leave conversation]` row clicked.
+    left: bool,
     /// The menu's `uiIgnoreInputStartTime` when its list was last taken.
     stamp: u32,
 }
@@ -122,6 +134,38 @@ pub fn set_foreign(e: &mut Engine, foreign: Vec<(u32, String)>) -> bool {
         e.call(addr::DIALOG_MENU_LOAD_TOPICS_LIST, &args![menu]);
     }
     changed
+}
+
+/// Whether the window gets the `[Leave conversation]` row (after the options). When that
+/// changed and the open window lists its options, the list is built again. Whether it changed.
+pub fn set_leave(e: &mut Engine, leave: bool) -> bool {
+    let changed = state(e, |s| std::mem::replace(&mut s.leave, leave) != leave);
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if changed
+        && menu != 0
+        && e.mem.u32(menu + addr::DIALOG_MENU_STATE_OFFSET) == 2
+        && state(e, |s| s.menu == menu)
+    {
+        e.call(addr::DIALOG_MENU_LOAD_TOPICS_LIST, &args![menu]);
+    }
+    changed
+}
+
+/// The player's click on the `[Leave conversation]` row, for the test games (which build no
+/// list of their own).
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn note_leave_click(e: &mut Engine) {
+    state(e, |s| s.left = true);
+}
+
+/// Whether windows get the `[Leave conversation]` row now.
+pub fn leave_offered(e: &mut Engine) -> bool {
+    state(e, |s| s.leave)
+}
+
+/// Whether the `[Leave conversation]` row was clicked since the last call.
+pub fn take_leave(e: &mut Engine) -> bool {
+    state(e, |s| std::mem::take(&mut s.left))
 }
 
 /// An added row (another player's option) clicked since the last call: its info.
@@ -297,15 +341,18 @@ pub(crate) fn after_game(e: &mut Engine) {
 fn take_list(e: &mut Engine, menu: u32) {
     crate::watch::clear_injected(e);
     let own = listed(e, menu);
-    let foreign: Vec<(u32, String)> = state(e, |s| {
+    let (foreign, leave): (Vec<(u32, String)>, bool) = state(e, |s| {
         s.menu = menu;
         s.own = own.clone();
         s.rows.clear();
-        s.foreign
+        s.leave_row = None;
+        let foreign = s
+            .foreign
             .iter()
             .filter(|(i, _)| !own.contains(i))
             .cloned()
-            .collect()
+            .collect();
+        (foreign, s.leave)
     });
     e.ext_free::<Choices>().lists.fetch_add(1, Ordering::SeqCst);
     let mut rows = Vec::new();
@@ -322,7 +369,12 @@ fn take_list(e: &mut Engine, menu: u32) {
         }
         rows.push(info);
     }
-    if !rows.is_empty() {
+    let leave_index = own.len() + rows.len();
+    let leave_row = (leave && all && leave_index < ROWS_MAX)
+        .then(|| add_row(e, menu, leave_index as u32, LEAVE_TEXT))
+        .filter(|added| *added)
+        .map(|_| leave_index);
+    if !rows.is_empty() || leave_row.is_some() {
         e.call(
             addr::LIST_BOX_SYNCHRONIZE,
             &args![menu + addr::DIALOG_MENU_LIST_OFFSET],
@@ -335,6 +387,7 @@ fn take_list(e: &mut Engine, menu: u32) {
     let stamp = e.mem.u32(menu + addr::DIALOG_MENU_IGNORE_INPUT_OFFSET);
     state(e, |s| {
         s.rows = rows;
+        s.leave_row = leave_row;
         s.stamp = stamp;
     });
 }
@@ -369,6 +422,18 @@ pub(crate) fn do_click(e: &mut Engine, a: &[u32]) -> Ret {
     } else {
         usize::MAX
     };
+    // The `[Leave conversation]` row: noted, nothing said.
+    if state(e, |s| {
+        let hit = s.menu == menu && s.leave_row == Some(index);
+        s.left |= hit;
+        hit
+    }) {
+        log(|| "[Leave conversation] clicked".to_string());
+        e.ext_free::<Choices>()
+            .clicks_held
+            .fetch_add(1, Ordering::SeqCst);
+        return Ret::default();
+    }
     let added = state(e, |s| {
         if s.menu != menu || index < s.own.len() {
             return None;
@@ -715,6 +780,44 @@ mod tests {
         e.mem.set_u32(SAID, 0);
         e.call(addr::DIALOG_MENU_DO_CLICK, &args![MENU, 0u32, ROOT]);
         assert_eq!(take_clicked(&mut e), None);
+    }
+
+    #[test]
+    fn the_leave_row_comes_last_and_a_click_on_it_is_noted_not_said() {
+        let mut e = world(&[0, 1]);
+        set_foreign(&mut e, vec![(IDS[3], "Player 2".into())]);
+        list(&mut e);
+        assert_eq!(rows(&e).len(), 3, "no leave row unless asked");
+        // Asked while the window lists its options: built again at once, the row last.
+        assert!(set_leave(&mut e, true));
+        assert_eq!(e.mem.u32(GAME_LISTS), 2);
+        assert!(!set_leave(&mut e, true), "unchanged");
+        assert_eq!(e.mem.u32(GAME_LISTS), 2);
+        assert_eq!(
+            rows(&e).last(),
+            Some(&(3, LEAVE_TEXT.to_string())),
+            "{:?}",
+            rows(&e)
+        );
+        assert_eq!(e.mem.f32(tile(3)), 3.0);
+        // Its click: noted, not said, not another player's option.
+        click(&mut e, 3);
+        assert_eq!(e.mem.u32(SAID), 0);
+        assert!(take_leave(&mut e));
+        assert!(!take_leave(&mut e), "taken once");
+        assert_eq!(take_clicked(&mut e), None);
+        // The other rows as before.
+        click(&mut e, 2);
+        assert!(!take_leave(&mut e));
+        assert_eq!(take_clicked(&mut e), Some(IDS[3]));
+        click(&mut e, 0);
+        assert!(!take_leave(&mut e));
+        assert_eq!(e.mem.u32(SAID), 1);
+        // Taken away: gone from the next list; a click on that row is the game's again.
+        assert!(set_leave(&mut e, false));
+        assert_eq!(rows(&e).len(), 3);
+        click(&mut e, 3);
+        assert!(!take_leave(&mut e));
     }
 
     #[test]
