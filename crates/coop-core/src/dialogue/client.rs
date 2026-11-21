@@ -167,6 +167,13 @@ impl DialogueClient {
         Some(DialogueMsg::Close { session: v.session })
     }
 
+    /// Ends the conversation: this player's line, the last step's, ended it in its game (S42 step
+    /// 2c; the table takes it from the initiator or the last step's picker).
+    pub fn end(&mut self) -> Option<DialogueMsg> {
+        let v = self.view.as_ref()?;
+        Some(DialogueMsg::Close { session: v.session })
+    }
+
     /// Keep-alive when due (initiator).
     pub fn heartbeat(&mut self, now_ms: u64) -> Option<DialogueMsg> {
         let v = self.view.as_ref().filter(|v| v.initiator == self.me)?;

@@ -1546,6 +1546,11 @@ pub const DIALOG_MENU_DO_CLICK: u32 = 0x0076_24f0;
 /// one row per topic of the topic manager (`FirstTopic(1)`, `NextTopic`), the row's index its
 /// place in that list.
 pub const DIALOG_MENU_LOAD_TOPICS_LIST: u32 = 0x0076_38b0;
+/// A topic info's flags byte (+0x25): bit 0 the goodbye mark (the line ends the conversation,
+/// `00619df0`, `DialogMenu::SetGoodbyeState`'s state 2).
+pub const INFO_FLAGS_OFFSET: u32 = 0x25;
+/// The goodbye mark in [`INFO_FLAGS_OFFSET`].
+pub const INFO_FLAG_GOODBYE: u8 = 1;
 /// `DialogMenu::uiIgnoreInputStartTime`: set to the time by every `LoadTopicsList` (clicks are
 /// ignored for 500 ms after), cleared by `DoClick` once that has passed.
 pub const DIALOG_MENU_IGNORE_INPUT_OFFSET: u32 = 0x10c;

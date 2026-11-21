@@ -1617,6 +1617,23 @@ every other game shows it, holds, and lists its own options when the step is ove
   both its results, the guest's window showed it without results, both windows listed the same
   next options within six seconds, the quest unchanged in both. Not yet checked in two games: a
   `Want`/`Ask` (needs a player with an option the other lacks).
+- PC run 37 (2026-11-21, the owner): when the player who had not started the conversation
+  picked a line that ended it ("Sure, I'll come with you."), the starter's window, holding on that
+  line, listed its options (the NPC's general topics) instead of closing, and held the NPC in the
+  conversation. Fixed (council 3-1 for option 3, agreed by the owner): (1) a line of another
+  player's bearing the goodbye mark (the info's flags +0x25 bit 0) closes the window showing or
+  holding it once said (`watch::close_on_goodbye`); (2) a window this game drove that the game
+  closed (its player's line ended the conversation) is told to the table (`watch::take_ended`,
+  `DialogueClient::end`), which takes a close from the last step's picker as from the initiator
+  and ends it for everyone; the starter's own window still holding a line of another's then
+  closes (`watch::close_own_window`); (3) after another player's line a window lists its options
+  only once the story is settled: on the host a step later (its game ran the line's result for a
+  guest), on a guest once a change of the host's story arrived after the step ended, or after 60
+  steps. Checked: unit tests and mutation checks (all killed after two tests were tightened); two
+  headless games (`/tmp/s_bye.sh`): the guest talked to Sunny, the host picked "Goodbye." in its
+  watching window: both windows closed within three seconds (the guest's on the goodbye mark),
+  Sunny out of the conversation on the same package in both, the quest the same; `/tmp/s_click.sh`
+  as before.
 - Known limit until step 3: two clicks at the same moment, one from each player, are both said
   in their games; the table takes the first, so the other player's game said a line the others did
   not see. Step 3's votes hold every click until the choice is made.

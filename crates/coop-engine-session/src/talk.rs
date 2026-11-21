@@ -114,6 +114,18 @@ pub struct Talker {
     pub asks_said: u32,
     /// Options of this player's another player picked that this game could not say.
     pub asks_failed: u32,
+    /// The story's revision in this game (a guest's: the host's changes it has), set by the
+    /// caller each step.
+    pub story_rev: u64,
+    /// The step after which this player's window waits to list its options (session, step, the
+    /// story's revision then, steps waited).
+    settle: Option<(u32, u32, u64, u32)>,
+    /// Windows closed because another player's line ended the conversation (its goodbye mark).
+    pub goodbye_closes: u32,
+    /// Conversations this player's line ended in its game, told to the table.
+    pub ends_told: u32,
+    /// This player's own windows closed when another player's line ended its conversation.
+    pub own_windows_closed: u32,
     /// A quest of this player's own and one of its stages: until that stage is done in this game
     /// the player is in its own opening, and its conversations are its own (each game has its own
     /// Doc Mitchell for it): none of its lines goes to the protocol, and no NPC is refused to it.
@@ -162,6 +174,11 @@ fn messages(initiator: PlayerId, npc: Option<&str>, text: &str, prompt: &str) ->
     }
     out
 }
+
+/// How many steps (frames) a guest's window waits, after another player's line, for that line's
+/// changes to the story (its quest's stage) before it lists its options anyway: the line may have
+/// changed nothing.
+pub const SETTLE_STEPS: u32 = 60;
 
 /// Subtitles waiting to be shown at most: more drops the oldest.
 pub const SUBTITLES_QUEUED_MAX: usize = 32;
@@ -251,6 +268,24 @@ impl Talker {
         out
     }
 
+    /// Whether the story is settled after step `v`'s line, for this player's window to list its
+    /// options: on the host, a step later (the host's game ran the line's result for a guest by
+    /// then); on a guest, once a change of the host's story came after the step ended, or after
+    /// [`SETTLE_STEPS`].
+    fn settled(&mut self, me: PlayerId, v: coop_core::dialogue::View) -> bool {
+        let key = (v.session, v.step);
+        let (rev, waited) = match self.settle {
+            Some((s, step, rev, n)) if (s, step) == key => (rev, n + 1),
+            _ => (self.story_rev, 0),
+        };
+        self.settle = Some((key.0, key.1, rev, waited));
+        if me.is_host() {
+            waited >= 1
+        } else {
+            self.story_rev > rev || waited >= SETTLE_STEPS
+        }
+    }
+
     /// S42 step 2: this player's own options to the table, when its window (its own
     /// conversation's, or the one showing another player's) lists them between two steps; the
     /// other players' options to the window, with their names; a watching window lists its
@@ -277,7 +312,23 @@ impl Talker {
                 self.asks_failed += 1;
             }
         }
+        // This player's line ended the conversation in its game (the window it drove closed): the
+        // table ends it for every player.
+        if coop_engine::watch::take_ended(e) {
+            if let Some(msg) = client.end() {
+                out.push(msg);
+                self.ends_told += 1;
+            }
+        }
         let view = client.view().copied();
+        // The conversation is over while this player's own window holds on another player's
+        // line: that line ended it in the other game.
+        if view.map_or(true, |v| v.initiator != me)
+            && coop_engine::watch::holds_injected(e)
+            && coop_engine::watch::close_own_window(e)
+        {
+            self.own_windows_closed += 1;
+        }
         // Another player's pick in this player's own conversation: its line, said in that
         // player's game, is put to this player's window, and done here.
         if let Some(v) = view.filter(|v| v.initiator == me && !v.reported) {
@@ -333,14 +384,22 @@ impl Talker {
             }
             return;
         }
+        // Another player's line that ends the conversation: the window closes, as that player's
+        // game closed its own (PC run 37).
+        if coop_engine::watch::close_on_goodbye(e) {
+            self.goodbye_closes += 1;
+            return;
+        }
         // The watching window, once the table has the step's list; this player's own window
-        // holding on another player's line, once that step is over (S42 step 2c).
+        // holding on another player's line, once that step is over (S42 step 2c). Either only
+        // once the line's changes to the story are in this game (PC run 37: a list built before
+        // offered the options of the story as it was).
         let list = if v.initiator == me {
             coop_engine::watch::holds_injected(e)
         } else {
             client.menu().is_some()
         };
-        if list && coop_engine::watch::show_topics(e) {
+        if list && self.settled(me, v) && coop_engine::watch::show_topics(e) {
             self.windows_listed += 1;
         }
         let lists = coop_engine::choices::counts(e).0;

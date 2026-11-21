@@ -159,6 +159,7 @@ pub(crate) fn guest_step(
     }
     let me = g.sync.player;
     let share = |_: &mut Engine, _info: u32, held: bool| held;
+    g.social.talker.story_rev = g.sync.store.rev().0;
     let msgs = g
         .social
         .talker

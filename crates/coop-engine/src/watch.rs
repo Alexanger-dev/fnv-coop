@@ -88,6 +88,9 @@ struct State {
     /// info's form id): its results are not run here, and the window holds on it (its end and a
     /// line chained to it are that game's) until it lists its options again.
     injected: Option<u32>,
+    /// The window this game drove closed by the game's own doing (its player's line ended the
+    /// conversation): the session tells the table, which ends it for every player.
+    ended: bool,
 }
 
 /// The game-wide state of the watching window.
@@ -427,11 +430,72 @@ pub fn end_watch(e: &mut Engine) -> bool {
     if actor.is_none() || open_speaker(e) != actor {
         return false;
     }
+    close_menu(e, menu);
+    true
+}
+
+/// Closes the open menu `menu` as the game closes one from `DoIdle` (`close_from_idle`): its
+/// goodbye state cleared first, so `Close` runs no line's end result here, then `Close`, the fade
+/// out begun (state 4).
+fn close_menu(e: &mut Engine, menu: u32) {
     e.mem.set_u32(menu + addr::DIALOG_MENU_GOODBYE_OFFSET, 0);
     e.call(addr::DIALOG_MENU_CLOSE, &[]);
     e.mem.set_f32(menu + addr::DIALOG_MENU_ELAPSED_OFFSET, 0.0);
     e.mem.set_u32(menu + addr::DIALOG_MENU_STATE_OFFSET, 4);
+}
+
+/// The line another player's game said, shown in the watching window or held in this player's
+/// own window, bears the goodbye mark (it ends the conversation) and is said to its end: the
+/// window is closed, as the other game's closed (PC run 37: it listed its options instead, the
+/// NPC's general topics, and held the NPC in the conversation). Whether it was closed.
+pub fn close_on_goodbye(e: &mut Engine) -> bool {
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if menu == 0 {
+        return false;
+    }
+    let (shown, injected, driving) = state(e, |s| (s.shown.map(|(i, _)| i), s.injected, s.driving));
+    let watching = is_window(e, menu);
+    let line = if watching {
+        shown.filter(|_| !driving)
+    } else {
+        injected
+    };
+    let Some(f) = line.and_then(|id| info_form(e, id)) else {
+        return false;
+    };
+    if e.mem.u8(f + addr::INFO_FLAGS_OFFSET) & addr::INFO_FLAG_GOODBYE == 0 {
+        return false;
+    }
+    let speaker = open_speaker(e).unwrap_or(0);
+    if more_to_say(e) || speaker == 0 || e.mem.u8(speaker + addr::REF_LINE_DONE_OFFSET) == 0 {
+        return false;
+    }
+    log(|| format!("window {menu:08x} closed: its line ends the conversation"));
+    if watching {
+        end_watch(e)
+    } else {
+        clear_injected(e);
+        close_menu(e, menu);
+        true
+    }
+}
+
+/// This player's own conversation window, holding on another player's line, closed: the
+/// conversation ended in the other game (S42 step 2c). Whether it was closed.
+pub fn close_own_window(e: &mut Engine) -> bool {
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if menu == 0 || is_window(e, menu) || !state(e, |s| s.injected.is_some()) {
+        return false;
+    }
+    clear_injected(e);
+    close_menu(e, menu);
     true
+}
+
+/// Whether the window this game drove was closed by the game (its player's line ended the
+/// conversation) since the last call.
+pub fn take_ended(e: &mut Engine) -> bool {
+    state(e, |s| std::mem::take(&mut s.ended))
 }
 
 /// Once a frame: a window the player closed is noted, and the conversation's later lines are
@@ -447,13 +511,21 @@ pub fn step(e: &mut Engine) {
         log(|| {
             format!("window on {npc:08x} closed by the game or the player (menu state {st:#x})")
         });
-        state(e, |s| {
+        // Closed while this game drove it: its player's line ended the conversation (the game's
+        // doing, not the player's leaving).
+        let driving = state(e, |s| {
+            let driving = s.driving;
             s.open = false;
-            s.left = true;
+            s.left = !driving;
+            s.ended = driving;
+            s.driving = false;
             s.queue.clear();
             s.shown = None;
+            driving
         });
-        e.ext_free::<Watch>().left.fetch_add(1, Ordering::SeqCst);
+        if !driving {
+            e.ext_free::<Watch>().left.fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -1098,6 +1170,128 @@ mod tests {
         assert_eq!(menu_state(&mut e), 2);
         assert!(!holds_injected(&mut e));
         assert!(!skips_result(&mut e, ACTOR));
+    }
+
+    /// PC run 37: another player's line with the goodbye mark closes the window once said, in the
+    /// watching window and in this player's own window holding on it; not before its end, and
+    /// not for a line without the mark.
+    #[test]
+    fn a_line_that_ends_the_conversation_closes_the_window_once_said() {
+        let mut e = world();
+        assert!(!close_on_goodbye(&mut e), "no window");
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        idle(&mut e, 1);
+        // No mark: stays.
+        while said(&e).len() < 2 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        line_done(&mut e);
+        assert!(!close_on_goodbye(&mut e));
+        // The next line has the mark: not while it is being said, closed once it is.
+        e.mem
+            .set_u8(INFOS[1] + addr::INFO_FLAGS_OFFSET, addr::INFO_FLAG_GOODBYE);
+        assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Window);
+        idle(&mut e, 1);
+        assert!(!close_on_goodbye(&mut e), "its first response being said");
+        while said(&e).len() < 4 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        assert!(!close_on_goodbye(&mut e), "its last response being said");
+        line_done(&mut e);
+        assert!(close_on_goodbye(&mut e));
+        assert_eq!(menu_state(&mut e), 4);
+        assert_eq!(watching(&mut e), None);
+        idle(&mut e, 4);
+        // This player's own window holding on such a line of another player's: closed too.
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, MENU);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_SPEAKER_OFFSET, ACTOR);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_TOPICS_OFFSET, TOPICS);
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 2);
+        let results = e.mem.u32(RESULTS);
+        assert!(inject(&mut e, IDS[1]));
+        for _ in 0..4 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        line_done(&mut e);
+        assert!(close_on_goodbye(&mut e));
+        assert_eq!(menu_state(&mut e), 4);
+        assert!(!holds_injected(&mut e));
+        assert_eq!(
+            e.mem.u32(RESULTS),
+            results,
+            "no result of the line run here"
+        );
+    }
+
+    /// The conversation ended in the other game: this player's own window holding on its line is
+    /// closed; one holding no line of another's is this player's.
+    #[test]
+    fn this_players_own_window_holding_on_another_players_line_can_be_closed() {
+        let mut e = world();
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, MENU);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_SPEAKER_OFFSET, ACTOR);
+        e.mem
+            .set_u32(MENU + addr::DIALOG_MENU_TOPICS_OFFSET, TOPICS);
+        e.mem.set_u32(MENU + addr::DIALOG_MENU_STATE_OFFSET, 2);
+        assert!(!close_own_window(&mut e));
+        assert_eq!(menu_state(&mut e), 2);
+        assert!(inject(&mut e, IDS[1]));
+        assert!(close_own_window(&mut e));
+        assert_eq!(menu_state(&mut e), 4);
+        assert!(!holds_injected(&mut e));
+    }
+
+    /// The window this game drove closed by the game (its player's line ended the conversation):
+    /// told once, and not taken for the player leaving.
+    #[test]
+    fn a_driven_window_the_game_closed_is_told_as_ended_not_left() {
+        let mut e = world();
+        e.register(addr::LIST_BOX_BELONGS_TO, |_, _| eax(1));
+        e.register(addr::TILE_GET_FLOAT, |_, _| Ret::default());
+        e.register(addr::DIALOG_MENU_DO_CLICK, |e, _| {
+            e.mem.set_u32(addr::DIALOG_LAST_INFO, INFOS[2]);
+            Ret::default()
+        });
+        crate::choices::install(&mut e);
+        // The watched line bears the goodbye mark; this player clicks before it is closed.
+        e.mem
+            .set_u8(INFOS[0] + addr::INFO_FLAGS_OFFSET, addr::INFO_FLAG_GOODBYE);
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        while said(&e).len() < 2 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        line_done(&mut e);
+        e.call(
+            addr::DIALOG_MENU_DO_CLICK,
+            &args![MENU, -1i32 as u32, BASE + 0x6040],
+        );
+        assert!(
+            !close_on_goodbye(&mut e),
+            "the window is this game's to drive: the game closes it"
+        );
+        // The game closed it.
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, 0);
+        step(&mut e);
+        assert!(take_ended(&mut e));
+        assert!(!take_ended(&mut e), "told once");
+        assert_eq!(counts(&mut e).2, 0, "not the player's leaving");
+        // A later line of the conversation still gets a window (the player did not leave it).
+        assert_eq!(watch_line(&mut e, NPC, IDS[1]), Outcome::Window);
+        // A window the player closed, not driven: left, not ended.
+        let mut e = world();
+        assert_eq!(watch_line(&mut e, NPC, IDS[0]), Outcome::Window);
+        idle(&mut e, 1);
+        e.mem.set_u32(addr::DIALOG_MENU_OPEN, 0);
+        step(&mut e);
+        assert!(!take_ended(&mut e));
+        assert_eq!(counts(&mut e).2, 1);
     }
 
     #[test]

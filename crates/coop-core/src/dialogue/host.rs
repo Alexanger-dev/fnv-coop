@@ -48,6 +48,9 @@ struct Session {
     playing: Option<Playing>,
     last_pick_ms: u64,
     last_beat_ms: u64,
+    /// Who picked the last step: its line may end the conversation in that player's game, which
+    /// then ends it for every player (S42 step 2c).
+    last_picker: Option<PlayerId>,
     /// Each player's options for the next step (S42 step 2).
     offers: BTreeMap<PlayerId, Vec<u32>>,
     /// The merged options last sent.
@@ -215,11 +218,11 @@ impl DialogueHost {
                 vec![]
             }
             DialogueMsg::Close { session } => {
-                if self
-                    .sessions
-                    .get(&session)
-                    .map_or(false, |s| s.initiator == from)
-                {
+                // The initiator, or the player whose line was the last step's (it ended the
+                // conversation in that player's game).
+                if self.sessions.get(&session).map_or(false, |s| {
+                    s.initiator == from || s.last_picker == Some(from)
+                }) {
                     self.close(session, CloseReason::Finished)
                 } else {
                     vec![]
@@ -255,6 +258,7 @@ impl DialogueHost {
                 playing: None,
                 last_pick_ms: now_ms,
                 last_beat_ms: now_ms,
+                last_picker: None,
                 offers: BTreeMap::new(),
                 menu: Vec::new(),
                 asking: None,
@@ -294,6 +298,7 @@ impl DialogueHost {
             return vec![];
         }
         s.step = step;
+        s.last_picker = Some(from);
         s.offers.clear();
         s.menu.clear();
         s.asking = None;
@@ -1292,5 +1297,37 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn the_player_whose_line_was_the_last_step_may_end_the_conversation() {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        let close =
+            |h: &mut DialogueHost, who| h.on_msg(who, DialogueMsg::Close { session: s }, 9, &ALL);
+        // B picked nothing: its close is not taken.
+        assert!(close(&mut h, B).is_empty());
+        offer(&mut h, B, s, 1, &[3]);
+        h.on_msg(
+            B,
+            DialogueMsg::Pick {
+                session: s,
+                step: 1,
+                choice: 3,
+            },
+            5,
+            &ALL,
+        );
+        // H did not pick the last step: not taken either.
+        assert!(close(&mut h, H).is_empty());
+        let o = close(&mut h, B);
+        assert!(matches!(
+            o[0].msg,
+            DialogueMsg::Closed {
+                reason: CloseReason::Finished,
+                ..
+            }
+        ));
+        assert!(!h.is_talking(NPC));
     }
 }
