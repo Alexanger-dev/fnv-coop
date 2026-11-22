@@ -1128,6 +1128,19 @@ included, but nothing read here shows how the game starts a jump or a fall on an
 turning on the spot (the heading is set, no turn animation is asked for). Both are in S39. A look changed after
 character creation (a barber, a surgeon) is read again within a second and gives a new base.
 
+**The body check (2026-11-22).** The owner saw the host's avatar in the guest's game with its
+head and no body after Doc Mitchell's tutorial (jumpsuit and boxing gloves on). Not reproduced:
+three headless runs of the whole tutorial in two games (`/tmp/s_new.sh`, the harness's
+`nodes HEX` dumping a reference's 3D) gave both avatars a complete 3D, the same as the player's:
+the jumpsuit's shapes there and not culled, every skinned shape on the avatar's own skeleton, the
+dismemberment partitions as the player's (only the meat caps hidden), the world bounds on the
+avatar, fade 1. No headless run draws, so what the renderer makes of it is not seen here. The
+council chose 3-0 to write each avatar's body to the log for the next time it happens (no fix
+guessed): every 5 s, and when it changes, `co-op avatar check: player P avatar ID base B, wears
+[...]: N shapes; root culled, fade; culled [...], not on its skeleton [...], all parts hidden
+[...], out of place [...]` (`coop_engine::look::body`, read only; pointers that lead nowhere and
+loops passed over; `Look::check_body`).
+
 ## S36: voice chat (implemented with unit tests; not run on a PC)
 
 `NV_COOP_VOICE=off|ptt|open` (default `ptt`). The design is the old viewer's (`main`'s

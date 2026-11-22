@@ -742,6 +742,158 @@ pub fn restore(e: &mut Engine, face: &Face) -> Option<Restored> {
     Some(out)
 }
 
+// The body check (the owner, 2026-11-22: an avatar seen with its head and no body, in play;
+// not seen in the headless games, so its 3D is written to the log for the next time).
+
+/// What an avatar's 3D holds, as far as it bears on its body being seen: read only.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Body {
+    /// Its root is culled (`NiAVObject::m_uFlags` +0x30 bit 0, app culled).
+    pub root_culled: bool,
+    /// Its root's fade (`BSFadeNode::fCurrentFade` +0xb8), when the root is a `BSFadeNode`.
+    pub fade: Option<f32>,
+    /// How many shapes (objects that are no node).
+    pub shapes: u32,
+    /// The shapes culled, themselves or through a node above them.
+    pub culled: Vec<String>,
+    /// The skinned shapes whose skin's root parent or first bone is not of this 3D.
+    pub unbound: Vec<String>,
+    /// The skinned shapes none of whose partitions is shown (`BSDismemberSkinInstance` +0x3c).
+    pub hidden: Vec<String>,
+    /// The shapes whose world bound's centre is more than [`BODY_FAR`] from the root.
+    pub far: Vec<String>,
+}
+
+/// A shape's bound centred farther than this from its 3D's root (game units) is out of place.
+pub const BODY_FAR: f32 = 300.0;
+/// The most objects one [`body_of_node`] reads.
+pub(crate) const BODY_OBJECTS_MAX: u32 = 512;
+
+impl std::fmt::Display for Body {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} shapes; root culled {}, fade {}; culled {:?}, not on its skeleton {:?}, all \
+             parts hidden {:?}, out of place {:?}",
+            self.shapes,
+            self.root_culled,
+            self.fade.map_or("-".into(), |v| format!("{v:.2}")),
+            self.culled,
+            self.unbound,
+            self.hidden,
+            self.far
+        )
+    }
+}
+
+/// An object's class name (`GetRTTI`, vtable +0x08, the record's name at +0).
+fn class_of(e: &mut Engine, object: u32) -> String {
+    let rtti = e.vcall(object, 0x8, &args![]).u32();
+    if rtti == 0 || !e.mem.is_mapped(rtti) {
+        return String::new();
+    }
+    let name = e.mem.u32(rtti);
+    if name == 0 || !e.mem.is_mapped(name) {
+        return String::new();
+    }
+    e.mem.cstr(name).into_iter().map(char::from).collect()
+}
+
+/// An object's name (`NiObjectNET::m_kName` +8).
+fn object_name(e: &mut Engine, object: u32) -> String {
+    let name = e.mem.u32(object + 8);
+    if name == 0 || !e.mem.is_mapped(name) {
+        return String::new();
+    }
+    e.mem
+        .cstr(name)
+        .into_iter()
+        .take(48)
+        .map(char::from)
+        .collect()
+}
+
+/// The [`Body`] of the 3D whose root is `root` (an `NiNode`): its objects walked through each
+/// node's children (`IsNode`, vtable +0x0c; children at +0xa0, how many at +0xa6).
+pub fn body_of_node(e: &mut Engine, root: u32) -> Body {
+    let mut b = Body {
+        root_culled: e.mem.u32(root + 0x30) & 1 != 0,
+        fade: (class_of(e, root) == "BSFadeNode").then(|| e.mem.f32(root + 0xb8)),
+        ..Body::default()
+    };
+    let origin = [0x8c, 0x90, 0x94].map(|o| e.mem.f32(root + o));
+    let mut stack = vec![(root, false)];
+    let mut seen = 0;
+    while let Some((node, above)) = stack.pop() {
+        seen += 1;
+        if seen > BODY_OBJECTS_MAX || node == 0 || !e.mem.is_mapped(node) {
+            continue;
+        }
+        let culled = above || e.mem.u32(node + 0x30) & 1 != 0;
+        if e.vcall(node, 0xc, &args![]).u32() != 0 {
+            let children = e.mem.u32(node + 0xa0);
+            for i in 0..u32::from(e.mem.u16(node + 0xa6)) {
+                stack.push((e.mem.u32(children + 4 * i), culled));
+            }
+            continue;
+        }
+        b.shapes += 1;
+        let name = object_name(e, node);
+        if culled {
+            b.culled.push(name.clone());
+        }
+        let bound = e.mem.u32(node + 0x20);
+        if bound != 0 && e.mem.is_mapped(bound) {
+            let d: f32 = (0..3)
+                .map(|i| (e.mem.f32(bound + 4 * i as u32) - origin[i]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            if d > BODY_FAR {
+                b.far.push(name.clone());
+            }
+        }
+        let skin = e.mem.u32(node + 0xbc);
+        if skin == 0 || !e.mem.is_mapped(skin) {
+            continue;
+        }
+        let parent = e.mem.u32(skin + 0x10);
+        let bones = e.mem.u32(skin + 0x14);
+        let bone = if bones != 0 && e.mem.is_mapped(bones) {
+            e.mem.u32(bones)
+        } else {
+            0
+        };
+        if !of_tree(e, root, parent) || !of_tree(e, root, bone) {
+            b.unbound.push(name.clone());
+        }
+        if class_of(e, skin) == "BSDismemberSkinInstance" && e.mem.u8(skin + 0x3c) == 0 {
+            b.hidden.push(name);
+        }
+    }
+    b
+}
+
+/// Whether `object` is `root` or under it (its parents, `m_pkParent` +0x18, lead to it).
+fn of_tree(e: &mut Engine, root: u32, mut object: u32) -> bool {
+    for _ in 0..64 {
+        if object == 0 || !e.mem.is_mapped(object) {
+            return false;
+        }
+        if object == root {
+            return true;
+        }
+        object = e.mem.u32(object + 0x18);
+    }
+    false
+}
+
+/// The [`Body`] of reference `id`; `None` when it is not here or has no 3D.
+pub fn body(e: &mut Engine, id: u32) -> Option<Body> {
+    let r = forms::form(e, id)?;
+    let root = e.vcall(r, addr::REF_GET_3D_SLOT, &args![]).u32();
+    (root != 0).then(|| body_of_node(e, root))
+}
+
 #[cfg(test)]
 #[path = "look_tests.rs"]
 mod tests;

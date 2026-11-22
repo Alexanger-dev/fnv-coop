@@ -289,6 +289,12 @@ fn the_avatar_wears_what_its_player_wears_and_changes_with_it() {
     assert_eq!(p.guest.look_wearing(on_guest), [SUIT, RIFLE]);
     // Its parts were sent only when they changed.
     assert_eq!(p.host_look().counts.parts_sent, 2);
+    // Its body read every 5 s and written to the log when it changed: first seen, then (once
+    // read again) without the hat; not again while nothing changes.
+    p.frames(100);
+    assert_eq!(p.guest_look().counts.bodies, 2);
+    p.frames(200);
+    assert_eq!(p.guest_look().counts.bodies, 2);
     // Something the avatar's own base puts on it is taken off too.
     p.guest.look_give(on_guest, PISTOL, 1, true);
     p.frames(40);

@@ -225,6 +225,10 @@ pub(super) fn register(e: &mut Engine) {
         (addr::ACTOR_COMBAT_CONTROLLER_SLOT, CONTROLLER_FN),
         (addr::ACTOR_STOP_COMBAT_SLOT, STOP_COMBAT_FN),
         (addr::REF_GET_3D_SLOT, NODE_FN),
+        // The actor standing in for its 3D answers as an object of no class that is no node
+        // (`GetRTTI`, `IsNode`: the avatar body check reads them).
+        (0x8, super::NOTHING_FN),
+        (0xc, super::NOTHING_FN),
         (addr::ACTOR_END_DIALOGUE_SLOT, END_DIALOGUE_FN),
         (addr::REF_IS_MOBILE_SLOT, super::IS_MOBILE_FN),
         (addr::ACTOR_SLOT_214, super::NOTHING_FN),

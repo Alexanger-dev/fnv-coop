@@ -250,3 +250,211 @@ fn a_face_with_forms_this_game_lacks_keeps_its_own_for_them() {
     assert_eq!(got.race, RACE);
     assert_eq!(got.head_parts, [NOSE]);
 }
+
+/// A 3D in plain memory: objects with a vtable whose `GetRTTI` and `IsNode` answer from the
+/// object's words (+0x40 its class record, +0x44 whether a node).
+mod body_check {
+    use super::super::*;
+    use engine_core::Engine;
+
+    const BASE: u32 = 0x3000_0000;
+    const VTABLE: u32 = BASE;
+    const GET_RTTI: u32 = 0x3100_0000;
+    const IS_NODE: u32 = 0x3100_0010;
+
+    fn eax(v: u32) -> Ret {
+        Ret {
+            eax: v,
+            ..Ret::default()
+        }
+    }
+
+    struct Tree {
+        e: Engine,
+        next: u32,
+    }
+
+    impl Tree {
+        fn new() -> Tree {
+            let mut e = Engine::new();
+            e.mem.map(BASE, 0x10_0000);
+            e.mem.set_u32(VTABLE + 8, GET_RTTI);
+            e.mem.set_u32(VTABLE + 0xc, IS_NODE);
+            e.register(GET_RTTI, |e, a| eax(e.mem.u32(a[0] + 0x40)));
+            e.register(IS_NODE, |e, a| {
+                eax(if e.mem.u32(a[0] + 0x44) != 0 { a[0] } else { 0 })
+            });
+            Tree {
+                e,
+                next: BASE + 0x1000,
+            }
+        }
+
+        fn alloc(&mut self, size: u32) -> u32 {
+            let at = self.next;
+            self.next += size;
+            at
+        }
+
+        fn text(&mut self, t: &str) -> u32 {
+            let at = self.alloc(0x40);
+            self.e.mem.set_cstr(at, t.as_bytes());
+            at
+        }
+
+        fn class(&mut self, t: &str) -> u32 {
+            let record = self.alloc(8);
+            let name = self.text(t);
+            self.e.mem.set_u32(record, name);
+            record
+        }
+
+        /// An object of class `class` named `name` under `parent`, its bound centred at `at`.
+        fn object(&mut self, class: &str, name: &str, parent: u32, at: [f32; 3]) -> u32 {
+            let o = self.alloc(0x100);
+            self.e.mem.set_u32(o, VTABLE);
+            let n = self.text(name);
+            self.e.mem.set_u32(o + 8, n);
+            self.e.mem.set_u32(o + 0x18, parent);
+            let c = self.class(class);
+            self.e.mem.set_u32(o + 0x40, c);
+            let node = class.contains("Node");
+            self.e.mem.set_u32(o + 0x44, u32::from(node));
+            let bound = self.alloc(0x10);
+            for (i, v) in at.iter().enumerate() {
+                self.e.mem.set_f32(bound + 4 * i as u32, *v);
+            }
+            self.e.mem.set_u32(o + 0x20, bound);
+            if node {
+                let children = self.alloc(0x40);
+                self.e.mem.set_u32(o + 0xa0, children);
+            }
+            if parent != 0 {
+                let children = self.e.mem.u32(parent + 0xa0);
+                let n = self.e.mem.u16(parent + 0xa6);
+                self.e.mem.set_u32(children + 4 * u32::from(n), o);
+                self.e.mem.set_u16(parent + 0xa6, n + 1);
+            }
+            o
+        }
+
+        /// A skin on `shape`: its root parent and first bone, a dismember skin with its
+        /// partitions shown or not.
+        fn skin(&mut self, shape: u32, root: u32, bone: u32, shown: Option<bool>) {
+            let skin = self.alloc(0x80);
+            self.e.mem.set_u32(skin, VTABLE);
+            let class = match shown {
+                Some(_) => "BSDismemberSkinInstance",
+                None => "NiSkinInstance",
+            };
+            let c = self.class(class);
+            self.e.mem.set_u32(skin + 0x40, c);
+            self.e.mem.set_u32(skin + 0x10, root);
+            let bones = self.alloc(4);
+            self.e.mem.set_u32(bones, bone);
+            self.e.mem.set_u32(skin + 0x14, bones);
+            if let Some(shown) = shown {
+                self.e.mem.set_u8(skin + 0x3c, u8::from(shown));
+            }
+            self.e.mem.set_u32(shape + 0xbc, skin);
+        }
+    }
+
+    #[test]
+    fn an_avatars_body_is_read_from_its_3d_and_what_hides_it_named() {
+        let mut t = Tree::new();
+        let at = [100.0, 200.0, 300.0];
+        let root = t.object("BSFadeNode", "Scene Root", 0, at);
+        for (i, v) in at.iter().enumerate() {
+            t.e.mem.set_f32(root + 0x8c + 4 * i as u32, *v);
+        }
+        t.e.mem.set_f32(root + 0xb8, 1.0);
+        let bone = t.object("NiNode", "Bip01", root, at);
+        let upper = t.object("NiNode", "UpperBody", root, at);
+        let body = t.object("NiTriShape", "UpperBody", upper, [100.0, 200.0, 360.0]);
+        t.skin(body, root, bone, Some(true));
+        let meat = t.object("NiTriShape", "bodymeat", upper, at);
+        t.skin(meat, root, bone, Some(false));
+        let head = t.object("NiTriShape", "FaceGenFace", root, at);
+        t.skin(head, root, bone, None);
+        let b = body_of_node(&mut t.e, root);
+        assert_eq!(
+            b,
+            Body {
+                root_culled: false,
+                fade: Some(1.0),
+                shapes: 3,
+                culled: vec![],
+                unbound: vec![],
+                hidden: vec!["bodymeat".into()],
+                far: vec![],
+            }
+        );
+        // Out of place, bound to another 3D's skeleton, culled through its node.
+        let elsewhere = t.object("NiNode", "Bip01", 0, at);
+        let arms = t.object("NiTriShape", "Arms", upper, [100.0, 600.0, 300.0]);
+        t.skin(arms, root, elsewhere, Some(true));
+        let hand = t.object("NiTriShape", "Hand", upper, at);
+        t.skin(hand, elsewhere, bone, None);
+        t.e.mem.set_u32(upper + 0x30, 1);
+        let b = body_of_node(&mut t.e, root);
+        assert!(!b.root_culled);
+        assert_eq!(b.shapes, 5);
+        assert_eq!(b.culled.len(), 4, "{b:?}");
+        assert!(!b.culled.contains(&"FaceGenFace".to_string()), "{b:?}");
+        assert_eq!(b.unbound, ["Hand", "Arms"]);
+        assert_eq!(b.far, ["Arms"]);
+        assert_eq!(
+            b.to_string(),
+            "5 shapes; root culled false, fade 1.00; culled [\"Hand\", \"Arms\", \"bodymeat\", \
+             \"UpperBody\"], not on its skeleton [\"Hand\", \"Arms\"], all parts hidden \
+             [\"bodymeat\"], out of place [\"Arms\"]"
+        );
+        // The root culled: everything under it.
+        t.e.mem.set_u32(root + 0x30, 1);
+        let b = body_of_node(&mut t.e, root);
+        assert!(b.root_culled);
+        assert_eq!(b.culled.len(), 5);
+        // A root that is no fade node has no fade.
+        let plain = t.object("NiNode", "Root", 0, at);
+        assert_eq!(body_of_node(&mut t.e, plain).fade, None);
+    }
+
+    /// The check reads a 3D that may be broken: pointers nowhere and loops are passed over,
+    /// never followed.
+    #[test]
+    fn a_broken_3d_is_read_without_following_its_bad_pointers() {
+        let mut t = Tree::new();
+        let at = [0.0; 3];
+        let root = t.object("NiNode", "Scene Root", 0, at);
+        let bone = t.object("NiNode", "Bip01", root, at);
+        // A child pointer to nowhere.
+        let children = t.e.mem.u32(root + 0xa0);
+        t.e.mem.set_u32(children + 4, 0x7000_0000);
+        t.e.mem.set_u16(root + 0xa6, 2);
+        // A shape whose skin is nowhere; one whose skin's bones are nowhere.
+        let a = t.object("NiTriShape", "A", root, at);
+        t.e.mem.set_u32(a + 0xbc, 0x7000_0000);
+        let b = t.object("NiTriShape", "B", root, at);
+        t.skin(b, root, bone, None);
+        let skin = t.e.mem.u32(b + 0xbc);
+        t.e.mem.set_u32(skin + 0x14, 0x7000_0000);
+        // A root with no class record.
+        t.e.mem.set_u32(root + 0x40, 0);
+        let body = body_of_node(&mut t.e, root);
+        assert_eq!(body.fade, None);
+        assert!(body.shapes >= 2, "{body:?}");
+        assert!(body.unbound.iter().all(|n| n == "B"), "{body:?}");
+        assert!(!body.unbound.is_empty());
+        assert_eq!(body.shapes, 2, "{body:?}");
+        // A node its own child (a loop): cut short.
+        let mut t = Tree::new();
+        let root = t.object("NiNode", "Scene Root", 0, at);
+        t.object("NiTriShape", "A", root, at);
+        let children = t.e.mem.u32(root + 0xa0);
+        t.e.mem.set_u32(children + 4, root);
+        t.e.mem.set_u16(root + 0xa6, 2);
+        let body = body_of_node(&mut t.e, root);
+        assert!(body.shapes <= BODY_OBJECTS_MAX, "the loop is cut short");
+    }
+}

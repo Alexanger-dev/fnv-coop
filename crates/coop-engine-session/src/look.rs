@@ -71,6 +71,9 @@ pub const PARTS_EVERY_MS: u64 = 1000;
 pub const WEAR_EVERY_MS: u64 = 1000;
 /// An avatar whose weapon is not drawn or put away as asked is asked again this often (ms).
 pub const DRAW_EVERY_MS: u64 = 1000;
+/// An avatar's body ([`look::body`]) is read this often (ms), and written to the log when it
+/// changed (the owner, 2026-11-22: an avatar seen with its head and no body).
+pub const BODY_EVERY_MS: u64 = 5000;
 /// The appearance's first byte and its version.
 pub const APPEARANCE_MAGIC: u8 = b'L';
 /// See [`APPEARANCE_MAGIC`].
@@ -214,6 +217,8 @@ struct Shown {
     worn: Option<(Vec<u32>, u64)>,
     // anim: its head built from its base form's face.
     head: bool,
+    /// Its body as last written to the log, and when it was read.
+    body: Option<(String, u64)>,
 }
 
 /// Counters, for the status line and the tests.
@@ -244,6 +249,8 @@ pub struct Counts {
     // anim
     /// Avatars' heads built from their base form's face.
     pub heads: u64,
+    /// Avatars' bodies written to the log (each change).
+    pub bodies: u64,
 }
 
 /// The look of this player for the others, and of the others' avatars here.
@@ -488,6 +495,7 @@ impl Look {
             shown.head = true;
             self.counts.heads += 1;
         }
+        self.check_body(e, p, avatar, now_ms);
         if self.cap < Cap::Pose {
             return;
         }
@@ -563,10 +571,42 @@ impl Look {
     }
 
     /// One status phrase for the log.
+    /// Avatar `avatar`'s body, read every [`BODY_EVERY_MS`] once it has its 3D, written to the
+    /// log when it changed (and the first time): what it wears and what of its 3D could keep it
+    /// from being seen.
+    fn check_body(&mut self, e: &mut Engine, p: PlayerId, avatar: u32, now_ms: u64) {
+        let shown = self.shown.entry(avatar).or_default();
+        if shown
+            .body
+            .as_ref()
+            .is_some_and(|(_, at)| now_ms.saturating_sub(*at) < BODY_EVERY_MS)
+        {
+            return;
+        }
+        let Some(body) = look::body(e, avatar) else {
+            return;
+        };
+        let text = format!(
+            "base {:08x}, wears {:08x?}: {body}",
+            look::base_of(e, avatar).unwrap_or(0),
+            look::worn(e, avatar)
+        );
+        let shown = self.shown.entry(avatar).or_default();
+        let changed = shown.body.as_ref().map_or(true, |(last, _)| *last != text);
+        shown.body = Some((text.clone(), now_ms));
+        if changed {
+            self.counts.bodies += 1;
+            self.notes.push(format!(
+                "co-op avatar check: player {} avatar {avatar:08x} {text}",
+                p.0
+            ));
+        }
+    }
+
     pub fn status(&self) -> String {
         let c = &self.counts;
         format!(
-            "look {:?}: gaits {}, calmed {}, draws {}, attacks {} (refused {}), reloads {}, put on {}, taken off {}, bases {}, heads {}, parts sent {}, actions sent {}; {}",
+            "look {:?}: gaits {}, calmed {}, draws {}, attacks {} (refused {}), reloads {}, put on {}, taken off {}, bases {}, heads {}, bodies {}, parts sent {}, actions sent {}; {}",
             self.cap,
             c.gaits,
             c.calmed,
@@ -578,6 +618,7 @@ impl Look {
             c.taken_off,
             c.bases,
             c.heads,
+            c.bodies,
             c.parts_sent,
             c.actions_sent,
             self.anim.status()

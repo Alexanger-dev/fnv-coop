@@ -270,6 +270,27 @@ impl Harness {
                     },
                 }
             }
+            // `nodes HEX [DEPTH]`: what reference HEX wears (its base form, the items it wears)
+            // and its 3D as a tree: each object's class, name, whether it is culled, and how many
+            // children (a diagnostic for an avatar drawn with no body).
+            "nodes" => {
+                let mut p = rest.split_whitespace();
+                let id = p.next().and_then(hex);
+                let depth: u32 = p.next().and_then(|d| d.parse().ok()).unwrap_or(6);
+                match id.and_then(|id| coop_engine::forms::form(e, id).map(|r| (id, r))) {
+                    Some((id, r)) => {
+                        let base = coop_engine::look::base_of(e, id).unwrap_or(0);
+                        let worn = coop_engine::look::worn(e, id);
+                        let mut out = vec![format!(
+                            "nodes {id:08x}: base {base:08x}, wears {worn:08x?}"
+                        )];
+                        let node = e.vcall(r, 0x1d0, &args![]).u32();
+                        tree(e, node, node, 0, depth, &mut out);
+                        out
+                    }
+                    None => vec!["nodes HEX [DEPTH]".into()],
+                }
+            }
             "ref" => {
                 match hex(rest).and_then(|id| coop_engine::forms::form(e, id).map(|r| (id, r))) {
                     Some((id, r)) => {
@@ -1012,6 +1033,95 @@ fn on_main(e: &mut Engine) {
 }
 
 /// An actor's (or the player's) place, space, life and package, in one line.
+/// The 3D object at `node` and its children down to `depth`, one line each (at most 400): its
+/// class (`GetRTTI`, vtable +0x08), name (`m_kName` +8), whether culled (`m_uFlags` +0x30 bit 0),
+/// and, for a node (`IsNode`, vtable +0x0c), how many children (`m_children` +0x9c: base +4, size
+/// +0xa). Reads only (`GetRTTI` and `IsNode` answer without changing anything).
+fn tree(e: &mut Engine, root: u32, node: u32, level: u32, depth: u32, out: &mut Vec<String>) {
+    if node == 0 || out.len() > 400 || !e.mem.is_mapped(node) {
+        return;
+    }
+    let rtti = e.vcall(node, 0x8, &args![]).u32();
+    let class: String = if rtti != 0 && e.mem.is_mapped(rtti) && e.mem.u32(rtti) != 0 {
+        e.mem.cstr(e.mem.u32(rtti)).into_iter().map(char::from).collect()
+    } else {
+        "?".into()
+    };
+    let name_at = e.mem.u32(node + 8);
+    let name: String = if name_at != 0 && e.mem.is_mapped(name_at) {
+        e.mem.cstr(name_at).into_iter().take(60).map(char::from).collect()
+    } else {
+        String::new()
+    };
+    let culled = e.mem.u32(node + 0x30) & 1 != 0;
+    let is_node = e.vcall(node, 0xc, &args![]).u32() != 0;
+    let (base, n) = if is_node {
+        (e.mem.u32(node + 0x9c + 4), u32::from(e.mem.u16(node + 0x9c + 0xa)))
+    } else {
+        (0, 0)
+    };
+    // A skinned shape (`m_spSkinInstance` +0xbc): whether its root parent (+0x10) and its first
+    // bone (`m_ppkBones` +0x14) are of this 3D (their parents lead to `root`), and its
+    // partitions' first bytes (`BSDismemberSkinInstance`, +0x34 count, +0x38 items of 4 bytes,
+    // +0x3c whether any is shown).
+    let skin = if is_node { 0 } else { e.mem.u32(node + 0xbc) };
+    let skin_text = if skin != 0 && e.mem.is_mapped(skin) {
+        let of_root = |e: &mut Engine, mut n: u32| {
+            for _ in 0..64 {
+                if n == 0 || !e.mem.is_mapped(n) {
+                    return false;
+                }
+                if n == root {
+                    return true;
+                }
+                n = e.mem.u32(n + 0x18);
+            }
+            false
+        };
+        let parent = e.mem.u32(skin + 0x10);
+        let bones = e.mem.u32(skin + 0x14);
+        let bone = if bones != 0 && e.mem.is_mapped(bones) {
+            e.mem.u32(bones)
+        } else {
+            0
+        };
+        let parts = e.mem.u32(skin + 0x34).min(16);
+        let items = e.mem.u32(skin + 0x38);
+        let flags: Vec<String> = (0..parts)
+            .map(|i| {
+                let at = items + 4 * i;
+                format!(
+                    "{}/{}/{}",
+                    e.mem.u8(at),
+                    e.mem.u8(at + 1),
+                    e.mem.u16(at + 2)
+                )
+            })
+            .collect();
+        format!(
+            " skin {skin:08x}: root ours {}, bone ours {}, parts {} shown {}",
+            of_root(e, parent),
+            of_root(e, bone),
+            flags.join(" "),
+            e.mem.u8(skin + 0x3c)
+        )
+    } else {
+        String::new()
+    };
+    out.push(format!(
+        "{}{class} '{name}'{}{}{skin_text}",
+        "  ".repeat(level as usize),
+        if culled { " CULLED" } else { "" },
+        if is_node { format!(" [{n}]") } else { String::new() }
+    ));
+    if level < depth && base != 0 {
+        for i in 0..n.min(64) {
+            let child = e.mem.u32(base + 4 * i);
+            tree(e, root, child, level + 1, depth, out);
+        }
+    }
+}
+
 fn place(e: &mut Engine, id: u32) -> String {
     let Some(a) = coop_engine::actors::actor(e, id) else {
         return format!("{id:08x}: not in this game");
