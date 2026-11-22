@@ -1032,6 +1032,9 @@ pub const HUD_SINGLETON: u32 = 0x011d_96c0;
 pub const HUD_SHOW_SUBTITLE: u32 = 0x0077_4fd0;
 /// The HUD's queued subtitles (`BSSimpleArray`; its count at +8).
 pub const HUD_SUBTITLES_OFFSET: u32 = 0x198;
+/// A queued subtitle's time (seconds, `f32`), from its start (`+0x104`, the HUD's clock); its text
+/// is at `+0` (`HUDMainMenu::ShowSubtitle`, `hudmainmenu.rs`).
+pub const SUBTITLE_TIME_OFFSET: u32 = 0x108;
 /// What `HUDMainMenu::ShowSubtitle` keeps of a subtitle's text: 0x104 bytes with the end.
 pub const SUBTITLE_MAX: usize = 0x103;
 /// `HUDMainMenu::iCompassDisplayWidth` (+0x214) and `iCompassHalfAngle` (+0x218).

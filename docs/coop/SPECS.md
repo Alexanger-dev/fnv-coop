@@ -1777,6 +1777,21 @@ every other game shows it, holds, and lists its own options when the step is ove
   talking to Sunny was held (no window); the guest closed it and within three seconds the host's
   conversation started and the guest was pulled in, both windows with the leave row; the quest the
   same, no stop.
+- Subtitles keep pace; no directions (2026-11-22, the owner; council 3-0, A and A). A player
+  following a conversation as text fell two lines behind the voice in the talker's game: each
+  subtitle had its full reading time, one after the other, a long line in several. Now a new line
+  takes the place of what is left of the one before (`Talker::queue_subtitles`): its parts not yet
+  shown are dropped, and this game's subtitles of it still up are ended at once
+  (`talk::end_subtitles`: their time set to nothing, `+0x108`, dropped at the HUD's next update;
+  another's, an NPC's nearby, left as it is and waited for as before). With the game's subtitles
+  off, a line as a HUD message is shown only once the last has had its four seconds, so they do not
+  pile up either. And the directions to the voice actor in braces ("{not in charge of
+  Goodsprings}What do you want now?") are left out of a line's text and its prompt
+  (`talk::without_directions`, in `talk::line`), as the game's own subtitles leave them out.
+  Checked: unit tests, session tests (a new line ends the last's subtitle and not an NPC's; HUD
+  messages paced; braces in a line and its prompt), mutation checks (all killed; two needless
+  checks removed); two headless games (`/tmp/s_pace.sh`: the host left the conversation and
+  followed two lines as subtitles, one ended for the newer line; no stop).
 - Step 3b, votes (2026-11-22, the owner's terms with D13). A click on the row of a line voted on
   (step 3a's list, `coop_votelist::vote_lines`, computed by the viewer at start and given to
   `choices::set_vote_lines`), the player's own option or another's, is not said: it is this

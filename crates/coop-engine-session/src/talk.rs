@@ -130,6 +130,14 @@ pub struct Talker {
     subtitles: VecDeque<String>,
     /// Steps the first waiting subtitle has waited for the HUD's own to end.
     subtitle_waited: u32,
+    /// A new line came: what is still on screen of the lines before it is ended first.
+    subtitle_new_line: bool,
+    /// The subtitles of this game's on the HUD that may still be showing (their texts).
+    subtitles_up: Vec<String>,
+    /// When the last line shown as a HUD message has had its time (ms).
+    message_until_ms: u64,
+    /// Subtitles ended early, a new line come (keeping pace with the player talking).
+    pub subtitles_cut: u32,
     /// Lines shown as the game's subtitles.
     pub subtitles_shown: u32,
     /// Lines shown as HUD messages instead (the game's subtitles are off).
@@ -235,6 +243,8 @@ fn messages(picker: PlayerId, npc: Option<&str>, text: &str, prompt: &str) -> Ve
 /// changed nothing.
 pub const SETTLE_STEPS: u32 = 60;
 
+/// How long a line shown as a HUD message is up (`talk::show`'s four seconds).
+pub const MESSAGE_MS: u64 = 4000;
 /// Subtitles waiting to be shown at most: more drops the oldest.
 pub const SUBTITLES_QUEUED_MAX: usize = 32;
 /// How many steps (frames) a waiting subtitle waits for the HUD's own (an NPC's nearby) to end
@@ -242,22 +252,39 @@ pub const SUBTITLES_QUEUED_MAX: usize = 32;
 pub const SUBTITLE_WAIT_STEPS: u32 = 600;
 
 impl Talker {
+    /// A line said in the conversation, as subtitles: it takes the place of what is left of the
+    /// lines before it (the owner, 2026-11-22: each subtitle shown its full reading time, one after
+    /// the other, fell two lines behind the voice in the talker's game). Kept pace with the player
+    /// talking: at most one line behind it.
     fn queue_subtitles(&mut self, lines: Vec<String>) {
+        self.subtitles.clear();
         self.subtitles.extend(lines);
         while self.subtitles.len() > SUBTITLES_QUEUED_MAX {
             self.subtitles.pop_front();
         }
+        self.subtitle_new_line = true;
     }
 
-    /// Shows the next waiting subtitle once the HUD's last has ended (each its full time: the
-    /// game counts a subtitle's time from when it is queued), not while the player is busy. Where
-    /// the game shows no subtitles, as a HUD message.
+    /// Shows the next waiting subtitle once the HUD's last has ended (the parts of one line each
+    /// their full time: the game counts a subtitle's time from when it is queued), not while the
+    /// player is busy. A new line first ends this game's subtitles of the lines before it. Where
+    /// the game shows no subtitles, as a HUD message, each once the last has had its time.
     fn show_subtitles(&mut self, e: &mut Engine) {
         if self.subtitles.is_empty() || talk::busy(e) {
             return;
         }
+        if self.subtitle_new_line {
+            self.subtitle_new_line = false;
+            let up = std::mem::take(&mut self.subtitles_up);
+            self.subtitles_cut += talk::end_subtitles(e, &up);
+            self.subtitle_waited = 0;
+            self.message_until_ms = 0;
+        }
         if talk::subtitle_showing(e) && self.subtitle_waited < SUBTITLE_WAIT_STEPS {
             self.subtitle_waited += 1;
+            return;
+        }
+        if self.now_ms < self.message_until_ms {
             return;
         }
         self.subtitle_waited = 0;
@@ -266,9 +293,11 @@ impl Talker {
         };
         if talk::subtitle(e, &line) {
             self.subtitles_shown += 1;
+            self.subtitles_up.push(line);
         } else {
             talk::show(e, &line);
             self.subtitles_as_messages += 1;
+            self.message_until_ms = self.now_ms + MESSAGE_MS;
         }
     }
 

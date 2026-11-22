@@ -270,7 +270,8 @@ pub fn said(e: &mut Engine, id: u32) -> bool {
 }
 
 /// The text of info `id`'s responses as the game builds it (`" | "` between two responses), and
-/// its prompt (what the player chose) when the info has one. `None`: not an info.
+/// its prompt (what the player chose) when the info has one, both without the directions to the
+/// voice actor ([`without_directions`]). `None`: not an info.
 pub fn line(e: &mut Engine, id: u32) -> Option<(String, String)> {
     let f = info(e, id)?;
     let string = e.call(addr::OPERATOR_NEW, &args![addr::STRING_SIZE]).u32();
@@ -283,7 +284,28 @@ pub fn line(e: &mut Engine, id: u32) -> Option<(String, String)> {
     e.call(addr::STRING_DESTROY, &args![string]);
     e.call(addr::OPERATOR_DELETE, &args![string]);
     let prompt = text_at(e, e.mem.u32(f + addr::INFO_PROMPT_OFFSET));
-    Some((text, prompt))
+    Some((without_directions(&text), without_directions(&prompt)))
+}
+
+/// `text` without its directions to the voice actor, the parts in braces ("{not in charge of
+/// Goodsprings}What do you want now?"), which the game leaves out of its own subtitles (the
+/// owner, 2026-11-22: shown in co-op's, they clutter the screen); the spaces they leave, one.
+/// An unclosed brace leaves the rest as it is.
+pub fn without_directions(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let Some(close) = rest[open..].find('}') else {
+            break;
+        };
+        out.push_str(&rest[..open]);
+        rest = &rest[open + close + 1..];
+    }
+    out.push_str(rest);
+    out.split(' ')
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn text_at(e: &Engine, chars: u32) -> String {
@@ -332,12 +354,7 @@ pub fn subtitle(e: &mut Engine, text: &str) -> bool {
     if hud == 0 || !e.is_registered(addr::HUD_SHOW_SUBTITLE) {
         return false;
     }
-    let mut bytes: Vec<u8> = text
-        .chars()
-        .map(|c| if (c as u32) < 0x100 { c as u8 } else { b'?' })
-        .filter(|b| *b != 0)
-        .collect();
-    bytes.truncate(addr::SUBTITLE_MAX);
+    let bytes = subtitle_bytes(text);
     let at = [0, 4, 8].map(|o| e.mem.u32(player.wrapping_add(addr::REF_POS_OFFSET + o)));
     let len = (bytes.len() as u32 + 4) & !3;
     e.with_stack(len, |e, buffer| {
@@ -389,6 +406,41 @@ pub fn subtitle_parts(text: &str) -> Vec<String> {
         out.push(rest.into_iter().collect());
     }
     out
+}
+
+/// Ends at once the HUD's subtitles whose text is one of `texts` (co-op's, still showing or
+/// waiting their time): their time set to nothing (`+0x108`, seconds; the HUD drops a subtitle
+/// whose time has run out at its next update, `+0x104` its start). How many.
+pub fn end_subtitles(e: &mut Engine, texts: &[String]) -> u32 {
+    let hud = e.mem.u32(addr::HUD_SINGLETON);
+    if hud == 0 {
+        return 0;
+    }
+    let list = hud + addr::HUD_SUBTITLES_OFFSET;
+    let (data, count) = (e.mem.u32(list + 4), e.mem.u32(list + 8));
+    let wanted: Vec<Vec<u8>> = texts.iter().map(|t| subtitle_bytes(t)).collect();
+    let mut ended = 0;
+    for i in 0..count.min(64) {
+        let record = e.mem.u32(data + 4 * i);
+        let text = e.mem.cstr(record);
+        if wanted.contains(&text) {
+            e.mem.set_f32(record + addr::SUBTITLE_TIME_OFFSET, 0.0);
+            ended += 1;
+        }
+    }
+    ended
+}
+
+/// `text` as a subtitle's bytes: one a character (others `?`), no NUL, at most
+/// [`addr::SUBTITLE_MAX`].
+fn subtitle_bytes(text: &str) -> Vec<u8> {
+    let mut bytes: Vec<u8> = text
+        .chars()
+        .map(|c| if (c as u32) < 0x100 { c as u8 } else { b'?' })
+        .filter(|b| *b != 0)
+        .collect();
+    bytes.truncate(addr::SUBTITLE_MAX);
+    bytes
 }
 
 /// Whether the HUD has a subtitle queued (one of co-op's, or an NPC's).

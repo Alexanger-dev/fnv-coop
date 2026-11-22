@@ -41,8 +41,13 @@ const HOURS_TILE: u32 = KIT + 0x300;
 const SAVE_NAME: u32 = KIT + 0x400;
 /// The messages shown: 0x110 bytes each.
 /// The HUD, once a test turns the game's subtitles on ([`Story::subtitles_on`]): only its queue
-/// of subtitles (a count at `HUD_SUBTITLES_OFFSET + 8`).
+/// of subtitles (its records at `HUD_SUBTITLES_OFFSET + 4`, how many at `+ 8`).
 const HUD: u32 = KIT + 0x600;
+/// The HUD's queue of subtitles: the records (each shown subtitle's slot, its text at +0, its time
+/// at `SUBTITLE_TIME_OFFSET`), oldest first.
+const HUD_QUEUE: u32 = KIT + 0xb000;
+/// A subtitle's time in the stand-in (seconds).
+const SUBTITLE_SECONDS: f32 = 3.0;
 /// The subtitles the game showed, in order (each up to `SUBTITLE_MAX` characters and the end).
 const SUBTITLES: u32 = KIT + 0x6000;
 const SUBTITLE_SLOT: u32 = 0x110;
@@ -388,6 +393,24 @@ impl Story {
 
     /// Names the topic of info `id` `name` (an option with no prompt of its own shows its
     /// topic's name).
+    /// Line `id`'s prompt (what the player chose) reads `text`.
+    pub fn set_prompt(&mut self, id: u32, text: &str) {
+        let info = self.info_at(id);
+        let at = self.e.mem.u32(info + addr::INFO_PROMPT_OFFSET);
+        assert!(at != 0, "a line with a prompt");
+        self.e.mem.set_cstr(at, text.as_bytes());
+    }
+
+    /// The texts of the subtitles queued on the HUD now (whose time has not run out).
+    pub fn subtitles_queued(&mut self) -> Vec<String> {
+        let count = self.e.mem.u32(HUD + addr::HUD_SUBTITLES_OFFSET + 8);
+        (0..count)
+            .map(|i| self.e.mem.u32(HUD_QUEUE + 4 * i))
+            .filter(|r| self.e.mem.f32(r + addr::SUBTITLE_TIME_OFFSET) > 0.0)
+            .map(|r| self.e.mem.cstr(r).into_iter().map(char::from).collect())
+            .collect()
+    }
+
     pub fn set_topic_name(&mut self, id: u32, name: &str) {
         assert!(name.len() < 0x60);
         let info = self.info_at(id);
@@ -439,6 +462,9 @@ impl Story {
     /// test lets the time of the oldest run out, [`Story::subtitle_ends`]).
     pub fn subtitles_on(&mut self) {
         self.e.mem.set_u32(addr::HUD_SINGLETON, HUD);
+        self.e
+            .mem
+            .set_u32(HUD + addr::HUD_SUBTITLES_OFFSET + 4, HUD_QUEUE);
         self.e.register(addr::HUD_SHOW_SUBTITLE, |e, a| {
             assert_eq!(a[0], HUD, "the HUD's ShowSubtitle");
             if e.mem.u32(SUBTITLES_OFF) != 0 {
@@ -451,10 +477,15 @@ impl Story {
             );
             let n = e.mem.u32(SUBTITLES_SHOWN);
             assert!(n < SUBTITLES_MAX);
-            e.mem.set_cstr(SUBTITLES + SUBTITLE_SLOT * n, &text);
+            let record = SUBTITLES + SUBTITLE_SLOT * n;
+            e.mem.set_cstr(record, &text);
+            e.mem
+                .set_f32(record + addr::SUBTITLE_TIME_OFFSET, SUBTITLE_SECONDS);
             e.mem.set_u32(SUBTITLES_SHOWN, n + 1);
             let count = HUD + addr::HUD_SUBTITLES_OFFSET + 8;
-            e.mem.set_u32(count, e.mem.u32(count) + 1);
+            let queued = e.mem.u32(count);
+            e.mem.set_u32(HUD_QUEUE + 4 * queued, record);
+            e.mem.set_u32(count, queued + 1);
             Ret {
                 eax: 1,
                 ..Ret::default()
@@ -467,11 +498,28 @@ impl Story {
         self.e.mem.set_u32(SUBTITLES_OFF, u32::from(off));
     }
 
-    /// The oldest queued subtitle's time runs out.
+    /// The oldest queued subtitle's time runs out (the HUD drops it).
     pub fn subtitle_ends(&mut self) {
         let count = HUD + addr::HUD_SUBTITLES_OFFSET + 8;
         let n = self.e.mem.u32(count);
+        for i in 1..n {
+            let next = self.e.mem.u32(HUD_QUEUE + 4 * i);
+            self.e.mem.set_u32(HUD_QUEUE + 4 * (i - 1), next);
+        }
         self.e.mem.set_u32(count, n.saturating_sub(1));
+    }
+
+    /// The HUD's update: the queued subtitles whose time is nothing are dropped.
+    pub fn hud_update(&mut self) {
+        let count = HUD + addr::HUD_SUBTITLES_OFFSET + 8;
+        let records: Vec<u32> = (0..self.e.mem.u32(count))
+            .map(|i| self.e.mem.u32(HUD_QUEUE + 4 * i))
+            .filter(|r| self.e.mem.f32(r + addr::SUBTITLE_TIME_OFFSET) > 0.0)
+            .collect();
+        for (i, r) in records.iter().enumerate() {
+            self.e.mem.set_u32(HUD_QUEUE + 4 * i as u32, *r);
+        }
+        self.e.mem.set_u32(count, records.len() as u32);
     }
 
     /// The subtitles the game showed so far, in order.
