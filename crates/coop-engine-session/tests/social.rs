@@ -187,7 +187,7 @@ fn a_far_player_who_is_busy_is_told_of_the_conversation_not_shown_its_lines() {
     assert!(w.guests[0].game.talk_to(SUNNY));
     w.guests[0].game.say(SHARED_LINE, false);
     w.run(10);
-    assert_eq!(w.host.messages(), ["Player 2 is talking to Sunny Smiles."]);
+    assert_eq!(w.host.messages(), ["Guest is talking to Sunny Smiles."]);
     // Its next line: held back too, and nothing more said of it.
     w.guests[0].game.say(SHARED_LINE, true);
     w.run(5);
@@ -209,8 +209,8 @@ fn a_far_player_who_is_busy_is_told_of_the_conversation_not_shown_its_lines() {
     assert_eq!(
         w.host.messages(),
         [
-            "Player 2 is talking to Sunny Smiles.",
-            "Player 2 finished talking to Sunny Smiles."
+            "Guest is talking to Sunny Smiles.",
+            "Guest finished talking to Sunny Smiles."
         ]
     );
     w.run(20);
@@ -249,10 +249,10 @@ fn a_busy_far_player_is_told_of_each_conversation() {
     assert_eq!(
         w.host.messages(),
         [
-            "Player 2 is talking to Sunny Smiles.",
-            "Player 2 is talking to someone.",
-            "Player 2 finished talking to Sunny Smiles.",
-            "Player 2 finished talking to someone."
+            "Guest is talking to Sunny Smiles.",
+            "Guest is talking to someone.",
+            "Guest finished talking to Sunny Smiles.",
+            "Guest finished talking to someone."
         ]
     );
 }
@@ -283,9 +283,9 @@ fn a_busy_far_player_told_of_a_second_players_conversation_is_told_both_ends() {
     assert_eq!(
         w.host.messages(),
         [
-            "Player 2 is talking to Sunny Smiles.",
-            "Player 3 is talking to Chet.",
-            "Player 2 finished talking to Sunny Smiles."
+            "Guest is talking to Sunny Smiles.",
+            "Guest 2 is talking to Chet.",
+            "Guest finished talking to Sunny Smiles."
         ]
     );
 }
@@ -303,7 +303,7 @@ fn a_far_player_gets_the_lines_as_subtitles_one_at_a_time() {
     w.guests[0].game.say(SHARED_LINE, false);
     w.run(10);
     // The first shown; the next waits for it to end.
-    assert_eq!(w.host.subtitles(), ["Player 2: Where is Sunny?"]);
+    assert_eq!(w.host.subtitles(), ["Guest: Where is Sunny?"]);
     w.host.subtitle_ends();
     w.run(2);
     assert_eq!(w.host.subtitles().len(), 2);
@@ -376,7 +376,7 @@ fn with_subtitles_off_the_lines_come_as_messages() {
     assert_eq!(
         w.host.messages(),
         [
-            "Player 2: Where is Sunny?",
+            "Guest: Where is Sunny?",
             "Head on up to the saloon.",
             "I will meet you there."
         ]
@@ -394,7 +394,7 @@ fn a_far_player_in_a_fight_is_told_of_the_conversation_not_shown_its_lines() {
     assert!(w.guests[0].game.talk_to(SUNNY));
     w.guests[0].game.say(SHARED_LINE, false);
     w.run(10);
-    assert_eq!(w.host.messages(), ["Player 2 is talking to someone."]);
+    assert_eq!(w.host.messages(), ["Guest is talking to someone."]);
     assert_eq!(w.hd.social.talker.lines_far_held, 1);
     // The fight over, the next line comes as text again.
     w.host.set_combat(coop_engine::actors::PLAYER_REF_ID, 0);
@@ -404,7 +404,7 @@ fn a_far_player_in_a_fight_is_told_of_the_conversation_not_shown_its_lines() {
     w.run(10);
     assert_eq!(
         w.host.messages(),
-        ["Player 2 is talking to someone.", "Howdy."]
+        ["Guest is talking to someone.", "Howdy."]
     );
 }
 
@@ -446,11 +446,11 @@ fn a_guests_line_runs_once_on_the_host_and_the_others_see_it() {
     // and free (S42, the owner's choice of 2026-11-21: far off, the lines come as text), with no
     // word of joining.
     let lines = [
-        "Player 2: Where is Sunny?",
+        "Guest: Where is Sunny?",
         "Head on up to the saloon.",
         "I will meet you there.",
     ];
-    let hint = "Player 2 is talking to someone. Talk to them to join.";
+    let hint = "Guest is talking to someone. Talk to them to join.";
     assert_eq!(
         w.guests[1].game.messages(),
         std::iter::once(hint).chain(lines).collect::<Vec<_>>()
@@ -529,9 +529,9 @@ fn a_line_whose_end_never_comes_is_finished_by_the_next_line_and_by_the_goodbye(
     assert_eq!(
         w.host.messages(),
         [
-            "Player 2 is talking to someone. Talk to them to join.",
+            "Guest is talking to someone. Talk to them to join.",
             "Howdy.",
-            "Player 2: Where is Sunny?",
+            "Guest: Where is Sunny?",
             "Head on up to the saloon.",
             "I will meet you there."
         ]
@@ -557,8 +557,8 @@ fn the_hosts_line_is_seen_by_a_guest_and_runs_in_the_hosts_game_only() {
     assert_eq!(
         w.guests[0].game.messages(),
         [
-            "Player 1 is talking to someone. Talk to them to join.",
-            "Player 1: Where is Sunny?",
+            "Host is talking to someone. Talk to them to join.",
+            "Host: Where is Sunny?",
             "Head on up to the saloon.",
             "I will meet you there."
         ]
@@ -667,7 +667,7 @@ fn talking_to_the_npc_of_another_players_conversation_joins_it() {
     assert!(w
         .host
         .messages()
-        .contains(&"Player 2 is talking to someone. Talk to them to join.".to_string()));
+        .contains(&"Guest is talking to someone. Talk to them to join.".to_string()));
     assert_eq!(w.hd.social.talker.joins, 0);
     // Chet activating Sunny in the host's game is not the host talking to her.
     let (sunny, chet) = (
@@ -765,22 +765,35 @@ fn the_starter_leaves_and_the_player_who_joined_goes_on() {
     w.run(10);
     assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(10));
     assert_eq!(w.hd.social.enactor.enacted, 1);
-    // (The chosen line's subtitle names the conversation's starter, not its picker: a known
-    // limit, told to the owner.)
+    // The chosen line's subtitle names the player who chose it: the guest, not the starter.
     let m = w.host.messages();
+    assert!(m.contains(&"Guest: Where is Sunny?".to_string()), "{m:?}");
     assert!(
         m.contains(&"Head on up to the saloon.".to_string()),
         "{m:?}"
     );
     // The word that it may join names the player in it.
     assert!(
-        m.contains(&"Player 2 is talking to someone. Talk to them to join.".to_string()),
+        m.contains(&"Guest is talking to someone. Talk to them to join.".to_string()),
         "{m:?}"
     );
     assert_eq!(w.hd.social.talker.lines_far_shown, 1);
     w.guests[0].game.say(SHARED_LINE, true);
     w.run(10);
     assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(20));
+    // The host busy in its inventory: told who is talking, the guest (not itself, the starter).
+    w.host.messages();
+    w.host.open_menu(INVENTORY);
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.guests[0].game.say(PLAIN_LINE, true);
+    w.run(10);
+    let m = w.host.messages();
+    assert!(
+        m.contains(&"Guest is talking to someone.".to_string()),
+        "{m:?}"
+    );
+    w.host.close_menu();
+    w.run(10);
     // The host, out of it, talks to Chet: a conversation of its own.
     w.host.place(CHET, SALOON);
     assert!(w.host.talk_to(CHET));
@@ -1063,7 +1076,7 @@ fn a_rest_everyone_agrees_to_passes_for_everyone() {
     for s in [&mut w.host, &mut w.guests[1].game] {
         assert_eq!(
             s.messages().last().map(String::as_str),
-            Some("Player 2 wants to wait 3 hour(s). Rest yourself to agree.")
+            Some("Guest wants to wait 3 hour(s). Rest yourself to agree.")
         );
     }
     assert_eq!(hour(&mut w.host), 8.0);
@@ -1095,7 +1108,7 @@ fn a_rest_one_player_does_not_agree_to_passes_for_no_one() {
     w.run(5);
     assert_eq!(
         w.host.messages().last().map(String::as_str),
-        Some("Player 2 wants to sleep 5 hour(s). Rest yourself to agree.")
+        Some("Guest wants to sleep 5 hour(s). Rest yourself to agree.")
     );
     // The host never answers: the vote runs out.
     w.run_every(40, 1000);

@@ -111,6 +111,8 @@ pub enum DialogueMsg {
         step: u32,
         /// Choice.
         choice: u32,
+        /// The player who picked it (its subtitle names that player).
+        by: PlayerId,
     },
     /// A peer finished playing a step's lines.
     LineDone {

@@ -76,8 +76,8 @@ impl Rester {
                 talk::show(
                     e,
                     &format!(
-                        "Player {} wants to {} {param} hour(s). Rest yourself to agree.",
-                        u32::from(proposer.0) + 1,
+                        "{} wants to {} {param} hour(s). Rest yourself to agree.",
+                        proposer.label(),
                         verb(*kind)
                     ),
                 );

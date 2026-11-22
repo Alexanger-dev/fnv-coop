@@ -11,7 +11,7 @@
 //! - after the game's rows, the infos of those rows are noted: this game's own options
 //!   ([`own`]), which the session sends to the host's dialogue table;
 //! - the other players' options the table merged ([`set_foreign`]), those this game does not
-//!   have, are added after them with the owner's name, e.g. `ICE CREAM! (Player 2)`.
+//!   have, are added after them with the owner's name, e.g. `ICE CREAM! (Guest)`.
 //!
 //! A click on one of the added rows is not this game's to say (`DialogMenu::DoClick`,
 //! `007624f0`, wrapped too): it is noted ([`take_clicked`]) and the game does nothing with it

@@ -1702,7 +1702,10 @@ every other game shows it, holds, and lists its own options when the step is ove
     pull it back; the host, alone in it with no leave row, asked a question, got Sunny's answer
     and the next options while the guest followed as subtitles; the host's goodbye ended it,
     Sunny free in both).
-  - Known limit (told to the owner): the subtitle of a chosen line names the conversation's
-    starter, not the player who chose it.
+  - Names (the owner, 2026-11-22): a chosen line's subtitle names the player who chose it (the
+    table says who: `Picked::by`, `View::picker`), not the conversation's starter, and the
+    players are named `Host`, `Guest`, `Guest 2`, ... (`PlayerId::label`) in subtitles, notices,
+    others' options and the rest vote; "... is talking to ..." names a player in the
+    conversation (its starter may have left it).
 - Not yet: votes (step 3b), rewards (step 4). Lines of no shared quest are not sent between
   players yet (S16), so they are not shown to a watcher.

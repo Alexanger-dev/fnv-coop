@@ -16,6 +16,8 @@ pub struct View {
     pub step: u32,
     /// Choice of the step being played (None between steps).
     pub playing: Option<u32>,
+    /// The player who picked the last step.
+    pub picker: Option<PlayerId>,
     /// True once this machine reported its lines done for the current step.
     pub reported: bool,
 }
@@ -292,6 +294,7 @@ impl DialogueClient {
                             initiator,
                             step: 0,
                             playing: None,
+                            picker: None,
                             reported: false,
                         },
                         joined: vec![initiator],
@@ -340,6 +343,7 @@ impl DialogueClient {
                 session,
                 step,
                 choice,
+                by,
             } => {
                 if let Some(k) = self
                     .sessions
@@ -348,6 +352,7 @@ impl DialogueClient {
                 {
                     k.view.step = step;
                     k.view.playing = Some(choice);
+                    k.view.picker = Some(by);
                     k.view.reported = false;
                     k.menu = None;
                     k.last = Some(choice);
@@ -407,6 +412,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 choice: 7,
+                by: PlayerId(1),
             },
             1,
         );
@@ -448,6 +454,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 choice: 5,
+                by: PlayerId(1),
             },
             1,
         );
@@ -463,6 +470,7 @@ mod tests {
                 session: 9,
                 step: 1,
                 choice: 5,
+                by: PlayerId(1),
             },
             1,
         );
@@ -472,6 +480,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 choice: 5,
+                by: PlayerId(1),
             },
             1,
         );
@@ -480,6 +489,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 choice: 6,
+                by: PlayerId(1),
             },
             1,
         );
@@ -646,6 +656,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 choice: 9,
+                by: PlayerId(1),
             },
             2,
         );
@@ -735,6 +746,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 choice: 7,
+                by: PlayerId(1),
             },
             2,
         );
@@ -743,11 +755,13 @@ mod tests {
                 session: 6,
                 step: 1,
                 choice: 8,
+                by: PlayerId(1),
             },
             2,
         );
         assert_eq!(c.last_choice(), Some(7));
         assert_eq!(c.view().unwrap().playing, Some(7));
+        assert_eq!(c.view().unwrap().picker, Some(PlayerId(1)));
         // Leaving: out at once, the newest shown again, the table told.
         assert_eq!(c.leave(), Some(DialogueMsg::Leave { session: 4 }));
         assert!(!c.joined());

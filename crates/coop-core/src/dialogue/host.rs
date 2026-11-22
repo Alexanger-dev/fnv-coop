@@ -368,6 +368,7 @@ impl DialogueHost {
                 session,
                 step,
                 choice,
+                by: from,
             },
         )]
     }
@@ -1215,7 +1216,8 @@ mod tests {
             DialogueMsg::Picked {
                 session: s,
                 step: 1,
-                choice: 3
+                choice: 3,
+                by: B,
             }
         );
         assert!(matches!(

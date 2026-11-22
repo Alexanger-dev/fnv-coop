@@ -28,6 +28,16 @@ impl PlayerId {
     pub fn is_host(self) -> bool {
         self == Self::HOST
     }
+
+    /// The player's name in the game's text (the owner, 2026-11-22): `Host`, `Guest` for the
+    /// first guest, `Guest 2`, `Guest 3` for the next.
+    pub fn label(self) -> String {
+        match self.0 {
+            0 => "Host".into(),
+            1 => "Guest".into(),
+            n => format!("Guest {n}"),
+        }
+    }
 }
 
 /// Ownership epoch. Bumped every time an entity changes owner so late
@@ -130,5 +140,13 @@ mod tests {
     fn rev_next() {
         assert_eq!(Rev::ZERO.next(), Rev(1));
         assert_eq!(Epoch(1).next(), Epoch(2));
+    }
+
+    #[test]
+    fn players_are_named_host_and_guest() {
+        assert_eq!(PlayerId::HOST.label(), "Host");
+        assert_eq!(PlayerId(1).label(), "Guest");
+        assert_eq!(PlayerId(2).label(), "Guest 2");
+        assert_eq!(PlayerId(3).label(), "Guest 3");
     }
 }

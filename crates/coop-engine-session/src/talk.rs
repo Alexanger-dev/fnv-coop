@@ -167,22 +167,23 @@ struct Far {
 }
 
 fn player_name(p: PlayerId) -> String {
-    format!("Player {}", u32::from(p.0) + 1)
+    p.label()
 }
 
 /// A watching window whose conversation has said nothing new for this many steps (frames) is
 /// closed: about five minutes at 60 frames a second (a talker may read a long list of topics).
 pub const WATCH_QUIET_STEPS: u32 = 18_000;
 
-/// How a watched line is shown as text: what the player chose, when the info has a prompt, then
+/// How a watched line is shown as text: what the player who picked it chose (named), when the info
+/// has a prompt, then
 /// each of the NPC's responses (after the NPC's name, when it has one), each as a subtitle of its
 /// own ([`talk::subtitle_parts`]: a long one in several).
-fn messages(initiator: PlayerId, npc: Option<&str>, text: &str, prompt: &str) -> Vec<String> {
+fn messages(picker: PlayerId, npc: Option<&str>, text: &str, prompt: &str) -> Vec<String> {
     let mut out = Vec::new();
     if !prompt.is_empty() {
         out.extend(talk::subtitle_parts(&format!(
             "{}: {prompt}",
-            player_name(initiator)
+            player_name(picker)
         )));
     }
     for t in text.split(" | ").filter(|t| !t.trim().is_empty()) {
@@ -612,16 +613,23 @@ impl Talker {
             } else if joined && near {
                 if let Some((text, prompt)) = talk::line(e, choice) {
                     let name = talk::name_of(e, v.npc.0);
-                    self.queue_subtitles(messages(v.initiator, name.as_deref(), &text, &prompt));
+                    self.queue_subtitles(messages(
+                        v.picker.unwrap_or(v.initiator),
+                        name.as_deref(),
+                        &text,
+                        &prompt,
+                    ));
                     self.lines_shown += 1;
                 }
             } else {
                 // Far from the NPC (S42, the owner's choice of 2026-11-21): the line as text, or,
                 // while this player is busy, held back and a word that the conversation goes on.
                 self.lines_far += 1;
+                // Named after the player in it (the starter may have left it).
+                let who = client.players_in().first().copied().unwrap_or(v.initiator);
                 let f = self.far.filter(|f| f.session == v.session).unwrap_or(Far {
                     session: v.session,
-                    initiator: v.initiator,
+                    initiator: who,
                     npc: v.npc.0,
                     told: false,
                     held: false,
@@ -632,7 +640,7 @@ impl Talker {
                         let name = talk::name_of(e, v.npc.0).unwrap_or_else(|| "someone".into());
                         talk::show(
                             e,
-                            &format!("{} is talking to {name}.", player_name(v.initiator)),
+                            &format!("{} is talking to {name}.", player_name(f.initiator)),
                         );
                         self.far_notices += 1;
                     }
@@ -645,7 +653,7 @@ impl Talker {
                     if let Some((text, prompt)) = talk::line(e, choice) {
                         let name = talk::name_of(e, v.npc.0);
                         self.queue_subtitles(messages(
-                            v.initiator,
+                            v.picker.unwrap_or(v.initiator),
                             name.as_deref(),
                             &text,
                             &prompt,
@@ -855,11 +863,11 @@ mod tests {
                 "Howdy. | Welcome to Goodsprings.",
                 "Hello."
             ),
-            ["Player 2: Hello.", "Howdy.", "Welcome to Goodsprings."]
+            ["Guest: Hello.", "Howdy.", "Welcome to Goodsprings."]
         );
         assert_eq!(
             messages(PlayerId(1), Some("Sunny Smiles"), "Howdy. | ", "Hello."),
-            ["Player 2: Hello.", "Sunny Smiles: Howdy."]
+            ["Guest: Hello.", "Sunny Smiles: Howdy."]
         );
         assert_eq!(messages(PlayerId(0), None, "Howdy.", ""), ["Howdy."]);
         assert!(messages(PlayerId(0), Some("Sunny"), "", "").is_empty());
