@@ -1139,7 +1139,9 @@ council chose 3-0 to write each avatar's body to the log for the next time it ha
 guessed): every 5 s, and when it changes, `co-op avatar check: player P avatar ID base B, wears
 [...]: N shapes; root culled, fade; culled [...], not on its skeleton [...], all parts hidden
 [...], out of place [...]` (`coop_engine::look::body`, read only; pointers that lead nowhere and
-loops passed over; `Look::check_body`).
+loops passed over; `Look::check_body`). The owner, after: it has happened twice, both times to the host's
+avatar in the guest's game (never the guest's in the host's), and both times going through a door
+fixed it (the avatar placed again in the new cell); not urgent.
 
 ## S36: voice chat (implemented with unit tests; not run on a PC)
 
