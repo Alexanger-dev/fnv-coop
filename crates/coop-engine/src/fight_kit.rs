@@ -534,12 +534,6 @@ impl Story {
         (self.e.mem.u32(a + SAID), self.e.mem.u32(a + SAID_TOPIC))
     }
 
-    /// A script has actor `speaker` say topic `topic` to the player (`SayTo`), as the host's
-    /// wrap of the command notes it (the line itself is the test's to play: [`Story::say_as`]).
-    pub fn script_says(&mut self, speaker: u32, topic: u32) {
-        crate::commands::note_say(&mut self.e, speaker, topic);
-    }
-
     pub fn set_has_3d(&mut self, id: u32, has: bool) {
         let a = forms::form(&mut self.e, id).expect("a reference of the story");
         self.e.mem.set_u8(a + NO_3D, u8::from(!has));

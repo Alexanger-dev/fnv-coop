@@ -834,8 +834,26 @@ process's say slot noted on the speaker); a session test (near: heard by the gue
 one away, result not run there; a line of the window and the next line its own again; away from the
 host's player: said and run there), mutation checks (all killed). Two headless games: the guest's
 game said it; one rifle and 30 rounds each. Seen in a second run: the trigger's script ran in both
-games (each player in it), so the line came twice and the ammunition twice (60 each); open, put to
-the owner.
+games (each player in it), so the line came twice and the ammunition twice (60 each).
+
+**Such lines are the host's (2026-11-22, the owner; council 3-0, B).** A guest's own script's
+`SayTo` of an actor of the story to its player is not said there (`commands::say_to` reads past its
+parameters and says the command ran): the guest asks the host (`SAY_TAG` as a claim, count 0), once
+a line ([`SCENE_AGAIN_MS`]: a trigger's script says it every frame until the line's result comes),
+at its next heal after that heal's proposals (the harness: asked at once, Sunny's line was said on
+the host before the guest's stage 20 reached it, and its result took its branch for a stage below
+20, `ResetAI`, which cut it short: no rifle). The host has its actor say it to its own player
+(`say_to_player`) and tells every guest, with whether it was said here (a guest near says it, its
+result run there only when the host's game could not say it); one it said lately (its own trigger
+first) is not said again, and its own trigger's copy of one said for a guest's ask is not said
+within 10 minutes (`SAY_AGAIN`). A line to someone else than the player, by an actor only one game
+has, or outside a session (the journal not armed) is each game's own. The test kit has `SayTo`'s
+body (the parse, then the speaker's process). Session tests (asked and said once for everyone, its
+result the host's; the host's own trigger after; the other way round; a line to another actor, an
+avatar's; asked only once in a session; an actor the host cannot make talk; the stage before the
+line), mutation checks (all killed). Two headless games, three runs: the guest's trigger fired
+first each time; the line was said once in each game, one rifle and 30 rounds each, objectives the
+same.
 
 ## S29: a guest's completed objectives and items between players (in part implemented)
 

@@ -27,6 +27,13 @@ pub struct Commands {
     asked: Mutex<Vec<AskedScene>>,
     /// Host: `SayTo` commands seen, for the log.
     says_seen: AtomicU32,
+    /// Host: lines said for a guest's ask (speaker, topic), and when: this game's own copy of
+    /// the same is not said again ([`SAY_AGAIN`]).
+    says_asked: Mutex<Vec<((u32, u32), std::time::Instant)>>,
+    /// Guest: its own scripts' lines to its player, asked of the host and not said here.
+    says_dropped: AtomicU32,
+    /// The lines (speaker, topic, on a guest) already written to the log as not said here.
+    says_noted: Mutex<std::collections::BTreeSet<(u32, u32, bool)>>,
     /// Guest: the speakers saying a line here for the host's that the host's game said too: the
     /// line's result is the host's (it ran there), not run again here.
     echoes: Mutex<std::collections::BTreeSet<u32>>,
@@ -372,30 +379,90 @@ fn parse(e: &mut Engine, a: &[u32], keep: bool) -> Option<[u32; 6]> {
     parsed
 }
 
-/// The wrap at `005c9100` (`SayTo`). On the host, a line a script has an actor say to the
-/// player is noted (speaker, topic) before the body runs: the host's game may not say it at all
-/// (an actor far from its player has no process), and the guest whose game runs that actor says
-/// it there to its own player (PC run 22: Sunny's "go get them" after the sneak, said by a stage's
-/// result to the host's player far away, never came, and the quest waited for the host).
+/// How long after a line said for a guest's ask the host's own copy of it is not said (the
+/// trigger that set it off in the guest's game fires in the host's when its player comes).
+pub const SAY_AGAIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Host: the line `speaker` says `topic` was said here for a guest's ask.
+pub fn said_for_a_guest(e: &mut Engine, speaker: u32, topic: u32) {
+    e.ext_free::<Commands>()
+        .says_asked
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(((speaker, topic), std::time::Instant::now()));
+}
+
+/// Guest: how many of its own scripts' lines to its player were asked of the host.
+pub fn says_dropped(e: &mut Engine) -> u32 {
+    e.ext_free::<Commands>().says_dropped.load(Ordering::SeqCst)
+}
+
+/// The wrap at `005c9100` (`SayTo`): a line a script has an actor of the story say to the
+/// player (speaker, topic) is the host's (the owner, 2026-11-22: both players in Sunny's trigger
+/// set it off in both games, and the line and its rounds came twice).
+///
+/// On the host it is noted before the body runs: every guest near the speaker says it there
+/// too, its result the host's game's when it said it (PC run 22: Sunny's "go get them", said to
+/// the host's player far away, never came). One a guest's ask had said here lately is not said
+/// again ([`SAY_AGAIN`]). On a guest, its own script's line is not said: it is asked of the host,
+/// which says it for everyone (as scenes, PC run 23).
 pub(crate) fn say_to(e: &mut Engine, a: &[u32]) -> Ret {
     let this_obj = a.get(2).copied().unwrap_or(0);
-    if this_obj == 0 || gate::is_guest(e) || !journal::armed(e) {
+    let guest = gate::is_guest(e);
+    if this_obj == 0 || !journal::armed(e) {
         return e.call_next(addr::CMD_SAY_TO, a);
     }
     let speaker = e.mem.u32(this_obj.wrapping_add(addr::FORM_ID_OFFSET));
     let is_actor = actors::is_actor_type(e.mem.u8(this_obj.wrapping_add(addr::FORM_TYPE_OFFSET)));
-    if is_actor && actors::shareable(speaker) {
-        if let Some(v) = parse(e, a, true) {
-            let player = e.mem.u32(addr::PLAYER_SINGLETON);
-            if v[0] == player && v[1] != 0 {
-                let topic = e.mem.u32(v[1].wrapping_add(addr::FORM_ID_OFFSET));
-                e.ext_free::<Commands>()
-                    .says
+    let line = (is_actor && actors::shareable(speaker))
+        .then(|| parse(e, a, true))
+        .flatten()
+        .filter(|v| v[0] == e.mem.u32(addr::PLAYER_SINGLETON) && v[1] != 0)
+        .map(|v| e.mem.u32(v[1].wrapping_add(addr::FORM_ID_OFFSET)));
+    if let Some(topic) = line {
+        let recent = !guest && {
+            let c = e.ext_free::<Commands>();
+            let mut asked = c.says_asked.lock().unwrap_or_else(PoisonError::into_inner);
+            asked.retain(|(_, at)| at.elapsed() < SAY_AGAIN);
+            asked.iter().any(|(k, _)| *k == (speaker, topic))
+        };
+        // A trigger's script says its line every frame until the line's result comes: noted once.
+        let first = {
+            let c = e.ext_free::<Commands>();
+            let mut noted = c.says_noted.lock().unwrap_or_else(PoisonError::into_inner);
+            noted.insert((speaker, topic, guest))
+        };
+        if guest || recent {
+            // Read past the parameters as the body would; the command ran.
+            let _ = parse(e, a, false);
+            if guest {
+                let c = e.ext_free::<Commands>();
+                c.says_dropped.fetch_add(1, Ordering::SeqCst);
+                c.says
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push((speaker, topic));
             }
+            if first {
+                note(
+                    e,
+                    format!(
+                        "co-op says: actor {speaker:08x}'s line (topic {topic:08x}) {}",
+                        if guest {
+                            "asked of the host's game, which says it for everyone"
+                        } else {
+                            "already said for a guest's ask, not again"
+                        }
+                    ),
+                );
+            }
+            return 1u32.into_ret();
         }
+        e.ext_free::<Commands>()
+            .says
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((speaker, topic));
     }
     let ret = e.call_next(addr::CMD_SAY_TO, a);
     let n = e
@@ -426,17 +493,8 @@ pub fn played_for_a_guest(e: &mut Engine, s: &Scene) {
         .push(((s.actor, s.target, s.topic), std::time::Instant::now()));
 }
 
-/// A script's `SayTo` of `speaker` to the player, as [`say_to`] notes it, for the test games.
-#[cfg(any(test, feature = "testkit"))]
-pub(crate) fn note_say(e: &mut Engine, speaker: u32, topic: u32) {
-    e.ext_free::<Commands>()
-        .says
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push((speaker, topic));
-}
-
-/// Host: the lines scripts had an actor say to the player since the last call (speaker, topic).
+/// The lines scripts had an actor say to the player since the last call (speaker, topic): on the
+/// host, said here; on a guest, to ask of the host.
 pub fn drain_says(e: &mut Engine) -> Vec<(u32, u32)> {
     std::mem::take(
         &mut *e
@@ -445,14 +503,6 @@ pub fn drain_says(e: &mut Engine) -> Vec<(u32, u32)> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner),
     )
-}
-
-/// Puts lines back in front of the ones noted since ([`drain_says`]'s order kept).
-pub fn put_back_says(e: &mut Engine, mut earlier: Vec<(u32, u32)>) {
-    let c = e.ext_free::<Commands>();
-    let mut says = c.says.lock().unwrap_or_else(PoisonError::into_inner);
-    earlier.append(&mut says);
-    *says = earlier;
 }
 
 /// Has actor `speaker` say topic `topic` to this game's player, as `SayTo` does for an actor in

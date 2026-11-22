@@ -331,6 +331,13 @@ pub struct HostDriver {
     /// Host: scenes guests' games asked for that were not played (they had just played, or an
     /// actor was talking).
     pub scenes_refused: u32,
+    /// Host: each line a script had an actor say to the player here (speaker, topic), with when.
+    says_played: BTreeMap<(u32, u32), u64>,
+    /// Host: lines guests' games asked for, said here (and so for everyone), and those not (said
+    /// here lately).
+    pub says_for_guests: u32,
+    /// See [`HostDriver::says_for_guests`].
+    pub says_refused: u32,
     /// Host: the time of this step.
     now_ms: u64,
     globals: GlobalWatch,
@@ -429,6 +436,7 @@ impl HostDriver {
         sync.claim_tags.insert(LIFE_TAG);
         sync.claim_tags.insert(PROPOSE_TAG);
         sync.claim_tags.insert(SCENE_TAG);
+        sync.claim_tags.insert(SAY_TAG);
         HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
@@ -439,6 +447,9 @@ impl HostDriver {
             scene_actors: BTreeMap::new(),
             scenes_played: BTreeMap::new(),
             scenes_refused: 0,
+            says_played: BTreeMap::new(),
+            says_for_guests: 0,
+            says_refused: 0,
             now_ms: 0,
             globals: GlobalWatch::new(global_ids),
             clock: Vec::new(),
@@ -490,6 +501,39 @@ impl HostDriver {
             let id = form.0;
             if let Some(p) = Proposal::read(&field) {
                 self.enact_proposal(e, from, id, p);
+                continue;
+            }
+            // A line a guest's own script had an actor say to its player: said here, and so for
+            // everyone near (the owner, 2026-11-22: Sunny's trigger fired in both games and her
+            // line and its rounds came twice). Not one said here lately (the trigger fired here
+            // too).
+            if let Some((_, topic, _)) = say_of(&field) {
+                let ago = self
+                    .says_played
+                    .get(&(id, topic))
+                    .map(|t| self.now_ms.saturating_sub(*t))
+                    .filter(|ago| *ago < SCENE_AGAIN_MS);
+                if let Some(ago) = ago {
+                    self.says_refused += 1;
+                    self.claim_notes.push(format!(
+                        "player {}'s game had actor {id:08x} say topic {topic:08x}: not said, it was said here {} s ago",
+                        from.0,
+                        ago / 1000
+                    ));
+                    continue;
+                }
+                let said = commands::say_to_player(e, id, topic, false);
+                self.claim_notes.push(format!(
+                    "player {}'s game had actor {id:08x} say topic {topic:08x}: {}",
+                    from.0,
+                    match said {
+                        Ok(()) => "said here and for everyone near".to_string(),
+                        Err(why) => format!("not said here ({why:?}): the guests near say it"),
+                    }
+                ));
+                commands::said_for_a_guest(e, id, topic);
+                self.says_for_guests += 1;
+                self.tell_say(id, topic, said.is_ok());
                 continue;
             }
             // A scene a guest's own script started: played here, and so for everyone. Not one
@@ -569,6 +613,19 @@ impl HostDriver {
         }
     }
 
+    /// Tells every guest that `speaker` says `topic` to the player (said here when `host_said`:
+    /// its result ran here), and notes when.
+    fn tell_say(&mut self, speaker: u32, topic: u32, host_said: bool) {
+        self.says_played.insert((speaker, topic), self.now_ms);
+        let n = self.says.entry(speaker).or_insert(0);
+        *n = n.wrapping_add(1);
+        let mut data = vec![*n];
+        data.extend(topic.to_le_bytes());
+        data.push(u8::from(host_said));
+        self.sync
+            .write(FormId(speaker), Field::Custom { tag: SAY_TAG, data });
+    }
+
     /// Does in this game what a guest's script did in that guest's (D5, rung 2), if it still fits:
     /// a variable only from the value the guest's script saw (a count that has moved on since
     /// takes the guest's step instead), a reference only from the state it saw, a stage or an
@@ -576,12 +633,9 @@ impl HostDriver {
     /// stage's result), and the story carries the outcome to every guest.
     fn enact_proposal(&mut self, e: &mut Engine, from: PlayerId, id: u32, p: Proposal) {
         // A line a stage's result has an actor say to the player while the guest's doing is done
-        // here was said in that guest's game already, where the stage was set (harness,
-        // 2026-11-13: Sunny's bark after the sneak, sent back to the guest, was said twice).
-        let earlier_says = commands::drain_says(e);
+        // here is said for everyone as any of this game's (a guest's game no longer says its
+        // own: it asks this one).
         let done = self.enact_proposal_body(e, id, p);
-        let _ = commands::drain_says(e);
-        commands::put_back_says(e, earlier_says);
         self.note_enacted(from, id, p, done);
     }
 
@@ -892,17 +946,11 @@ impl HostDriver {
                 }
                 _ => true,
             };
-            let n = self.says.entry(speaker).or_insert(0);
-            *n = n.wrapping_add(1);
-            let mut data = vec![*n];
-            data.extend(topic.to_le_bytes());
-            data.push(u8::from(!far));
             self.stage_notes.push(format!(
                 "say: actor {speaker:08x} says topic {topic:08x} to the player{}: the guests near it say it",
                 if far { ", away from this game's (its result is theirs)" } else { "" }
             ));
-            self.sync
-                .write(FormId(speaker), Field::Custom { tag: SAY_TAG, data });
+            self.tell_say(speaker, topic, !far);
         }
         // A conversation a script started between two actors: the guests' games play it too.
         for scene in commands::drain_scenes(e) {
@@ -1183,6 +1231,11 @@ pub struct GuestDriver {
     say_seen: std::collections::BTreeMap<u32, u8>,
     /// The host's lines said here.
     pub says_said: u32,
+    /// Lines this game's own scripts had an actor say to its player, asked of the host.
+    pub says_asked: u32,
+    /// Such lines to ask at the next heal (after its proposals), and when each was last asked.
+    says_to_ask: Vec<(u32, u32)>,
+    says_asked_at: BTreeMap<(u32, u32), u64>,
     /// Scenes this game's own scripts started, asked of the host.
     pub scenes_asked: u32,
     joined: bool,
@@ -1277,6 +1330,9 @@ impl GuestDriver {
             scene_seen: std::collections::BTreeMap::new(),
             say_seen: std::collections::BTreeMap::new(),
             says_said: 0,
+            says_asked: 0,
+            says_to_ask: Vec::new(),
+            says_asked_at: BTreeMap::new(),
             scenes_asked: 0,
             joined: false,
             scenes_played: 0,
@@ -1466,8 +1522,24 @@ impl GuestDriver {
                     .push((FormId(scene.actor), scene_field(0, &scene)));
                 self.scenes_asked += 1;
             }
+            // This game's own scripts' lines to its player: asked of the host, which says them
+            // for everyone, once each (a trigger's script says it every frame until its result
+            // comes), after the story changes the same scripts made (the next heal's proposals:
+            // PC harness, 2026-11-22: Sunny's line said on the host before the guest's stage 20
+            // reached it ran the result's `ResetAI` branch, which cut the result short).
+            for (speaker, topic) in commands::drain_says(e) {
+                let asked = self
+                    .says_asked_at
+                    .get(&(speaker, topic))
+                    .is_some_and(|at| now_ms.saturating_sub(*at) < SCENE_AGAIN_MS);
+                if !asked {
+                    self.says_asked_at.insert((speaker, topic), now_ms);
+                    self.says_to_ask.push((speaker, topic));
+                }
+            }
         } else {
             let _ = commands::drain_scenes(e);
+            let _ = commands::drain_says(e);
         }
         let claims = std::mem::take(&mut self.proposals_out);
         if !claims.is_empty() {
@@ -1824,6 +1896,15 @@ impl GuestDriver {
             }
         }
         self.differed = differ;
+        // The lines this game's scripts said since the last heal: asked after its proposals.
+        for (speaker, topic) in std::mem::take(&mut self.says_to_ask) {
+            let mut data = vec![0];
+            data.extend(topic.to_le_bytes());
+            data.push(0);
+            self.proposals_out
+                .push((FormId(speaker), Field::Custom { tag: SAY_TAG, data }));
+            self.says_asked += 1;
+        }
     }
 
     /// Applies to the game what changed in the replica since the last call; after a snapshot or a

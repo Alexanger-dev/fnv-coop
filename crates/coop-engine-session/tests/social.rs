@@ -308,7 +308,7 @@ fn a_line_a_script_has_an_npc_say_is_heard_by_every_player_near_it_and_its_resul
     w.guests[1].game.move_player(STORE, [0.0; 3], 0.0);
     w.run(10);
     // The host's script has Sunny say the line to its player; the host's game says it.
-    w.host.script_says(SUNNY, SHARED_LINE);
+    assert_eq!(w.host.script_say_to_player(SUNNY, SHARED_LINE), 6);
     w.host.say_as(SUNNY, SHARED_LINE, false);
     w.host.say_as(SUNNY, SHARED_LINE, true);
     w.run(10);
@@ -334,7 +334,7 @@ fn a_line_a_script_has_an_npc_say_is_heard_by_every_player_near_it_and_its_resul
     );
     // Another, said there but never played (no end): her lines in the dialogue window are the
     // window's still.
-    w.host.script_says(SUNNY, SHARED_LINE);
+    assert_eq!(w.host.script_say_to_player(SUNNY, SHARED_LINE), 6);
     w.run(10);
     assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 2);
     assert!(w.guests[0].game.talk_to(SUNNY));
@@ -350,7 +350,7 @@ fn a_line_a_script_has_an_npc_say_is_heard_by_every_player_near_it_and_its_resul
     // says it and runs its result.
     w.host.move_player(STORE, [0.0; 3], 0.0);
     w.run(10);
-    w.host.script_says(SUNNY, SHARED_LINE);
+    assert_eq!(w.host.script_say_to_player(SUNNY, SHARED_LINE), 6);
     w.run(10);
     assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 3);
     w.guests[0].game.say_as(SUNNY, SHARED_LINE, false);
@@ -359,6 +359,143 @@ fn a_line_a_script_has_an_npc_say_is_heard_by_every_player_near_it_and_its_resul
         coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e),
         2,
         "run here"
+    );
+}
+
+/// The owner, 2026-11-22 (council 3-0): a line a script has an NPC say to the player is the
+/// host's. A guest's own script (its player in Sunny's trigger) does not say it there: it asks the
+/// host, which says it for everyone; the host's own copy of it a moment later is not said again,
+/// nor a guest's ask for one the host said lately. The line and its rounds come once.
+#[test]
+fn a_line_a_guests_own_script_has_an_npc_say_is_said_by_the_host_for_everyone_once() {
+    let mut w = World::new(&["Sunny", "Chet"]);
+    w.run(20);
+    // The guest's trigger: its own Sunny does not say it; the host is asked.
+    assert_eq!(
+        w.guests[0].game.script_say_to_player(SUNNY, SHARED_LINE),
+        6,
+        "the parameters read"
+    );
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 0);
+    assert_eq!(
+        coop_engine::commands::says_dropped(&mut w.guests[0].game.e),
+        1
+    );
+    w.run(30);
+    assert_eq!(w.guests[0].driver.says_asked, 1);
+    // The host's Sunny says it, and so the guests' near her (its result the host's).
+    assert_eq!(w.hd.says_for_guests, 1);
+    assert_eq!(w.host.said_to_player(SUNNY), (1, SHARED_LINE));
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY), (1, SHARED_LINE));
+    assert_eq!(w.guests[1].game.said_to_player(SUNNY), (1, SHARED_LINE));
+    w.guests[0].game.say_as(SUNNY, SHARED_LINE, false);
+    w.guests[0].game.say_as(SUNNY, SHARED_LINE, true);
+    assert_eq!(
+        coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e),
+        2,
+        "its result the host's"
+    );
+    // Said every frame by the trigger's script until its result comes: asked once.
+    w.guests[0].game.script_say_to_player(SUNNY, SHARED_LINE);
+    w.run(30);
+    assert_eq!(w.guests[0].driver.says_asked, 1);
+    // The host's own trigger fires a moment later: not again, for anyone.
+    assert_eq!(w.host.script_say_to_player(SUNNY, SHARED_LINE), 6);
+    w.run(30);
+    assert_eq!(w.host.said_to_player(SUNNY).0, 1);
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 1);
+    // The other way round: the host's trigger first (said for everyone), then the guest's.
+    assert_eq!(w.host.script_say_to_player(SUNNY, PLAIN_LINE), 6);
+    w.run(30);
+    assert_eq!(w.host.said_to_player(SUNNY), (2, PLAIN_LINE));
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY), (2, PLAIN_LINE));
+    w.guests[0].game.script_say_to_player(SUNNY, PLAIN_LINE);
+    w.run(30);
+    assert_eq!(w.hd.says_refused, 1);
+    assert_eq!(w.host.said_to_player(SUNNY).0, 2);
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 2);
+    // A line to someone else than the player, or by an actor only this game has (an avatar):
+    // this game's own, said here.
+    let dropped = coop_engine::commands::says_dropped(&mut w.guests[0].game.e);
+    w.guests[0].game.script_say_to(SUNNY, CHET, PLAIN_LINE);
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY), (3, PLAIN_LINE));
+    let avatar = w.guests[0].game.place_avatar_at(STORE, [0.0; 3]);
+    let placed = coop_engine::forms::form(&mut w.guests[0].game.e, avatar).expect("placed");
+    w.guests[0].game.e.mem.set_u8(
+        placed + coop_engine::addr::FORM_TYPE_OFFSET,
+        coop_engine::addr::FORM_TYPE_ACHR,
+    );
+    w.guests[0].game.script_say_to_player(avatar, PLAIN_LINE);
+    assert_eq!(
+        coop_engine::commands::says_dropped(&mut w.guests[0].game.e),
+        dropped
+    );
+    // While the guest's game asks the host nothing (before it is in), its own lines go: none
+    // is asked once it does.
+    w.guests[0].driver.proposals_on = false;
+    w.guests[0].game.script_say_to_player(CHET, SHARED_LINE);
+    w.run(30);
+    w.guests[0].driver.proposals_on = true;
+    w.run(30);
+    assert_eq!(w.hd.says_for_guests, 1);
+    // The host's Chet cannot say it (no process there): the guests near him (in his store) say
+    // it, its result theirs.
+    w.guests[0].game.move_player(STORE, [0.0; 3], 0.0);
+    w.run(30);
+    let chet = coop_engine::forms::form(&mut w.host.e, CHET).expect("Chet");
+    w.host
+        .e
+        .mem
+        .set_u32(chet + coop_engine::addr::ACTOR_PROCESS_OFFSET, 0);
+    w.guests[0].game.script_say_to_player(CHET, SHARED_LINE);
+    w.run(30);
+    assert_eq!(w.hd.says_for_guests, 2);
+    assert_eq!(w.guests[0].game.said_to_player(CHET), (1, SHARED_LINE));
+    let skipped = coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e);
+    w.guests[0].game.say_as(CHET, SHARED_LINE, false);
+    assert_eq!(
+        coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e),
+        skipped,
+        "its result run there"
+    );
+    // Outside a session (the journal not armed) a line is the game's own, told to nobody.
+    coop_engine::journal::arm(&mut w.host.e, false);
+    w.host.script_say_to_player(SUNNY, PLAIN_LINE);
+    coop_engine::journal::arm(&mut w.host.e, true);
+    w.run(30);
+    assert_eq!(w.host.said_to_player(SUNNY).0, 3);
+    assert_eq!(w.guests[1].game.said_to_player(SUNNY).0, 2);
+}
+
+/// The harness, 2026-11-22: the guest's trigger set Sunny's stage 20 and had her say her line; the
+/// host said the line before the stage reached it, and the line's result took its branch for a
+/// stage below 20 (`ResetAI`), which cut it short: no rifle. A line a guest's script asks for is
+/// asked after the story changes the same scripts made.
+#[test]
+fn a_line_a_guests_script_asks_for_comes_after_the_stage_the_same_script_set() {
+    let mut w = World::new(&["Sunny", "Chet"]);
+    w.guests[0]
+        .driver
+        .object_script_quests
+        .insert(coop_engine::testkit::SETTER_SCRIPT_ID, vec![MQ]);
+    w.run(30);
+    // The guest's trigger: the stage, then the line, in one frame.
+    w.guests[0]
+        .game
+        .run_object_script_setting_stage(SUNNY, MQ, 20);
+    w.guests[0].game.script_say_to_player(SUNNY, SHARED_LINE);
+    let mut frames = 0;
+    while w.host.said_to_player(SUNNY).0 == 0 {
+        w.run(1);
+        frames += 1;
+        assert!(frames < 120, "the line was never said on the host");
+    }
+    assert!(
+        coop_engine::quest::record(&mut w.host.e, MQ)
+            .unwrap()
+            .done
+            .contains(&20),
+        "the stage before the line"
     );
 }
 

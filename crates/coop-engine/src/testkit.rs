@@ -601,6 +601,23 @@ impl Story {
             }
             eax(1)
         });
+        // `SayTo`: the parse, then the speaker's process says the topic (its high process).
+        e.register(addr::CMD_SAY_TO, |e, a| {
+            let outs = SCENE_ARGS + 0x40;
+            let mut words = args![a[0], a[1], a[7], a[2], a[3], a[4], a[5]];
+            words.extend((0..6).map(|i| outs + 4 * i));
+            e.call(addr::SCRIPT_PARSE_PARAMETERS, &words);
+            let topic = e.mem.u32(outs + 4);
+            let process = e.mem.u32(a[2] + addr::ACTOR_PROCESS_OFFSET);
+            if process != 0 && e.mem.u32(process) != 0 && topic != 0 {
+                e.vcall(
+                    process,
+                    addr::PROCESS_SAY_TOPIC_SLOT,
+                    &args![a[2], topic, 0u32, 0u32, 1u32, 1u32],
+                );
+            }
+            eax(1)
+        });
         // An actor is in a conversation while a test says so.
         e.register(addr::MOBILE_IS_IN_DIALOGUE, |e, a| {
             eax(e.mem.u32(a[0] + DIALOGUE_OFFSET))
@@ -1201,6 +1218,28 @@ impl Story {
         self.e.mem.set_u32(SCENE_OFFSET, 0);
         self.e.call(
             addr::CMD_START_CONVERSATION,
+            &args![0u32, 0u32, a, 0u32, 0u32, 0u32, 0u32, SCENE_OFFSET],
+        );
+        self.e.mem.u32(SCENE_OFFSET)
+    }
+
+    /// A script on `actor` says `SayTo player topic`. Returns how far the script's offset moved
+    /// (6 when the command's parameters were read).
+    pub fn script_say_to_player(&mut self, actor: u32, topic: u32) -> u32 {
+        self.script_say_to(actor, crate::actors::PLAYER_REF_ID, topic)
+    }
+
+    /// A script on `actor` says `SayTo target topic`; see [`Story::script_say_to_player`].
+    pub fn script_say_to(&mut self, actor: u32, target: u32, topic: u32) -> u32 {
+        let a = forms::form(&mut self.e, actor).expect("an actor of the story");
+        let to = forms::form(&mut self.e, target).expect("a form of the story");
+        let about = forms::form(&mut self.e, topic).expect("a form of the story");
+        for (i, v) in [to, about, 0, 0, 0, 0].into_iter().enumerate() {
+            self.e.mem.set_u32(SCENE_ARGS + 4 * i as u32, v);
+        }
+        self.e.mem.set_u32(SCENE_OFFSET, 0);
+        self.e.call(
+            addr::CMD_SAY_TO,
             &args![0u32, 0u32, a, 0u32, 0u32, 0u32, 0u32, SCENE_OFFSET],
         );
         self.e.mem.u32(SCENE_OFFSET)
