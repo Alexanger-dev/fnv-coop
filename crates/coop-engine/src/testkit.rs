@@ -31,6 +31,8 @@ pub mod companion_kit;
 // look: avatars that walk, hold weapons, wear items and have a face (docs/coop/SPECS.md S35).
 #[path = "look_kit.rs"]
 pub mod look_kit;
+#[path = "menus_kit.rs"]
+pub mod menus_kit;
 // anim: bodies that play groups, idles, jumps, sit and get knocked down (docs/coop/SPECS.md S41).
 #[path = "anim_kit.rs"]
 pub mod anim_kit;
@@ -433,6 +435,7 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
         let (quest, stage) = (e.mem.u32(SETTER + 4), e.mem.u32(SETTER + 8) as u8);
         forms::set_quest_stage(e, quest, stage);
     }
+    menus_kit::run(e, a[1], a[2]);
     eax(0)
 }
 
@@ -904,6 +907,8 @@ impl Story {
         companion_kit::register(&mut e);
         // look: the player's attacks, before the wrap is installed.
         look_kit::register(&mut e);
+        // menus a line's result opens
+        menus_kit::register(&mut e);
         crate::install(&mut e);
         Story { e }
     }

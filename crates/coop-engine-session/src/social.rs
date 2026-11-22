@@ -40,6 +40,9 @@ pub struct GuestSocial {
     pub party: PartyGuest,
     /// The rest vote.
     pub rester: Rester,
+    /// Menus the host asked this game to open that it could not, for the log (taken by the
+    /// caller).
+    pub menus_not_opened: Vec<String>,
 }
 
 /// Feeds a message of the host player's own game to the host's live layer and sends what it
@@ -137,6 +140,14 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
         }
         h.social.enactor.on_event(e, ev, &h.quests);
     }
+    for (to, m) in std::mem::take(&mut h.social.enactor.menus) {
+        let msg = Msg::Dialogue(coop_core::dialogue::DialogueMsg::OpenMenu {
+            npc: coop_core::ids::FormId(m.npc),
+            menu: m.menu.byte(),
+            value: m.value,
+        });
+        send(net, to, &msg, &mut h.send_failures);
+    }
 
     // The rest vote.
     let (msgs, passed) = h.social.rester.step(e, &mut h.view.rules);
@@ -179,6 +190,25 @@ pub(crate) fn guest_step(
         .step(e, me, &mut g.sync.live.dialogue, &share);
     for m in msgs {
         send(net, PlayerId::HOST, &Msg::Dialogue(m), &mut g.send_failures);
+    }
+    // The menus the host's run of this player's lines opens (a trade, repairs, ...).
+    for (npc, menu, value) in g.sync.live.dialogue.take_menus() {
+        let opened = coop_engine::menus::Menu::from_byte(menu).map(|menu| {
+            coop_engine::menus::open(
+                e,
+                coop_engine::menus::MenuOpen {
+                    menu,
+                    npc: npc.0,
+                    value,
+                },
+            )
+        });
+        if !matches!(opened, Some(Ok(()))) {
+            g.social.menus_not_opened.push(format!(
+                "the host's menu {menu} with {:08x} was not opened here: {opened:?}",
+                npc.0
+            ));
+        }
     }
     for npc in std::mem::take(&mut g.social.talker.greet_asks) {
         let m = Msg::Actor(coop_core::actors::ActorMsg::Greet {

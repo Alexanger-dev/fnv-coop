@@ -37,6 +37,7 @@ pub mod live;
 // look: the other player's avatar as that player (docs/coop/SPECS.md S35).
 pub mod choices;
 pub mod look;
+pub mod menus;
 pub mod puppet;
 pub mod quest;
 pub mod reward;
@@ -117,6 +118,18 @@ pub fn install(e: &mut Engine) {
     }
     if e.is_registered(addr::CMD_SAY_TO) {
         e.wrap(commands::SAY_TO, commands::say_to);
+    }
+    // Menus a line's result opens: on the host running a guest's line, for that guest
+    // (docs/coop/SPECS.md S43).
+    for (slot, wrap) in [
+        (menus::BARTER, menus::barter as engine_core::abi::AbiFn),
+        (menus::REPAIR, menus::repair),
+        (menus::TEAMMATE, menus::teammate),
+        (menus::RECIPES, menus::recipes),
+    ] {
+        if e.is_registered(slot.addr()) {
+            e.wrap(slot, wrap);
+        }
     }
     if e.is_registered(addr::OBJECTIVE_SET_STATE) {
         e.wrap(quest::OBJECTIVE_STATE, quest::objective_state);

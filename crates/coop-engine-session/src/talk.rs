@@ -1026,6 +1026,8 @@ pub struct Enactor {
     pub left: u32,
     /// Why, for the log (taken by the caller).
     pub notes: Vec<String>,
+    /// Menus a guest's line's result opens, for that guest's game (taken by the caller).
+    pub menus: Vec<(PlayerId, coop_engine::menus::MenuOpen)>,
 }
 
 impl Enactor {
@@ -1070,6 +1072,15 @@ impl Enactor {
         // companions: a hire in this line is that player's.
         let enacted =
             coop_engine::companion::with_hirer(e, from.0, |e| talk::enact(e, npc.0, choice, end));
+        // A menu the result opens is the picker's (the owner, 2026-11-22: the guest's trade
+        // window opened on the host's screen).
+        for m in coop_engine::menus::drain(e) {
+            self.notes.push(format!(
+                "player {}'s line {choice:08x} opens {:?} with {:08x}: in that player's game",
+                from.0, m.menu, m.npc
+            ));
+            self.menus.push((from, m));
+        }
         match enacted {
             Ok(()) => self.enacted += 1,
             Err(why) => {

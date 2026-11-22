@@ -346,6 +346,16 @@ impl Story {
             .set_u32(script + crate::testkit::SCRIPT_ADD_ITEM + 4, count);
     }
 
+    /// Gives info `id`'s result (said, or `end`) a command opening `menu` with the reference it
+    /// runs on (`ShowBarterMenu value`, ...) too.
+    pub fn set_info_menu(&mut self, id: u32, end: bool, menu: crate::menus::Menu, value: u32) {
+        let info = self.info_at(id);
+        let script = info + INFO_SCRIPTS + 0x80 * u32::from(end);
+        let at = script + crate::testkit::menus_kit::SCRIPT_MENU;
+        self.e.mem.set_u32(at, u32::from(menu.byte()) + 1);
+        self.e.mem.set_u32(at + 4, value);
+    }
+
     /// Puts a placed reference into `cell`, with its 3D.
     pub fn place(&mut self, reference: u32, cell: u32) {
         let r = forms::form(&mut self.e, reference).expect("a reference of the story");

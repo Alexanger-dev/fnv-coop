@@ -83,6 +83,8 @@ pub struct DialogueClient {
     waiting: Vec<(PlayerId, FormId)>,
     /// Options chosen by a vote, not yet taken: (session, choice).
     chosen: Vec<(u32, u32)>,
+    /// Menus the host asked this game to open (npc, menu, value).
+    menus: Vec<(FormId, u8, u32)>,
 }
 
 impl DialogueClient {
@@ -102,6 +104,7 @@ impl DialogueClient {
             told_busy: Busy::Free,
             waiting: Vec::new(),
             chosen: Vec::new(),
+            menus: Vec::new(),
         }
     }
 
@@ -121,6 +124,11 @@ impl DialogueClient {
         // (Gone once its step is picked.)
         let (_, votes, of, ends) = self.current()?.votes.as_ref()?;
         Some((votes.as_slice(), *of, ends.saturating_sub(now_ms)))
+    }
+
+    /// The menus the host asked this game to open since the last call (npc, menu, value).
+    pub fn take_menus(&mut self) -> Vec<(FormId, u8, u32)> {
+        std::mem::take(&mut self.menus)
     }
 
     /// The options chosen by a vote since the last call, of the shown conversation (taken once).
@@ -458,6 +466,9 @@ impl DialogueClient {
                     k.votes = None;
                     self.chosen.push((session, choice));
                 }
+            }
+            DialogueMsg::OpenMenu { npc, menu, value } => {
+                self.menus.push((npc, menu, value));
             }
             DialogueMsg::PlayerBusy { player, busy } => {
                 if player != self.me {

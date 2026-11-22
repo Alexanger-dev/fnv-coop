@@ -152,6 +152,29 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-8",
     },
+    // The commands that open a menu on the reference they run on (trade, repairs, a companion's
+    // inventory, recipes): on a co-op host running a guest's line they open for that guest, in
+    // its game (docs/coop/SPECS.md S43).
+    Entry {
+        addr: 0x005c_eeb0,
+        owners: COOP,
+        step: "C-8",
+    },
+    Entry {
+        addr: 0x005d_5200,
+        owners: COOP,
+        step: "C-8",
+    },
+    Entry {
+        addr: 0x005d_9430,
+        owners: COOP,
+        step: "C-8",
+    },
+    Entry {
+        addr: 0x005d_eb10,
+        owners: COOP,
+        step: "C-8",
+    },
     // ScriptRunner::Run: the script context pushed and popped; co-op's guest gate (the story's
     // scripts run on the host only, docs/coop/SPECS.md S5).
     Entry {

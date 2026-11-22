@@ -869,6 +869,96 @@ fn a_guests_line_runs_once_on_the_host_and_the_others_see_it() {
     assert_eq!(w.guests[1].game.scripts_run(), 0);
 }
 
+/// The owner, 2026-11-22: the guest asked a trader for her wares, and the trade window opened on
+/// the host's screen. A menu a guest's line's result opens (a trade, repairs, a companion's
+/// inventory, recipes) opens in that guest's game on its copy of the NPC; the host's game, which
+/// runs the rest of the result, opens none. Whether a companion's inventory opens is the host's
+/// game's to say (its copy of the companion, or the command's flag).
+#[test]
+fn a_menu_a_guests_line_opens_opens_in_that_guests_game_only() {
+    use coop_engine::menus::{self, Menu};
+    let mut w = World::new(&["Sunny", "Chet"]);
+    // Said: `OpenTeammateContainer` (Sunny is no companion yet); ended: `ShowBarterMenu 15`.
+    w.host.set_info_menu(SHARED_LINE, false, Menu::Teammate, 0);
+    w.host.set_info_menu(SHARED_LINE, true, Menu::Barter, 15);
+    for g in &mut w.guests {
+        g.game.set_info_menu(SHARED_LINE, false, Menu::Teammate, 0);
+        g.game.set_info_menu(SHARED_LINE, true, Menu::Barter, 15);
+    }
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    // The rest of the result ran on the host; no companion, so no inventory anywhere.
+    assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(10));
+    assert_eq!(w.host.menus_opened().0, 0);
+    assert_eq!(w.guests[0].game.menus_opened().0, 0);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.run(10);
+    assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(20));
+    assert_eq!(w.hd.social.enactor.enacted, 2);
+    // The trade, with its discount, for the guest who asked; nobody else.
+    assert_eq!(w.host.menus_opened().0, 0);
+    assert_eq!(
+        w.guests[0].game.menus_opened(),
+        (1, Some((Menu::Barter, SUNNY, 15)))
+    );
+    assert_eq!(menus::opened(&mut w.guests[0].game.e), 1);
+    assert_eq!(w.guests[1].game.menus_opened().0, 0);
+    assert!(w.guests[0].driver.social.menus_not_opened.is_empty());
+    w.guests[0].game.leave();
+    w.run(10);
+    // Sunny is a companion in the host's game now: the guest's line opens her inventory there.
+    let sunny = forms::form(&mut w.host.e, SUNNY).expect("Sunny");
+    w.host
+        .e
+        .mem
+        .set_u8(sunny + coop_engine::addr::ACTOR_TEAMMATE_OFFSET, 1);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert_eq!(w.host.menus_opened().0, 0);
+    assert_eq!(
+        w.guests[0].game.menus_opened(),
+        (2, Some((Menu::Teammate, SUNNY, 0)))
+    );
+    assert_eq!(w.guests[1].game.menus_opened().0, 0);
+    // Ended now: `ShowRecipeMenu` with a category (a form; here the quest's), sent by its id.
+    let category = forms::form(&mut w.host.e, MQ).expect("the quest");
+    w.host
+        .set_info_menu(SHARED_LINE, true, Menu::Recipes, category);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.run(10);
+    assert_eq!(w.host.menus_opened().0, 0);
+    assert_eq!(
+        w.guests[0].game.menus_opened(),
+        (3, Some((Menu::Recipes, SUNNY, MQ)))
+    );
+    w.assert_in_step();
+}
+
+/// A line of a player's own quest runs in its own game: a menu it opens opens there, as alone.
+#[test]
+fn a_menu_a_guests_own_line_opens_opens_in_its_game() {
+    use coop_engine::menus::Menu;
+    let mut w = World::new(&["Sunny"]);
+    w.guests[0]
+        .game
+        .set_info_menu(OWN_LINE, false, Menu::Repair, 0);
+    w.host.set_info_menu(OWN_LINE, false, Menu::Repair, 0);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(OWN_LINE, false);
+    w.run(10);
+    assert_eq!(
+        w.guests[0].game.menus_opened(),
+        (1, Some((Menu::Repair, SUNNY, 0)))
+    );
+    assert_eq!(w.host.menus_opened().0, 0);
+}
+
 /// PC run 30: Sunny hands over her rifle at the bottles by speaking up, outside the guest's
 /// conversation: the line ran in the guest's game, whose player alone got the rifle, and the host
 /// never met that line again. A story line's reward a guest's game gave its player goes to the

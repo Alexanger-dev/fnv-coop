@@ -1043,20 +1043,32 @@ fn tree(e: &mut Engine, root: u32, node: u32, level: u32, depth: u32, out: &mut 
     }
     let rtti = e.vcall(node, 0x8, &args![]).u32();
     let class: String = if rtti != 0 && e.mem.is_mapped(rtti) && e.mem.u32(rtti) != 0 {
-        e.mem.cstr(e.mem.u32(rtti)).into_iter().map(char::from).collect()
+        e.mem
+            .cstr(e.mem.u32(rtti))
+            .into_iter()
+            .map(char::from)
+            .collect()
     } else {
         "?".into()
     };
     let name_at = e.mem.u32(node + 8);
     let name: String = if name_at != 0 && e.mem.is_mapped(name_at) {
-        e.mem.cstr(name_at).into_iter().take(60).map(char::from).collect()
+        e.mem
+            .cstr(name_at)
+            .into_iter()
+            .take(60)
+            .map(char::from)
+            .collect()
     } else {
         String::new()
     };
     let culled = e.mem.u32(node + 0x30) & 1 != 0;
     let is_node = e.vcall(node, 0xc, &args![]).u32() != 0;
     let (base, n) = if is_node {
-        (e.mem.u32(node + 0x9c + 4), u32::from(e.mem.u16(node + 0x9c + 0xa)))
+        (
+            e.mem.u32(node + 0x9c + 4),
+            u32::from(e.mem.u16(node + 0x9c + 0xa)),
+        )
     } else {
         (0, 0)
     };
@@ -1112,7 +1124,11 @@ fn tree(e: &mut Engine, root: u32, node: u32, level: u32, depth: u32, out: &mut 
         "{}{class} '{name}'{}{}{skin_text}",
         "  ".repeat(level as usize),
         if culled { " CULLED" } else { "" },
-        if is_node { format!(" [{n}]") } else { String::new() }
+        if is_node {
+            format!(" [{n}]")
+        } else {
+            String::new()
+        }
     ));
     if level < depth && base != 0 {
         for i in 0..n.min(64) {

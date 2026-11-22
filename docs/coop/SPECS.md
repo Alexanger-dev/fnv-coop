@@ -1825,3 +1825,35 @@ every other game shows it, holds, and lists its own options when the step is ove
     both. No stop.
 - Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
   they are not shown to a watcher.
+
+## S43: menus a line opens are the picker's (implemented, run in two headless games)
+
+The owner, 2026-11-22: the guest asked a trader for her wares and the trade window opened on the
+host's screen. The host's game runs a guest's line's result (S42), and the result's
+`ShowBarterMenu` opened the menu there. Council 3-0, A, the owner's go-ahead: only the menu goes to
+the player who picked the line, for every menu with the same problem.
+
+- The four commands that open a menu with the reference they run on are wrapped (`menus`, step
+  C-8): `ShowBarterMenu [discount]` (`005ceeb0`), `ShowRepairMenu` (`005d5200`),
+  `OpenTeammateContainer [force]` (`005d9430`), `ShowRecipeMenu [category]` (`005deb10`). While
+  the host runs another player's result (`talk::enacting`), each is not run: its parameter is read
+  past as the body reads it, and the menu is kept (the NPC's id, the value; a recipe category as
+  its form id). Whether a companion's inventory opens is the host's game's to say, as the body
+  says it (its copy's teammate byte, `00566950`, or the force flag); one that would not open is
+  not sent. Otherwise the command runs as before.
+- The host's `Enactor` takes the kept menus after each run and sends each to the picker alone
+  (`DialogueMsg::OpenMenu`); the picker's game opens it on its own copy of the NPC with the
+  functions the bodies call: the trade (`00704f80`, with the discount), the repairs (`00704690`),
+  the companion's inventory (`QueueMenuCreate(1, npc, 0, 0, 3, 0)`), the recipes (`00704fc0`, with
+  the category). One it cannot open (no such NPC, no actor, no such category) is logged
+  ("co-op guest: the host's menu ... was not opened here").
+- A line of a player's own quest runs in its own game, and its menu opens there as before.
+- Not done: the barter and recipe commands can also open on a talking activator's speaker; such a
+  menu is not opened for the picker (logged).
+- Checked: session tests (a guest's line's trade with its discount, a companion's inventory only
+  once the host's copy is a companion, the recipes with a category: in the picker's game only,
+  none on the host or the other guest; a guest's own line's repairs in its game), mutation checks
+  (all killed), two headless games: both in the general store, the host pulled in, the guest
+  picked Chet's "Show me what you have for sale.": the host's game ran the line and sent the trade
+  ("co-op host: player 1's line 00104c4a opens Barter with 00104c79"); the trade window opened in
+  the guest's game only, the host's stayed on the conversation.

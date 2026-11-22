@@ -277,6 +277,17 @@ pub enum DialogueMsg {
         /// The option.
         choice: u32,
     },
+    /// Host, to the player who picked a line: the line's result opens a menu with `npc` (a
+    /// trade, repairs, ...) in that player's game, not in the host's, which ran the rest of the
+    /// result (the owner, 2026-11-22: the guest's trade window opened on the host's screen).
+    OpenMenu {
+        /// The NPC (the reference the result's command ran on).
+        npc: FormId,
+        /// Which menu (`coop_engine::menus::Menu` as a byte).
+        menu: u8,
+        /// The command's value (a trade's discount, a recipe category's form id, ...).
+        value: u32,
+    },
 }
 
 /// What a player is doing, for a conversation that would take it in (D13).

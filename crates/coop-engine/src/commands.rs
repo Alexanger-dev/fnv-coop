@@ -343,7 +343,7 @@ pub struct Scene {
 /// flags; defaults 0, 0, 0, 0, 1, 0); `None` when the parse fails. The offset into the script
 /// data is moved on as the body's own parse moves it; with `keep` it is put back afterwards, so
 /// the body can parse again.
-fn parse(e: &mut Engine, a: &[u32], keep: bool) -> Option<[u32; 6]> {
+pub(crate) fn parse(e: &mut Engine, a: &[u32], keep: bool) -> Option<[u32; 6]> {
     let word = |i: usize| a.get(i).copied().unwrap_or(0);
     let offset_at = word(7);
     let before = if offset_at != 0 {

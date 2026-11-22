@@ -921,6 +921,29 @@ pub const MOBILE_STOP_CURRENT_DIALOGUE: u32 = 0x0093_4250;
 pub const ACTOR_SAY_PAIR: u32 = 0x0057_bd60;
 /// `MobileObject::GetCurrentProcessType` (`00931850`, `thiscall`): 0 for high process.
 pub const MOBILE_PROCESS_TYPE: u32 = 0x0093_1850;
+
+// Menus a line's result opens (docs/coop/SPECS.md S43, `menus`), from
+// `tesscriptfunctions_p5`-`p8.rs`.
+
+/// The `ShowBarterMenu [discount]` script command's body (`cdecl`, the eight script-command words).
+pub const CMD_SHOW_BARTER_MENU: u32 = 0x005c_eeb0;
+/// The `ShowRepairMenu` script command's body (no parameters).
+pub const CMD_SHOW_REPAIR_MENU: u32 = 0x005d_5200;
+/// The `OpenTeammateContainer [force]` script command's body.
+pub const CMD_OPEN_TEAMMATE_CONTAINER: u32 = 0x005d_9430;
+/// The `ShowRecipeMenu [category]` script command's body.
+pub const CMD_SHOW_RECIPE_MENU: u32 = 0x005d_eb10;
+/// `BarterMenu` create (`cdecl`: the actor, the discount), as `ShowBarterMenu` calls it.
+pub const SHOW_BARTER: u32 = 0x0070_4f80;
+/// The repair services menu (`cdecl`: the actor), as `ShowRepairMenu` calls it.
+pub const SHOW_REPAIR: u32 = 0x0070_4690;
+/// The recipe menu (`cdecl`: the reference, the category or 0), as `ShowRecipeMenu` calls it.
+pub const SHOW_RECIPES: u32 = 0x0070_4fc0;
+/// `thiscall` on an actor: its byte at `+0x18d` ([`ACTOR_TEAMMATE_OFFSET`]), which
+/// `OpenTeammateContainer` reads.
+pub const ACTOR_FORCE_NEXT_UPDATE: u32 = 0x0056_6950;
+/// `Interface::QueueMenuCreate` (`cdecl`: menu, reference, 0, 0, flag, 0).
+pub const QUEUE_MENU_CREATE: u32 = 0x0070_9470;
 /// `SayTo`'s virtual slots on a process: its talking state (`0x648`, a word), whom it talks to
 /// (`0x628`, the other actor), and say the topic (`0x2a4`: speaker, topic, flag, 0, 1, 1).
 pub const PROCESS_TALK_STATE_SLOT: u32 = 0x648;
