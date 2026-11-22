@@ -62,9 +62,11 @@ use engine_core::Engine;
 pub const FOLLOW_DISTANCE: f32 = 200.0;
 
 /// How far a copy a guest's game takes over may be from where the host's game had it before it
-/// is put there (units): a copy that stayed behind while nobody was near, not one that walked a
-/// few steps of its own.
-pub const TAKEOVER_DRIFT: f32 = 1000.0;
+/// is put there (units, about half a metre): it goes on from the host's place (the owner,
+/// 2026-11-22: the guest's copy of Sunny, a few steps behind the host's as it followed it, was
+/// taken over where it stood, and the host's Sunny walked back to it and on to her spot again;
+/// council 3-0, A).
+pub const TAKEOVER_DRIFT: f32 = 32.0;
 /// See [`FOLLOW_DISTANCE`].
 pub const FOLLOW_MS: u64 = 1500;
 /// How long a copy in a conversation in this game is left to it (not led, put back or asked to

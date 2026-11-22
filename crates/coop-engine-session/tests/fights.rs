@@ -1268,7 +1268,10 @@ fn the_nearest_players_game_runs_an_actor() {
     p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
     p.frames(20);
     p.host.set_near(RAIDER, true);
-    // The guest's game moves it: the host's copy follows.
+    // Taken over (its copy goes on from the host's place), the guest's game moves it: the host's
+    // copy follows.
+    p.frames(2);
+    assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
     p.guest.move_actor(RAIDER, [200.0, 120.0, 0.0], 1.0);
     p.frames(20);
     assert!(close(p.host.actor_view(RAIDER).pos, [200.0, 120.0, 0.0]));
@@ -1500,6 +1503,47 @@ fn an_actor_a_guest_takes_over_goes_on_from_the_hosts_place() {
     p.frames(80);
     assert!(p.gd.sync.live.actors.owns(coop_core::ids::FormId(RAIDER)));
     assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
+}
+
+/// The owner, 2026-11-22: the guest's copy of Sunny, following the host's a few steps behind, was
+/// taken over where it stood; the host's Sunny walked back to it and on to her spot again. A copy
+/// taken over goes on from the host's place, a few steps off too.
+#[test]
+fn an_actor_a_guest_takes_over_a_few_steps_off_goes_on_from_the_hosts_place() {
+    let mut p = Pair::with(Cap::Avatar, Some(fight::Cap::parse("damage")));
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.gd.fight.as_mut().unwrap().lead_on = false;
+    p.host.move_player(HOUSE, [3000.0, 3000.0, 0.0], 0.0);
+    p.guest.move_player(HOUSE, [20.0, 20.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    // The host hands it over; the guest's copy, following it, is a few steps behind just then.
+    let id = coop_core::ids::FormId(RAIDER);
+    let mut frames = 0;
+    loop {
+        p.t += 50;
+        p.hd.step(&mut p.host.e, &mut p.hnet, p.t);
+        let handed =
+            p.hd.sync
+                .live
+                .actors
+                .own
+                .get(id)
+                .is_some_and(|r| r.owner.is_some_and(|o| !o.is_host()));
+        if handed || frames > 200 {
+            break;
+        }
+        p.guest.run_quest_script();
+        p.gd.step(&mut p.guest.e, &mut p.gnet, p.t);
+        frames += 1;
+    }
+    assert!(!p.gd.sync.live.actors.owns(id));
+    p.guest.place_actor(RAIDER, HOUSE, [160.0, 20.0, 0.0], 0.5);
+    p.guest.run_quest_script();
+    p.gd.step(&mut p.guest.e, &mut p.gnet, p.t);
+    assert!(p.gd.sync.live.actors.owns(id));
+    let g = p.guest.actor_view(RAIDER);
+    assert!(close(g.pos, [10.0, 20.0, 0.0]), "{g:?}");
 }
 
 /// Harness, 2026-11-13: Sunny walked from the saloon to her campfire in the host's game and was
