@@ -20,6 +20,8 @@ pub struct View {
     pub picker: Option<PlayerId>,
     /// True once this machine reported its lines done for the current step.
     pub reported: bool,
+    /// The response of the step's line the game that said it began last (0 at its start).
+    pub response: u32,
 }
 
 /// The table asks this player's game to say one of its options, picked by another player.
@@ -326,6 +328,26 @@ impl DialogueClient {
         })
     }
 
+    /// This game said the playing step's line (it picked it) and its NPC began response `n` of
+    /// it: the message telling the others, once a response, in order (none for the line's start,
+    /// response 0, which `Picked` is).
+    pub fn response_begun(&mut self, n: u32) -> Option<DialogueMsg> {
+        let me = self.me;
+        let v = &mut self
+            .current_mut()
+            .filter(|k| k.view.playing.is_some() && k.view.picker == Some(me))?
+            .view;
+        if n <= v.response {
+            return None;
+        }
+        v.response = n;
+        Some(DialogueMsg::Response {
+            session: v.session,
+            step: v.step,
+            n,
+        })
+    }
+
     /// Ends the conversation (initiator, while in it).
     pub fn close(&mut self) -> Option<DialogueMsg> {
         let v = self.mine()?.view;
@@ -370,6 +392,7 @@ impl DialogueClient {
                             playing: None,
                             picker: None,
                             reported: false,
+                            response: 0,
                         },
                         joined: vec![initiator],
                         menu: None,
@@ -429,9 +452,19 @@ impl DialogueClient {
                     k.view.playing = Some(choice);
                     k.view.picker = Some(by);
                     k.view.reported = false;
+                    k.view.response = 0;
                     k.menu = None;
                     k.votes = None;
                     k.last = Some(choice);
+                }
+            }
+            DialogueMsg::Response { session, step, n } => {
+                if let Some(k) = self
+                    .sessions
+                    .get_mut(&session)
+                    .filter(|k| k.view.step == step && k.view.playing.is_some())
+                {
+                    k.view.response = k.view.response.max(n);
                 }
             }
             DialogueMsg::StepEnd { session, step } => {
@@ -505,6 +538,60 @@ mod tests {
             },
             0,
         );
+    }
+
+    /// The game that picked a line says which response its NPC began (once each, in order); a
+    /// watcher takes the latest of the playing step, from 0 at each line's start.
+    #[test]
+    fn a_lines_response_is_told_by_its_picker_and_taken_by_the_others() {
+        let mut talker = DialogueClient::new(PlayerId(1));
+        let mut watcher = DialogueClient::new(PlayerId(2));
+        let picked = |step| DialogueMsg::Picked {
+            session: 4,
+            step,
+            choice: 7,
+            by: PlayerId(1),
+        };
+        for c in [&mut talker, &mut watcher] {
+            start(c, 1);
+            assert!(c.response_begun(1).is_none(), "nothing playing");
+            c.on_msg(picked(1), 1);
+        }
+        assert!(watcher.response_begun(1).is_none(), "not its line");
+        let m = talker.response_begun(1).expect("told");
+        assert_eq!(
+            m,
+            DialogueMsg::Response {
+                session: 4,
+                step: 1,
+                n: 1
+            }
+        );
+        assert!(talker.response_begun(1).is_none(), "once");
+        assert!(talker.response_begun(0).is_none());
+        watcher.on_msg(m, 2);
+        assert_eq!(watcher.view().map(|v| v.response), Some(1));
+        // An older one, or another step's, changes nothing.
+        let r = |step, n| DialogueMsg::Response {
+            session: 4,
+            step,
+            n,
+        };
+        watcher.on_msg(r(1, 0), 3);
+        watcher.on_msg(r(2, 5), 3);
+        assert_eq!(watcher.view().map(|v| v.response), Some(1));
+        // The next line starts at its first response.
+        watcher.on_msg(
+            DialogueMsg::StepEnd {
+                session: 4,
+                step: 1,
+            },
+            4,
+        );
+        watcher.on_msg(picked(2), 5);
+        assert_eq!(watcher.view().map(|v| v.response), Some(0));
+        watcher.on_msg(r(2, 2), 6);
+        assert_eq!(watcher.view().map(|v| v.response), Some(2));
     }
 
     #[test]

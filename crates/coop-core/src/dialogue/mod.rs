@@ -117,6 +117,17 @@ pub enum DialogueMsg {
         /// The player who picked it (its subtitle names that player).
         by: PlayerId,
     },
+    /// The game that said a step's line, then the host to the others: the NPC began response
+    /// `n` (from 0; the line's start is response 0) of it, so the others show that response now
+    /// (the owner, 2026-11-22: a watching player's subtitles were a response behind the voice).
+    Response {
+        /// Session.
+        session: u32,
+        /// Step.
+        step: u32,
+        /// The response begun (1 for the second).
+        n: u32,
+    },
     /// A peer finished playing a step's lines.
     LineDone {
         /// Session.

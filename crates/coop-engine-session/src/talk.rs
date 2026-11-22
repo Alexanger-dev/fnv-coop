@@ -142,6 +142,16 @@ pub struct Talker {
     pub subtitles_shown: u32,
     /// Lines shown as HUD messages instead (the game's subtitles are off).
     pub subtitles_as_messages: u32,
+    /// The responses this game's dialogue menu began: each told to the others when this game says
+    /// the step's line (the owner, 2026-11-22: a watching player was a response behind).
+    responses: talk::Responses,
+    /// Responses this game's NPC began of its lines, told to the others.
+    pub responses_told: u32,
+    /// The other player's line shown as text: (session, step, each response's subtitles, the
+    /// response shown last). Each response is shown when the game saying it begins it.
+    text_responses: Option<(u32, u32, Vec<Vec<String>>, u32)>,
+    /// Responses of other players' lines shown as text when their game began them.
+    pub responses_shown: u32,
     /// S42 step 2: the options last sent to the table (session, step, infos).
     offered: Option<(u32, u32, Vec<u32>)>,
     /// The game's option lists built when the step being played was first seen: options are
@@ -220,20 +230,40 @@ pub const WATCH_QUIET_STEPS: u32 = 18_000;
 /// has a prompt, then
 /// each of the NPC's responses (after the NPC's name, when it has one), each as a subtitle of its
 /// own ([`talk::subtitle_parts`]: a long one in several).
+#[cfg(test)]
 fn messages(picker: PlayerId, npc: Option<&str>, text: &str, prompt: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    line_parts(picker, npc, text, prompt).concat()
+}
+
+/// [`messages`] by response: the first holds the prompt's subtitles too (shown when the line
+/// starts), each other one response's (shown when the game saying the line begins it).
+fn line_parts(picker: PlayerId, npc: Option<&str>, text: &str, prompt: &str) -> Vec<Vec<String>> {
+    let mut first = Vec::new();
     if !prompt.is_empty() {
-        out.extend(talk::subtitle_parts(&format!(
+        first.extend(talk::subtitle_parts(&format!(
             "{}: {prompt}",
             player_name(picker)
         )));
     }
-    for t in text.split(" | ").filter(|t| !t.trim().is_empty()) {
+    let mut out = vec![first];
+    for (i, t) in text
+        .split(" | ")
+        .filter(|t| !t.trim().is_empty())
+        .enumerate()
+    {
         let t = match npc {
             Some(name) => format!("{name}: {}", t.trim()),
             None => t.trim().to_string(),
         };
-        out.extend(talk::subtitle_parts(&t));
+        let parts = talk::subtitle_parts(&t);
+        if i == 0 {
+            out[0].extend(parts);
+        } else {
+            out.push(parts);
+        }
+    }
+    if out[0].is_empty() && out.len() == 1 {
+        out.clear();
     }
     out
 }
@@ -263,6 +293,62 @@ impl Talker {
             self.subtitles.pop_front();
         }
         self.subtitle_new_line = true;
+    }
+
+    /// Another player's line as text: its start (the prompt and the first response) now, each
+    /// other response when the game saying it begins it ([`Talker::pace`]).
+    fn show_line_text(&mut self, v: coop_core::dialogue::View, parts: Vec<Vec<String>>) {
+        let first = parts.first().cloned().unwrap_or_default();
+        self.text_responses = Some((v.session, v.step, parts, 0));
+        self.queue_subtitles(first);
+    }
+
+    /// The response the game saying the step's line began last, shown as text in the place of
+    /// what is left of the one before (a response skipped there is skipped here too).
+    fn show_response(&mut self, v: coop_core::dialogue::View) {
+        let next = match &mut self.text_responses {
+            Some((session, step, parts, shown))
+                if (*session, *step) == (v.session, v.step) && v.response > *shown =>
+            {
+                let lines = parts.get(v.response as usize).cloned();
+                if lines.is_some() {
+                    *shown = v.response;
+                }
+                lines
+            }
+            _ => None,
+        };
+        if let Some(lines) = next {
+            self.queue_subtitles(lines);
+            self.responses_shown += 1;
+        }
+    }
+
+    /// Keeps the other players in step with the game saying a line, response by response (the
+    /// owner, 2026-11-22: a watching player's subtitles were a response behind the voice; the
+    /// owner's choice, council 3-0): this game's NPC beginning a response of a line this game
+    /// said is told to the others; the window shows each response of another player's line when
+    /// that game begins it ([`coop_engine::watch::set_response`]), and so does the text.
+    fn pace(&mut self, e: &mut Engine, client: &mut DialogueClient, out: &mut Vec<DialogueMsg>) {
+        let view = client.view().copied();
+        if let Some((info, n)) = self.responses.observe(e) {
+            if view.is_some_and(|v| v.playing == Some(info)) {
+                if let Some(m) = client.response_begun(n) {
+                    out.push(m);
+                    self.responses_told += 1;
+                }
+            }
+        }
+        let Some(v) = view else {
+            self.text_responses = None;
+            return;
+        };
+        let Some(choice) = v.playing else {
+            return;
+        };
+        coop_engine::watch::set_response(e, choice, v.response);
+        // (A response begun before the line was shown here comes now, after its start.)
+        self.show_response(v);
     }
 
     /// Shows the next waiting subtitle once the HUD's last has ended (the parts of one line each
@@ -387,6 +473,7 @@ impl Talker {
         self.vote(e, client, &mut out);
         self.share(e, me, client, &mut out);
         self.watch(e, me, client, &mut out);
+        self.pace(e, client, &mut out);
         self.drive(e, client, &mut out);
         self.options(e, me, client, &mut out);
         out
@@ -846,12 +933,15 @@ impl Talker {
             } else if joined && near {
                 if let Some((text, prompt)) = line_text(e, choice) {
                     let name = talk::name_of(e, v.npc.0);
-                    self.queue_subtitles(messages(
-                        v.picker.unwrap_or(v.initiator),
-                        name.as_deref(),
-                        &text,
-                        &prompt,
-                    ));
+                    self.show_line_text(
+                        v,
+                        line_parts(
+                            v.picker.unwrap_or(v.initiator),
+                            name.as_deref(),
+                            &text,
+                            &prompt,
+                        ),
+                    );
                     self.lines_shown += 1;
                 }
             } else {
@@ -885,12 +975,15 @@ impl Talker {
                 } else {
                     if let Some((text, prompt)) = line_text(e, choice) {
                         let name = talk::name_of(e, v.npc.0);
-                        self.queue_subtitles(messages(
-                            v.picker.unwrap_or(v.initiator),
-                            name.as_deref(),
-                            &text,
-                            &prompt,
-                        ));
+                        self.show_line_text(
+                            v,
+                            line_parts(
+                                v.picker.unwrap_or(v.initiator),
+                                name.as_deref(),
+                                &text,
+                                &prompt,
+                            ),
+                        );
                         self.lines_far_shown += 1;
                     }
                     f

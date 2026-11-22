@@ -45,6 +45,9 @@ pub(crate) const MATCHING_INFO: WrapSlot =
 
 /// The countdown a held window is kept at (seconds; any value above zero holds it).
 const HOLD_SECONDS: f32 = 1.0;
+/// The longest the window waits, its NPC done saying a response, for the talker's game to begin
+/// the next (a talker's game that never says: its line said outside a dialogue menu).
+pub const RESPONSE_HOLD_MS: u32 = 3_000;
 /// The longest a line is shown before the next waiting one replaces it, when the speaker never
 /// says it is done (a line without a voice file, a speaker without a process for speech).
 pub const LINE_MAX_MS: u32 = 20_000;
@@ -94,6 +97,14 @@ struct State {
     /// The window this game drove closed by the game's own doing (its player's line ended the
     /// conversation): the session tells the table, which ends it for every player.
     ended: bool,
+    /// The response the talker's game began last of the line it says (the line's info form id,
+    /// the response from 0; [`set_response`]).
+    talker: Option<(u32, u32)>,
+    /// The responses the window began ([`crate::talk::Responses`]).
+    responses: crate::talk::Responses,
+    /// Since when (the game's milliseconds) the window holds on a response the talker's game is
+    /// not past yet, and which (the line, the response).
+    held: Option<(u32, u32, u32)>,
 }
 
 /// The game-wide state of the watching window.
@@ -106,12 +117,104 @@ pub struct Watch {
     results_skipped: AtomicU64,
     /// Windows the player closed.
     left: AtomicU64,
+    /// Responses the window moved on to at once, the talker's game past them.
+    responses_caught_up: AtomicU64,
+    /// Times the window waited on a response for the talker's game.
+    responses_held: AtomicU64,
 }
 
 fn state<R>(e: &mut Engine, f: impl FnOnce(&mut State) -> R) -> R {
     let w = e.ext_free::<Watch>();
     let mut s = w.state.lock().unwrap_or_else(PoisonError::into_inner);
     f(&mut s)
+}
+
+/// The talker's game began response `n` (from 0) of line `info` (a form id): the window shows
+/// each response of it when that game begins it (the owner, 2026-11-22: the watching player's
+/// window was a response behind the talker's). Behind, it moves on to that response at once;
+/// ahead (its NPC done saying a response the talker's has not moved past), it waits, at most
+/// [`RESPONSE_HOLD_MS`].
+pub fn set_response(e: &mut Engine, info: u32, n: u32) {
+    state(e, |s| s.talker = Some((info, n)));
+}
+
+/// The talker's game's response last set ([`set_response`]): the line and the response.
+pub fn talker_response(e: &mut Engine) -> Option<(u32, u32)> {
+    state(e, |s| s.talker)
+}
+
+/// `(responses moved on to at once, waits on the talker's game)` since the game started.
+pub fn response_counts(e: &mut Engine) -> (u64, u64) {
+    let w = e.ext_free::<Watch>();
+    (
+        w.responses_caught_up.load(Ordering::SeqCst),
+        w.responses_held.load(Ordering::SeqCst),
+    )
+}
+
+/// Keeps the watching window `menu` on `speaker` at the talker's game's response of the line it
+/// shows ([`set_response`]), before the game's `DoIdle` moves it on by itself.
+fn keep_pace(e: &mut Engine, menu: u32, speaker: u32) {
+    let mut responses = state(e, |s| s.responses);
+    let seen = responses.observe(e);
+    state(e, |s| s.responses = responses);
+    let Some((info, index)) = seen else {
+        return;
+    };
+    let talker = state(e, |s| s.talker.filter(|(i, _)| *i == info).map(|(_, n)| n));
+    let Some(n) = talker else {
+        return;
+    };
+    if !more_to_say(e) {
+        return;
+    }
+    let at = menu + addr::DIALOG_MENU_STATE_OFFSET;
+    let done = e.mem.u8(speaker + addr::REF_LINE_DONE_OFFSET) != 0;
+    if index < n {
+        // Behind: the next response now, as `DoIdle` begins it once a response is said (the
+        // speaker's saying of this one, when it is still saying it, stopped first, as `DoIdle`
+        // stops it on a click).
+        if !done {
+            e.call(addr::MOBILE_STOP_CURRENT_DIALOGUE, &args![speaker]);
+        }
+        e.mem.set_f32(menu + addr::DIALOG_MENU_ELAPSED_OFFSET, 0.0);
+        let st = e
+            .call(addr::DIALOG_MENU_LOAD_NEXT_SCREEN, &args![menu, 0u32])
+            .u32();
+        e.mem.set_u32(at, st);
+        e.ext_free::<Watch>()
+            .responses_caught_up
+            .fetch_add(1, Ordering::SeqCst);
+        state(e, |s| s.held = None);
+        log(|| {
+            format!(
+                "line {info:08x}: response {} begun at once (the talker's {n})",
+                index + 1
+            )
+        });
+        return;
+    }
+    // Ahead: done saying this response, the talker's game not past it: it waits.
+    if !done || !matches!(e.mem.u32(at), 1 | 3) {
+        return;
+    }
+    let now = game_ms(e);
+    let (since, new) = state(e, |s| match s.held {
+        Some((i, r, since)) if i == info && r == index => (since, false),
+        _ => {
+            s.held = Some((info, index, now));
+            (now, true)
+        }
+    });
+    if new {
+        e.ext_free::<Watch>()
+            .responses_held
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    if now.wrapping_sub(since) < RESPONSE_HOLD_MS {
+        e.mem.set_u32(at, 3);
+        e.mem.set_f32(addr::DIALOG_COUNTDOWN, HOLD_SECONDS);
+    }
 }
 
 /// Installs the wrap where the game has the function; called by [`crate::install`].
@@ -576,7 +679,7 @@ fn info_topic(e: &mut Engine, id: u32) -> u32 {
 }
 
 /// The open menu's topic manager's current topic (a `MenuTopic`), 0 when none.
-fn current_topic(e: &mut Engine) -> u32 {
+pub(crate) fn current_topic(e: &mut Engine) -> u32 {
     let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
     if menu == 0 {
         return 0;
@@ -665,6 +768,9 @@ pub(crate) fn do_idle(e: &mut Engine, a: &[u32]) -> Ret {
     let speaker = actor.unwrap_or(0);
     // Nothing more to say: the window stays on its line, unless this game drives it.
     let driving = state(e, |s| s.driving);
+    if !driving {
+        keep_pace(e, menu, speaker);
+    }
     if !driving && !more_to_say(e) && matches!(e.mem.u32(at), 1 | 3) {
         e.mem.set_u32(at, 3);
         e.mem.set_f32(addr::DIALOG_COUNTDOWN, HOLD_SECONDS);
@@ -778,6 +884,7 @@ mod tests {
     const GREETING: u32 = BASE + 0x4f0c;
     const SAID_COUNT: u32 = BASE + 0x4f10;
     const SAID: u32 = BASE + 0x4e00;
+    const STOPS: u32 = BASE + 0x4f14;
     const RESPONSES: u32 = 2;
 
     fn eax(v: u32) -> Ret {
@@ -875,6 +982,11 @@ mod tests {
             Ret::default()
         });
         e.register(addr::TOPICS_CURRENT_TOPIC, |e, a| eax(e.mem.u32(a[0])));
+        // The speaker's saying stopped: counted.
+        e.register(addr::MOBILE_STOP_CURRENT_DIALOGUE, |e, _| {
+            e.mem.set_u32(STOPS, e.mem.u32(STOPS) + 1);
+            Ret::default()
+        });
         e.register(addr::MENU_TOPIC_CONSTRUCT, |e, a| {
             e.mem.set_u32(a[0] + addr::MENU_TOPIC_INFO_OFFSET, a[3]);
             e.mem.set_u32(a[0] + 0x20, RESPONSES);
@@ -917,6 +1029,8 @@ mod tests {
                 return eax(2);
             }
             e.mem.set_u32(t + 0x20, left - 1);
+            e.mem
+                .set_u8(a[0] + addr::DIALOG_MENU_RESPONSE_SHOWN_OFFSET, 1);
             let n = e.mem.u32(SAID_COUNT);
             e.mem
                 .set_u32(SAID + 4 * n, e.mem.u32(t + addr::MENU_TOPIC_INFO_OFFSET));
@@ -1387,6 +1501,79 @@ mod tests {
         );
         assert_eq!(e.mem.u32(MENU + addr::DIALOG_MENU_STATE_OFFSET), 3);
         assert_eq!(e.mem.u32(addr::DIALOG_MENU_OPEN), MENU);
+    }
+
+    /// The owner, 2026-11-22: the watching player's window was a response behind the talker's.
+    /// Behind the talker's game, the window begins the next response at once, its NPC's saying
+    /// of the last stopped; ahead (done with a response the talker's game is not past), it waits
+    /// for it, at most a while.
+    #[test]
+    fn the_window_says_each_response_when_the_talkers_game_begins_it() {
+        let mut e = world();
+        e.mem.set_u32(GREETING, INFOS[2]);
+        watch_line(&mut e, NPC, IDS[0]);
+        set_response(&mut e, IDS[0], 0);
+        idle(&mut e, 1);
+        assert_eq!(said(&e), vec![INFOS[0]]);
+        // Ahead: its first response said, the talker's game still on its first: it waits.
+        line_done(&mut e);
+        idle(&mut e, 20);
+        assert_eq!(said(&e), vec![INFOS[0]]);
+        assert_eq!(response_counts(&mut e), (0, 1));
+        // The talker's game begins the second: so does the window.
+        set_response(&mut e, IDS[0], 1);
+        idle(&mut e, 2);
+        assert_eq!(said(&e), vec![INFOS[0], INFOS[0]]);
+        assert_eq!(e.mem.u32(STOPS), 0, "nothing cut");
+        // Another line: behind this time (its first response still being said), it is cut and the
+        // second begun at once.
+        watch_line(&mut e, NPC, IDS[1]);
+        line_done(&mut e);
+        idle(&mut e, 1);
+        assert_eq!(said(&e).len(), 3);
+        idle(&mut e, 3);
+        assert_eq!(said(&e).len(), 3, "the talker's game not past it");
+        e.mem.set_u8(ACTOR + addr::REF_LINE_DONE_OFFSET, 0);
+        set_response(&mut e, IDS[1], 1);
+        idle(&mut e, 1);
+        assert_eq!(said(&e), vec![INFOS[0], INFOS[0], INFOS[1], INFOS[1]]);
+        assert_eq!(e.mem.u32(STOPS), 1);
+        assert_eq!(response_counts(&mut e).0, 2);
+        // Another response's word for another line changes nothing.
+        watch_line(&mut e, NPC, IDS[2]);
+        line_done(&mut e);
+        idle(&mut e, 1);
+        set_response(&mut e, IDS[0], 1);
+        let before = said(&e).len();
+        e.mem.set_u32(addr::GAME_MS, 1000);
+        line_done(&mut e);
+        idle(&mut e, 5);
+        assert_eq!(
+            said(&e).len(),
+            before + 1,
+            "no word for this line: it goes on by itself"
+        );
+    }
+
+    /// A talker's game that never says it began the next response (its line said outside a
+    /// dialogue menu): the window waits a while, then goes on by itself.
+    #[test]
+    fn a_window_waiting_on_the_talkers_game_goes_on_after_a_while() {
+        let mut e = world();
+        e.mem.set_u32(GREETING, INFOS[2]);
+        e.mem.set_u32(addr::GAME_MS, 5000);
+        watch_line(&mut e, NPC, IDS[0]);
+        set_response(&mut e, IDS[0], 0);
+        idle(&mut e, 1);
+        line_done(&mut e);
+        idle(&mut e, 5);
+        assert_eq!(said(&e).len(), 1);
+        e.mem.set_u32(addr::GAME_MS, 5000 + RESPONSE_HOLD_MS - 1);
+        idle(&mut e, 5);
+        assert_eq!(said(&e).len(), 1);
+        e.mem.set_u32(addr::GAME_MS, 5000 + RESPONSE_HOLD_MS);
+        idle(&mut e, 10);
+        assert_eq!(said(&e), vec![INFOS[0], INFOS[0]]);
     }
 
     #[test]

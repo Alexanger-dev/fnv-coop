@@ -35,7 +35,12 @@ const NAMES: u32 = KIT + 0x800;
 const NAME_SLOT: u32 = 0x40;
 const NAMES_GIVEN: u32 = KIT + 0x20;
 /// The dialogue menu, the sleep and wait menu, its hours tile, and a save's name.
-const DIALOG_MENU: u32 = KIT + 0x100;
+const DIALOG_MENU: u32 = KIT + 0xc000;
+/// The dialogue menu's topic manager (its current topic) and the one `MenuTopic` it says from:
+/// its info (+0x18) and how many of its responses are left to say (+0x20), as the watching
+/// window's test game has it.
+const MENU_TOPICS: u32 = KIT + 0xc200;
+const MENU_TOPIC: u32 = KIT + 0xc240;
 const SLEEP_MENU: u32 = KIT + 0x200;
 const HOURS_TILE: u32 = KIT + 0x300;
 const SAVE_NAME: u32 = KIT + 0x400;
@@ -119,6 +124,11 @@ fn menu_create(e: &mut Engine, a: &[u32]) -> Ret {
     }
     e.mem
         .set_u32(DIALOG_MENU + addr::DIALOG_MENU_SPEAKER_OFFSET, a[0]);
+    e.mem
+        .set_u32(DIALOG_MENU + addr::DIALOG_MENU_TOPICS_OFFSET, MENU_TOPICS);
+    e.mem.set_u32(MENU_TOPICS, 0);
+    e.mem
+        .set_u8(DIALOG_MENU + addr::DIALOG_MENU_RESPONSE_SHOWN_OFFSET, 0);
     e.mem.set_u32(addr::DIALOG_MENU_OPEN, DIALOG_MENU);
     eax(1)
 }
@@ -241,6 +251,10 @@ pub(crate) fn register(e: &mut Engine) {
     e.mem
         .set_u32(SLEEP_MENU + addr::SLEEP_WAIT_HOURS_TILE_OFFSET, HOURS_TILE);
     e.register(addr::INFO_RUN_RESULT, run_result);
+    e.register(addr::TOPICS_CURRENT_TOPIC, |e, a| eax(e.mem.u32(a[0])));
+    e.register(addr::MENU_TOPIC_CURRENT_RESPONSE, |e, a| {
+        eax(e.mem.u32(a[0] + 0x20))
+    });
     e.register(addr::INFO_MARK_SAID, |e, a| {
         e.mem.set_u8(a[0] + addr::INFO_SAID_OFFSET, 1);
         Ret::default()
@@ -378,7 +392,37 @@ impl Story {
     /// true), as the dialogue menu does.
     pub fn say(&mut self, id: u32, end: bool) {
         let npc = crate::talk::menu_npc(&mut self.e).expect("a conversation is open");
+        if !end {
+            // The menu's current topic is the line, its first response said
+            // (`DialogMenu::LoadNextScreen`).
+            let info = self.info_at(id);
+            let responses = self
+                .e
+                .mem
+                .cstr(info + INFO_TEXT)
+                .split(|b| *b == b'|')
+                .count() as u32;
+            self.e
+                .mem
+                .set_u32(MENU_TOPIC + addr::MENU_TOPIC_INFO_OFFSET, info);
+            self.e.mem.set_u32(MENU_TOPIC + 0x20, responses - 1);
+            self.e.mem.set_u32(MENU_TOPICS, MENU_TOPIC);
+            self.e
+                .mem
+                .set_u8(DIALOG_MENU + addr::DIALOG_MENU_RESPONSE_SHOWN_OFFSET, 1);
+        }
         self.say_as(npc, id, end);
+    }
+
+    /// The dialogue menu says the next response of the line it says (its voice for the last one
+    /// ended, or the player clicked on): false when none was left.
+    pub fn next_response(&mut self) -> bool {
+        let left = self.e.mem.u32(MENU_TOPIC + 0x20);
+        if left == 0 || self.e.mem.u32(MENU_TOPICS) != MENU_TOPIC {
+            return false;
+        }
+        self.e.mem.set_u32(MENU_TOPIC + 0x20, left - 1);
+        true
     }
 
     /// Reference `npc` says info `id`, whatever the dialogue menu shows (an NPC's own line).

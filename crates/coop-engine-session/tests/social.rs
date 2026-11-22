@@ -617,7 +617,11 @@ fn a_far_player_gets_the_lines_as_subtitles_one_at_a_time() {
         "Sunny Smiles: Head on up to the saloon."
     );
     w.host.subtitle_ends();
-    w.run(2);
+    w.run(20);
+    // The second response waits for the guest's game to begin it (the owner, 2026-11-22).
+    assert_eq!(w.host.subtitles().len(), 2);
+    assert!(w.guests[0].game.next_response());
+    w.run(4);
     assert_eq!(
         w.host.subtitles()[2],
         "Sunny Smiles: I will meet you there."
@@ -627,6 +631,68 @@ fn a_far_player_gets_the_lines_as_subtitles_one_at_a_time() {
     assert_eq!(w.host.subtitles().len(), 3);
     assert!(w.host.messages().is_empty(), "{:?}", w.host.messages());
     assert_eq!(w.hd.social.talker.subtitles_shown, 3);
+    assert_eq!(w.guests[0].driver.social.talker.responses_told, 1);
+    assert_eq!(w.hd.social.talker.responses_shown, 1);
+    assert_eq!(w.hd.social.talker.subtitles_cut, 0);
+}
+
+/// The owner, 2026-11-22: the guest's Sunny was a response ahead of the host's subtitles within
+/// one line. Each response of a line shows when the game saying it begins it: what is still up or
+/// waiting of the response before is ended (council 3-0, the owner's go-ahead: exact timing).
+#[test]
+fn a_far_players_subtitles_show_each_response_when_it_is_said() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.set_name(SUNNY, "Sunny Smiles");
+    w.host.subtitles_on();
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert_eq!(w.host.subtitles(), ["Guest: Where is Sunny?"]);
+    // The guest's Sunny begins her second response before the host's first subtitle ends: the
+    // host's subtitle is ended, the first response's dropped, the second's shown.
+    assert!(w.guests[0].game.next_response());
+    w.run(4);
+    assert_eq!(w.hd.social.talker.subtitles_cut, 1);
+    w.host.hud_update();
+    w.run(2);
+    assert_eq!(
+        w.host.subtitles(),
+        [
+            "Guest: Where is Sunny?",
+            "Sunny Smiles: I will meet you there."
+        ]
+    );
+    assert_eq!(w.hd.social.talker.responses_shown, 1);
+    // A watching window would be told the same (S42: the host's window, were it near).
+    assert_eq!(
+        coop_engine::watch::talker_response(&mut w.host.e),
+        Some((SHARED_LINE, 1))
+    );
+    // No response left: nothing more is told.
+    assert!(!w.guests[0].game.next_response());
+    w.run(10);
+    assert_eq!(w.guests[0].driver.social.talker.responses_told, 1);
+    // The next line said: its first response only until its game begins another. A response its
+    // game began before the table took the line (still on the last) is told for the new line,
+    // not the last.
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.run(10);
+    w.guests[0].game.say(SHARED_LINE, false);
+    // (The guest's game alone: the host has not taken the line yet.)
+    let g = &mut w.guests[0];
+    g.driver.step(&mut g.game.e, &mut g.net, w.t);
+    assert!(g.game.next_response());
+    g.driver.step(&mut g.game.e, &mut g.net, w.t);
+    assert_eq!(g.driver.social.talker.responses_told, 1);
+    w.run(10);
+    assert_eq!(w.guests[0].driver.social.talker.responses_told, 2);
+    assert_eq!(
+        coop_engine::watch::talker_response(&mut w.host.e),
+        Some((SHARED_LINE, 1))
+    );
 }
 
 /// The owner, 2026-11-22: a far player's subtitles, each its full reading time one after the
@@ -718,11 +784,15 @@ fn waiting_subtitles_hold_while_busy_and_do_not_wait_forever() {
     w.host.close_menu();
     w.run(2);
     assert_eq!(w.host.subtitles().len(), 2);
-    // The HUD's subtitle never ends (an NPC chattering nearby): the next is shown after a while.
+    // An NPC chattering nearby, its subtitle never ending: the next response, begun, is shown
+    // after a while.
+    assert!(coop_engine::talk::subtitle(&mut w.host.e, "Trudy: Hello."));
+    assert!(w.guests[0].game.next_response());
     w.run(coop_engine_session::talk::SUBTITLE_WAIT_STEPS - 10);
-    assert_eq!(w.host.subtitles().len(), 2);
-    w.run(20);
     assert_eq!(w.host.subtitles().len(), 3);
+    w.run(20);
+    assert_eq!(w.host.subtitles().len(), 4);
+    assert_eq!(w.host.subtitles()[3], "I will meet you there.");
 }
 
 /// A subtitle longer than the game's holds is cut to what it holds (the game copies it into
@@ -749,10 +819,13 @@ fn with_subtitles_off_the_lines_come_as_messages() {
     w.run(10);
     assert!(w.host.subtitles().is_empty());
     assert_eq!(w.host.messages(), ["Guest: Where is Sunny?"]);
-    // Four seconds (80 steps of 50 ms) each.
+    // Four seconds (80 steps of 50 ms) each; the next response once begun.
     w.run(80);
     assert_eq!(w.host.messages().len(), 2);
     w.run(80);
+    assert_eq!(w.host.messages().len(), 2);
+    assert!(w.guests[0].game.next_response());
+    w.run(4);
     assert_eq!(
         w.host.messages(),
         [
@@ -804,7 +877,9 @@ fn a_far_player_who_is_free_sees_the_lines_and_no_notice() {
     w.host.move_player(STORE, [0.0; 3], 0.0);
     assert!(w.guests[0].game.talk_to(SUNNY));
     w.guests[0].game.say(SHARED_LINE, false);
-    w.run(10);
+    w.run(100);
+    assert!(w.guests[0].game.next_response());
+    w.run(100);
     w.guests[0].game.say(SHARED_LINE, true);
     w.guests[0].game.leave();
     // (Each message its four seconds.)
@@ -830,8 +905,10 @@ fn a_guests_line_runs_once_on_the_host_and_the_others_see_it() {
     assert_eq!(w.guests[0].game.said(SHARED_LINE), 1);
     assert_eq!(w.guests[0].driver.social.talker.opened, 1);
     w.assert_in_step();
-    // (Each message its four seconds.)
+    // (Each message its four seconds; the second response once the talker's Sunny begins it.)
     w.run(200);
+    assert!(w.guests[0].game.next_response());
+    w.run(4);
     // The guest standing by, taken into the conversation (D13; with no window in this test
     // game, as text), saw what was chosen and each response; so did the host, elsewhere and free
     // (S42, the owner's choice of 2026-11-21: far off, the lines come as text), not taken in.
@@ -1003,13 +1080,13 @@ fn a_line_whose_end_never_comes_is_finished_by_the_next_line_and_by_the_goodbye(
     assert_eq!(w.guests[0].driver.social.talker.picks, 2);
     assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(20));
     assert_eq!(w.hd.sync.live.dialogue.open_sessions(), 0);
+    // (Sunny's second response was never begun in the guest's game: it left first.)
     assert_eq!(
         w.host.messages(),
         [
             "Howdy.",
             "Guest: Where is Sunny?",
-            "Head on up to the saloon.",
-            "I will meet you there."
+            "Head on up to the saloon."
         ]
     );
     w.assert_in_step();
@@ -1021,10 +1098,14 @@ fn the_hosts_line_is_seen_by_a_guest_and_runs_in_the_hosts_game_only() {
     w.run(20);
     assert!(w.host.talk_to(SUNNY));
     w.host.say(SHARED_LINE, false);
+    w.run(100);
+    assert!(w.host.next_response());
+    w.run(4);
     w.host.say(SHARED_LINE, true);
     w.host.leave();
     // (Each message its four seconds.)
     w.run(200);
+    assert_eq!(w.hd.social.talker.responses_told, 1);
     assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(20));
     assert_eq!(
         w.hd.social.enactor.enacted, 0,

@@ -28,6 +28,8 @@ struct Playing {
     choice: u32,
     started_ms: u64,
     waiting: BTreeSet<PlayerId>,
+    /// The last response of its line the game that said it began (sent on to the others).
+    response: u32,
 }
 
 /// A pick of another player's option, waiting for its owner to say it.
@@ -243,6 +245,23 @@ impl DialogueHost {
                 step,
                 choice,
             } => self.pick(from, session, step, choice, now_ms, members),
+            // The game that said the step's line began its next response: to everyone else.
+            DialogueMsg::Response { session, step, n } => {
+                let Some(s) = self.sessions.get_mut(&session) else {
+                    return vec![];
+                };
+                let Some(p) = s.playing.as_mut().filter(|p| p.step == step) else {
+                    return vec![];
+                };
+                if s.last_picker != Some(from) || n <= p.response {
+                    return vec![];
+                }
+                p.response = n;
+                vec![out(
+                    Audience::AllExcept(from),
+                    DialogueMsg::Response { session, step, n },
+                )]
+            }
             DialogueMsg::LineDone { session, step } => {
                 if let Some(Session {
                     playing: Some(p), ..
@@ -412,6 +431,7 @@ impl DialogueHost {
             choice,
             started_ms: now_ms,
             waiting: s.joined.iter().copied().collect(),
+            response: 0,
         });
         self.events.push(DialogueEvent::RunBegin {
             session,
@@ -952,6 +972,42 @@ mod tests {
             last = h.on_msg(p, DialogueMsg::LineDone { session: s, step }, 10, &ALL);
         }
         last
+    }
+
+    /// The game that said a line tells which response its NPC began; the others are told, once
+    /// each, in order; nobody else's word on it counts, nor one of another step.
+    #[test]
+    fn a_lines_responses_go_from_the_game_that_said_it_to_the_others() {
+        let mut h = DialogueHost::new();
+        let s = started_all(&mut h, A);
+        h.on_msg(
+            A,
+            DialogueMsg::Pick {
+                session: s,
+                step: 1,
+                choice: 9,
+            },
+            5,
+            &ALL,
+        );
+        let r = |n, step| DialogueMsg::Response {
+            session: s,
+            step,
+            n,
+        };
+        let o = h.on_msg(A, r(1, 1), 6, &ALL);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].aud, Audience::AllExcept(A));
+        assert_eq!(o[0].msg, r(1, 1));
+        // Again, or an older one, or from a player who did not say it, or of another step.
+        assert!(h.on_msg(A, r(1, 1), 7, &ALL).is_empty());
+        assert!(h.on_msg(B, r(2, 1), 7, &ALL).is_empty());
+        assert!(h.on_msg(A, r(2, 2), 7, &ALL).is_empty());
+        assert_eq!(h.on_msg(A, r(3, 1), 8, &ALL)[0].msg, r(3, 1));
+        assert!(h.on_msg(A, r(2, 1), 9, &ALL).is_empty());
+        // Between steps: nothing.
+        done_all(&mut h, s, 1);
+        assert!(h.on_msg(A, r(4, 1), 10, &ALL).is_empty());
     }
 
     #[test]

@@ -1823,6 +1823,26 @@ every other game shows it, holds, and lists its own options when the step is ove
     Votes, 16s)" counting down; alone, at 20 seconds it was said by the guest's game, the quest at
     stage 10 in both. Again with the host voting the same: said within three seconds, stage 10 in
     both. No stop.
+- Responses in step (the owner, 2026-11-22: within one line of several sentences, the watching
+  player's Sunny was a sentence behind; council 3-0, A, the owner's go-ahead: exact timing). The
+  game that said a step's line tells each response its NPC begins (`DialogueMsg::Response`,
+  `DialogueClient::response_begun`; the table sends it on to everyone else, from the line's
+  picker only, in order): `talk::Responses` reads the open dialogue menu once a frame, each move
+  of its current topic's current response (`MenuTopic` `0083e170`, after `LoadNextScreen` said
+  one, `bResponseShown`) the next response begun. A watching window (`watch::set_response`)
+  behind the talker's game begins the next response at once (the NPC's saying of the last
+  stopped, `MobileObject::StopCurrentDialogue`, then `LoadNextScreen`, as `DoIdle` begins one);
+  ahead (its NPC done with a response the talker's has not moved past) it waits, at most
+  `RESPONSE_HOLD_MS` (3 s; a talker's line said outside a dialogue menu). As text, a line's start
+  shows the chosen option and the first response, each other response when it is begun, in the
+  place of what is left of the one before. Checked: unit tests (the table, the client, the
+  window behind, ahead and waiting too long), session tests (each response as subtitles and
+  messages when the talker's game begins it, one begun before the table took its line told for
+  that line), mutation checks (all killed), two headless games (`/tmp/s_resp.sh`: the guest's
+  Sunny began her second response and the host's window, behind, began it at once: "line
+  00105cc3: response 1 begun at once (the talker's 1)"). Left as it was: the chosen option's
+  subtitle shows before the first response's on a player following as text (the HUD shows one
+  subtitle at a time).
 - Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
   they are not shown to a watcher.
 

@@ -170,6 +170,65 @@ pub fn counts(e: &mut Engine) -> (u64, u64, u64) {
 }
 
 /// The reference id of the speaker of the open dialogue menu; `None` with no menu open.
+/// Which response of its line the open dialogue menu's NPC began last (the owner, 2026-11-22:
+/// a watching player's subtitles fell a response behind the voice). The menu says a line's
+/// responses one after another (`DialogMenu::LoadNextScreen`: the current topic's current
+/// response said, the topic moved on to the next, `0083e110`); each move of the current topic's
+/// current response (`MenuTopic` `0083e170`, 0 once every response was said) is the next
+/// response begun. Looked at once a frame; only once the menu has said a response of its current
+/// topic (`bResponseShown`): between a topic made current and its first response (the greeting
+/// while the menu fades in) nothing is begun yet.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Responses {
+    /// The current topic, its info and its current response when last looked at.
+    last: Option<(u32, u32, u32)>,
+    /// The response of that line begun last.
+    index: u32,
+}
+
+impl Responses {
+    /// The line the menu says now (its info's form id) and the response of it begun last (0 for
+    /// the first); `None` with no menu open, before its first response, or with no topic.
+    pub fn observe(&mut self, e: &mut Engine) -> Option<(u32, u32)> {
+        let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+        if menu == 0 {
+            self.last = None;
+            return None;
+        }
+        if e.mem.u8(menu + addr::DIALOG_MENU_RESPONSE_SHOWN_OFFSET) == 0 {
+            return None;
+        }
+        let topic = crate::watch::current_topic(e);
+        if topic == 0 {
+            return None;
+        }
+        let info = e.mem.u32(topic + addr::MENU_TOPIC_INFO_OFFSET);
+        if info == 0 {
+            return None;
+        }
+        let response = e
+            .call(addr::MENU_TOPIC_CURRENT_RESPONSE, &args![topic])
+            .u32();
+        self.index = match self.last {
+            Some((t, i, r)) if t == topic && i == info => {
+                if r != 0 && response != r {
+                    // The line moved on to its next response.
+                    self.index + 1
+                } else if r == 0 && response != 0 {
+                    // Done, then responses again: the same line said again.
+                    0
+                } else {
+                    self.index
+                }
+            }
+            // Another line: its first response.
+            _ => 0,
+        };
+        self.last = Some((topic, info, response));
+        Some((e.mem.u32(info + addr::FORM_ID_OFFSET), self.index))
+    }
+}
+
 pub fn menu_npc(e: &mut Engine) -> Option<u32> {
     let speaker = menu_speaker(e)?;
     Some(e.mem.u32(speaker.wrapping_add(addr::FORM_ID_OFFSET)))
