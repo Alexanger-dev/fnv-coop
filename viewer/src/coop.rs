@@ -1017,7 +1017,7 @@ impl Coop {
             Role::Host(h) => {
                 let s = &h.social;
                 format!(
-                    "co-op host social: conversations {} (guests' results run {}, left {}, greetings left to the owner's game {}), lines watched {} (in the window {}, windows closed {}, results not run there {}; from afar {} shown, {} held while busy, {} notices; subtitles {}, as messages {}; options sent {}, windows listed {}, others' options shown {}, clicks on them {}; others' picks put to this window {}, asked and said {}, asked and not said {}; joined {}, left {}, join words {}, windows on a last line {}), party saves {} ({} files), parts given back {}, rests passed {} ({} h)",
+                    "co-op host social: conversations {} (guests' results run {}, left {}, greetings left to the owner's game {}), lines watched {} (in the window {}, windows closed {}, results not run there {}; from afar {} shown, {} held while busy, {} notices; subtitles {}, as messages {}; options sent {}, windows listed {}, others' options shown {}, clicks on them {}; others' picks put to this window {}, asked and said {}, asked and not said {}; joined {}, left {}, join words {}, windows on a last line {}, pulled in {}, waited {}, waits started {}), party saves {} ({} files), parts given back {}, rests passed {} ({} h)",
                     s.talker.opened,
                     s.enactor.enacted,
                     s.enactor.left,
@@ -1042,6 +1042,9 @@ impl Coop {
                     s.talker.leaves,
                     s.talker.join_hints,
                     s.talker.join_windows,
+                    s.talker.pulled_in,
+                    s.talker.waits,
+                    s.talker.waits_started,
                     s.party.saved,
                     s.party.files_written,
                     s.party.given_back,
@@ -1052,7 +1055,7 @@ impl Coop {
             Role::Guest(Some(g)) => {
                 let s = &g.social;
                 format!(
-                    "co-op guest social: conversations {} (refused {}, not started {}, greetings left to the owner's game {}), results held for the host {held}, run here as own {own}, with no quest known {unknown}, lines watched {} (in the window {}, windows closed {}, results not run there {}; from afar {} shown, {} held while busy, {} notices; subtitles {}, as messages {}; options sent {}, windows listed {}, others' options shown {}, clicks on them {}; others' picks put to this window {}, asked and said {}, asked and not said {}; joined {}, left {}, join words {}, windows on a last line {}), part sent {} time(s), put back {}, rests passed {} ({} h)",
+                    "co-op guest social: conversations {} (refused {}, not started {}, greetings left to the owner's game {}), results held for the host {held}, run here as own {own}, with no quest known {unknown}, lines watched {} (in the window {}, windows closed {}, results not run there {}; from afar {} shown, {} held while busy, {} notices; subtitles {}, as messages {}; options sent {}, windows listed {}, others' options shown {}, clicks on them {}; others' picks put to this window {}, asked and said {}, asked and not said {}; joined {}, left {}, join words {}, windows on a last line {}, pulled in {}, waited {}, waits started {}), part sent {} time(s), put back {}, rests passed {} ({} h)",
                     s.talker.opened,
                     s.talker.denied,
                     s.talker.blocked,
@@ -1077,6 +1080,9 @@ impl Coop {
                     s.talker.leaves,
                     s.talker.join_hints,
                     s.talker.join_windows,
+                    s.talker.pulled_in,
+                    s.talker.waits,
+                    s.talker.waits_started,
                     s.party.uploads,
                     s.party.restored,
                     s.rester.passed,

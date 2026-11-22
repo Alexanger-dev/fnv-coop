@@ -1723,6 +1723,12 @@ every other game shows it, holds, and lists its own options when the step is ove
   line's subtitle shows the option as the option list does (its prompt, or its topic's name:
   "I wanted to ask you some questions." had no subtitle). Checked: unit tests, mutation checks
   (unneeded code removed; one survivor known: a pull-in left pending when a conversation ends
-  before the join reaches the host while another is shown, a three-player race), session tests.
+  before the join reaches the host while another is shown, a three-player race), session tests;
+  two headless games (`/tmp/s_d13.sh`): Sunny greeted the guest and the host, near, was pulled in
+  (its window with the options and the leave row); the host left, the guest went on and said
+  Goodbye, Sunny free on the same package in both; the guest opened its Pip-Boy and the host's
+  talking to Sunny was held (no window); the guest closed it and within three seconds the host's
+  conversation started and the guest was pulled in, both windows with the leave row; the quest the
+  same, no stop.
 - Not yet: votes (step 3b), rewards (step 4). Lines of no shared quest are not sent between
   players yet (S16), so they are not shown to a watcher.
