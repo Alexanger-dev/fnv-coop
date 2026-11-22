@@ -1754,6 +1754,12 @@ every other game shows it, holds, and lists its own options when the step is ove
     at the end, a player gone or leaving, stale votes, the lead's ask and a lapsed ask; the
     client; the rows), mutation checks (all killed; a redundant check removed), a session test
     (three players, the third away: the host voted, the guest, the starter, too, the host changed
-    its mind, the third told once; at 20 seconds the guest's pick was chosen and said by it).
+    its mind, the third told once; at 20 seconds the guest's pick was chosen and said by it); two
+    headless games (`/tmp/s_vote.sh`, 4,749 lines voted on in the base game): Sunny greeted the
+    guest, the host was pulled in; the guest clicked "Doc Mitchell said you could teach me to
+    survive in the desert." (it starts Back in the Saddle): nothing said, both rows showed "(1/2
+    Votes, 16s)" counting down; alone, at 20 seconds it was said by the guest's game, the quest at
+    stage 10 in both. Again with the host voting the same: said within three seconds, stage 10 in
+    both. No stop.
 - Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
   they are not shown to a watcher.
