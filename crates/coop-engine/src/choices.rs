@@ -242,7 +242,7 @@ fn listed(e: &mut Engine, menu: u32) -> Vec<u32> {
 }
 
 /// The text of info `id` as an option: its prompt, or without one its topic's name.
-fn option_text(e: &mut Engine, id: u32) -> Option<String> {
+pub fn option_text(e: &mut Engine, id: u32) -> Option<String> {
     let (_, prompt) = crate::talk::line(e, id)?;
     if !prompt.trim().is_empty() {
         return Some(prompt);

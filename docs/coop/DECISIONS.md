@@ -379,3 +379,20 @@ the row.
 players in a conversation take part and vote; one who leaves drops out of any open vote; when
 the starter leaves, the player in it longest leads. Free items a player gets in a conversation go
 to every player, in it or not (the owner). SPECS S42, "Joining and leaving".
+
+## D13 (2026-11-22): every player near a conversation hears it together
+
+**Question.** D12 made conversations opt-in; the owner, testing it: we drifted from everyone
+hearing the same thing. Proposal (the owner): both players listen together; when one is in a
+menu or fighting, the one trying to talk is told "[Name] is currently in battle/a menu. Please
+wait." Open questions put to the council: who is pulled in (everyone, or those near the NPC);
+keep `[Leave conversation]`; NPCs that start a talk themselves; a limit on the wait.
+
+**Decision.** Council 3-0 "approve with changes", agreed by the owner: players near the NPC
+(its cell) are pulled in automatically (2-1; far players get subtitles); `[Leave conversation]`
+stays (3-0), and a player who left is not pulled in again (it may talk to the NPC to join); an
+NPC's own greeting starts at once, a busy player joining when free (3-0); the wait has no timer
+(the owner): the conversation starts as soon as the busy player is out of the menu or the fight,
+and walking away gives it up. Votes (step 3b, the owner): the first vote starts a 20 s
+countdown, both may switch until it ends, the same pick from all goes through at once, a split
+at the end goes to the starter's pick; vote lines wait the 20 s for a player who is not near too.

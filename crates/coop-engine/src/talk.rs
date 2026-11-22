@@ -79,6 +79,12 @@ pub enum Event {
         /// The actor's reference id.
         npc: u32,
     },
+    /// This game's player talked to (activated) an actor where another player is busy (in a
+    /// menu, fighting): the conversation waits for that player (D13); its menu is refused.
+    Held {
+        /// The actor's reference id.
+        npc: u32,
+    },
 }
 
 /// The game-wide state (a lock-free shared slot, as the journal's).
@@ -89,6 +95,11 @@ pub struct Talk {
     /// conversation.
     enacting: AtomicU32,
     busy: RwLock<BTreeSet<u32>>,
+    /// The cells where another player is busy (D13): this player talking to an actor in one
+    /// waits for it ([`set_hold`]).
+    hold: RwLock<BTreeSet<u32>>,
+    /// The actor this player talked to that waits (its menu is refused once): its reference id.
+    held_npc: AtomicU32,
     /// This player's own opening runs: its conversations are its own (see [`set_own_opening`]).
     opening: AtomicBool,
     events: Mutex<Vec<Event>>,
@@ -390,13 +401,21 @@ pub fn subtitle_showing(e: &mut Engine) -> bool {
 /// its own) or the player is in a fight. Another player's conversation is then not shown line by
 /// line (S42, the owner's choice of 2026-11-21).
 pub fn busy(e: &mut Engine) -> bool {
+    in_menu(e) || in_combat(e)
+}
+
+/// Whether a menu is up (the dialogue window included).
+pub fn in_menu(e: &mut Engine) -> bool {
+    e.is_registered(addr::INTERFACE_IS_IN_MENU_MODE)
+        && e.call(addr::INTERFACE_IS_IN_MENU_MODE, &args![]).bool()
+}
+
+/// Whether this game's player is in combat.
+pub fn in_combat(e: &mut Engine) -> bool {
     let Some(player) = crate::live::player(e) else {
         return false;
     };
-    let menu = e.is_registered(addr::INTERFACE_IS_IN_MENU_MODE)
-        && e.call(addr::INTERFACE_IS_IN_MENU_MODE, &args![]).bool();
-    menu || (e.is_registered(addr::ACTOR_IN_COMBAT)
-        && e.call(addr::ACTOR_IN_COMBAT, &args![player]).bool())
+    e.is_registered(addr::ACTOR_IN_COMBAT) && e.call(addr::ACTOR_IN_COMBAT, &args![player]).bool()
 }
 
 /// The name of reference `id`'s base form (an NPC's name), `None` when it has none here.
@@ -534,6 +553,32 @@ fn greets(e: &mut Engine, speaker: u32) -> bool {
         && e.call(addr::PACKAGE_TYPE, &args![package]).u32() & 0xff == addr::PACKAGE_TYPE_DIALOGUE
 }
 
+/// The cells where another player is busy now (D13): this player talking to an actor in one of
+/// them is held ([`Event::Held`]) until that player is free.
+pub fn set_hold(e: &mut Engine, cells: impl IntoIterator<Item = u32>) {
+    let t = e.ext_free::<Talk>();
+    *t.hold.write().unwrap_or_else(PoisonError::into_inner) = cells.into_iter().collect();
+}
+
+/// The cell reference `id` is in (0 when it is not in this game).
+pub fn cell_of(e: &mut Engine, id: u32) -> u32 {
+    forms::form(e, id).map_or(0, |r| e.mem.u32(r + addr::REF_CELL_OFFSET))
+}
+
+/// This game's player talks to (activates) actor `npc`, as the activate key does (D13: a held
+/// conversation starts once the busy player is free). Whether the game took it.
+pub fn activate(e: &mut Engine, npc: u32) -> bool {
+    let (Some(r), player) = (forms::form(e, npc), e.mem.u32(addr::PLAYER_SINGLETON)) else {
+        return false;
+    };
+    player != 0
+        && e.is_registered(addr::REFR_ACTIVATE)
+        && e.call(addr::REFR_ACTIVATE, &args![r, player, 0u32, 0u32, 1u32])
+            .u32()
+            & 0xff
+            != 0
+}
+
 /// The seam at `0057318e`, the start of every activation. Its words: the reference, the
 /// activator. This game's player activating an actor another player talks to is noted
 /// ([`Event::Asked`]); the activation goes on (the game then refuses its menu: busy).
@@ -546,6 +591,8 @@ pub(crate) fn activate_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         return None;
     }
     let npc = e.mem.u32(reference.wrapping_add(addr::FORM_ID_OFFSET));
+    let cell = e.mem.u32(reference.wrapping_add(addr::REF_CELL_OFFSET));
+    let actor = actors::actor(e, npc).is_some();
     let t = e.ext_free::<Talk>();
     if t.busy
         .read()
@@ -553,6 +600,15 @@ pub(crate) fn activate_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         .contains(&npc)
     {
         t.push(Event::Asked { npc });
+    } else if actor
+        && cell != 0
+        && t.hold
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&cell)
+    {
+        t.held_npc.store(npc, Ordering::SeqCst);
+        t.push(Event::Held { npc });
     }
     None
 }
@@ -599,6 +655,14 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
             .contains(&npc)
         {
             t.push(Event::Blocked { npc });
+            unqueue(e, speaker);
+            return Ret::default();
+        }
+        // The conversation this player asked for waits for a busy player (D13).
+        if t.held_npc
+            .compare_exchange(npc, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             unqueue(e, speaker);
             return Ret::default();
         }

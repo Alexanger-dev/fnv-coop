@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use coop_core::dialogue::{DialogueClient, DialogueEvent, DialogueMsg};
+use coop_core::dialogue::{Busy, DialogueClient, DialogueEvent, DialogueMsg};
 use coop_core::ids::{FormId, PlayerId};
 use coop_engine::talk::{self, Event};
 use engine_core::Engine;
@@ -66,6 +66,22 @@ pub struct Talker {
     hinted: Option<u32>,
     /// The NPC this player talked to, to join its conversation, until the table took it in.
     joining: Option<u32>,
+    /// The other players' avatars in this game (player, reference id), set by the caller each
+    /// step: a conversation near one that is busy waits for it (D13).
+    pub avatars: Vec<(PlayerId, u32)>,
+    /// The NPC this player talked to that waits for a busy player near it (D13).
+    waiting: Option<u32>,
+    /// The conversation this player left (`[Leave conversation]`): it is not pulled in again.
+    left_session: Option<u32>,
+    /// A conversation this player is being pulled into (the `Join` on its way).
+    pulling: Option<u32>,
+    /// Players pulled into a conversation near them (D13).
+    pub pulled_in: u32,
+    /// Conversations this player asked for that waited for a busy player, and those started
+    /// once that player was free.
+    pub waits: u32,
+    /// See [`Self::waits`].
+    pub waits_started: u32,
     /// The step whose last line was shown to a player who joined: (session, step).
     join_shown: Option<(u32, u32)>,
     /// Conversations a copy of an actor another game runs began itself with this player, left to
@@ -168,6 +184,15 @@ struct Far {
 
 fn player_name(p: PlayerId) -> String {
     p.label()
+}
+
+/// Line `choice`'s response text and the option the player chose: its prompt, or without one its
+/// topic's name, as the option list shows it (the owner, 2026-11-22: "I wanted to ask you some
+/// questions." is a topic's name, and its subtitle was missing).
+fn line_text(e: &mut Engine, choice: u32) -> Option<(String, String)> {
+    let (text, prompt) = talk::line(e, choice)?;
+    let prompt = coop_engine::choices::option_text(e, choice).unwrap_or(prompt);
+    Some((text, prompt))
 }
 
 /// A watching window whose conversation has said nothing new for this many steps (frames) is
@@ -286,6 +311,25 @@ impl Talker {
                 // The menu the game then asked for is refused, as joining shows the
                 // conversation in its own window.
                 Event::Blocked { npc } if self.joining == Some(npc) => {}
+                // D13: another player near the NPC is busy: the conversation waits for it.
+                Event::Held { npc } => {
+                    self.waiting = Some(npc);
+                    self.waits += 1;
+                    let cell = talk::cell_of(e, npc);
+                    let who = self.busy_near(e, client, cell);
+                    if let Some((who, busy)) = who {
+                        let doing = if busy == Busy::Combat {
+                            "in battle"
+                        } else {
+                            "in a menu"
+                        };
+                        talk::show(
+                            e,
+                            &format!("{} is currently {doing}. Please wait.", player_name(who)),
+                        );
+                    }
+                    out.push(client.waiting(FormId(npc)));
+                }
                 Event::Blocked { .. } => {
                     self.blocked += 1;
                     talk::show(e, "Another player is talking to them.");
@@ -302,10 +346,106 @@ impl Talker {
         // joins it). (In this player's opening the game refuses no NPC: `talk::set_own_opening`.)
         talk::set_busy(e, client.busy_npcs().into_iter().map(|n| n.0));
         self.leave(e, client, &mut out);
+        self.share(e, me, client, &mut out);
         self.watch(e, me, client, &mut out);
         self.drive(e, client, &mut out);
         self.options(e, me, client, &mut out);
         out
+    }
+
+    /// The other player busy (in a menu, fighting) whose avatar is in cell `cell`, if any.
+    fn busy_near(
+        &self,
+        e: &mut Engine,
+        client: &DialogueClient,
+        cell: u32,
+    ) -> Option<(PlayerId, Busy)> {
+        self.avatars.iter().find_map(|&(p, id)| {
+            let busy = client.busy_of(p);
+            (matches!(busy, Busy::Menu | Busy::Combat) && cell != 0 && talk::cell_of(e, id) == cell)
+                .then_some((p, busy))
+        })
+    }
+
+    /// D13 (the owner, 2026-11-22): every player near a conversation hears it together. This
+    /// player's doing is told to the others; a conversation this player asks for near a busy
+    /// player waits for it, and starts once it is free (or is given up when this player walks
+    /// away); a conversation near this player, free and not left by it, takes it in.
+    fn share(
+        &mut self,
+        e: &mut Engine,
+        me: PlayerId,
+        client: &mut DialogueClient,
+        out: &mut Vec<DialogueMsg>,
+    ) {
+        let busy = if client.joined() || talk::menu_npc(e).is_some() {
+            Busy::Talking
+        } else if talk::in_combat(e) {
+            Busy::Combat
+        } else if talk::in_menu(e) {
+            Busy::Menu
+        } else {
+            Busy::Free
+        };
+        out.extend(client.set_busy(busy));
+        // The cells where another player is busy: talking to an actor there waits.
+        let mut cells = Vec::new();
+        for &(p, id) in &self.avatars {
+            if p != me && matches!(client.busy_of(p), Busy::Menu | Busy::Combat) {
+                cells.push(talk::cell_of(e, id));
+            }
+        }
+        talk::set_hold(e, cells.into_iter().filter(|c| *c != 0));
+        // Another player waits to talk near this busy player: told who.
+        for (who, npc) in client.take_waiting() {
+            if talk::busy(e) && talk::near(e, npc.0) {
+                let name = talk::name_of(e, npc.0).unwrap_or_else(|| "someone".into());
+                talk::show(e, &format!("{} wants to talk to {name}.", player_name(who)));
+            }
+        }
+        // A held conversation: given up when this player walked away, started once no busy
+        // player is near it.
+        if let Some(npc) = self.waiting {
+            if !talk::near(e, npc) {
+                self.waiting = None;
+            } else if !talk::busy(e) && {
+                let cell = talk::cell_of(e, npc);
+                self.busy_near(e, client, cell).is_none()
+            } {
+                self.waiting = None;
+                if talk::activate(e, npc) {
+                    self.waits_started += 1;
+                }
+            }
+        }
+        // A conversation near this player: taken in when free, unless it left that one.
+        let Some(v) = client.view().copied() else {
+            self.pulling = None;
+            return;
+        };
+        if client.joined() {
+            self.pulling = None;
+            return;
+        }
+        // The `Join` that pulls it in is on its way: not asked again.
+        if let Some(s) = self.pulling {
+            self.pulling = (s == v.session).then_some(s);
+            return;
+        }
+        if self.left_session != Some(v.session)
+            && !talk::busy(e)
+            && talk::near(e, v.npc.0)
+            && !self.opening.is_some_and(|(quest, stage)| {
+                coop_engine::quest::record(e, quest).is_some_and(|r| !r.done.contains(&stage))
+            })
+        {
+            if let Some(msg) = client.join(v.npc) {
+                coop_engine::watch::forget_left(e);
+                out.push(msg);
+                self.pulled_in += 1;
+                self.pulling = Some(v.session);
+            }
+        }
     }
 
     /// S42, D12: this player out of its conversation, by the `[Leave conversation]` row or by
@@ -318,6 +458,7 @@ impl Talker {
         if (clicked || closed) && client.joined() {
             let own = client.is_initiator();
             let npc = client.view().map(|v| v.npc.0);
+            self.left_session = client.view().map(|v| v.session);
             if let Some(msg) = client.leave() {
                 out.push(msg);
                 self.leaves += 1;
@@ -555,15 +696,17 @@ impl Talker {
         let Some(v) = view else {
             return;
         };
-        // Joined between two steps: the window opens on the conversation's last line, then lists
-        // the options.
+        // Joined mid-line (the line already shown here as text) or between two steps: the window
+        // opens at once on the line being said, from its start, or on the last line, then lists
+        // the options (the owner, 2026-11-22: talking to the NPC did nothing until its line
+        // ended).
         if joined
             && self.watched.is_none()
-            && v.playing.is_none()
+            && (v.playing.is_none() || self.shown == Some((v.session, v.step)))
             && self.join_shown != Some((v.session, v.step))
             && talk::near(e, v.npc.0)
         {
-            if let Some(last) = client.last_choice() {
+            if let Some(last) = v.playing.or(client.last_choice()) {
                 self.join_shown = Some((v.session, v.step));
                 if coop_engine::watch::watch_line(e, v.npc.0, last)
                     == coop_engine::watch::Outcome::Window
@@ -611,7 +754,7 @@ impl Talker {
                 self.watched = Some((v.session, 0));
                 self.lines_windowed += 1;
             } else if joined && near {
-                if let Some((text, prompt)) = talk::line(e, choice) {
+                if let Some((text, prompt)) = line_text(e, choice) {
                     let name = talk::name_of(e, v.npc.0);
                     self.queue_subtitles(messages(
                         v.picker.unwrap_or(v.initiator),
@@ -650,7 +793,7 @@ impl Talker {
                         ..f
                     }
                 } else {
-                    if let Some((text, prompt)) = talk::line(e, choice) {
+                    if let Some((text, prompt)) = line_text(e, choice) {
                         let name = talk::name_of(e, v.npc.0);
                         self.queue_subtitles(messages(
                             v.picker.unwrap_or(v.initiator),

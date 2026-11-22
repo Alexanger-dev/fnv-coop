@@ -214,6 +214,45 @@ pub enum DialogueMsg {
         /// The players in it.
         players: Vec<PlayerId>,
     },
+    /// A player's game: its player is now free, in a menu or fighting (sent when it changes;
+    /// D13: a conversation near a busy player waits for it).
+    Busy {
+        /// What the player is doing.
+        busy: Busy,
+    },
+    /// Host: a player is now free, in a menu or fighting.
+    PlayerBusy {
+        /// The player.
+        player: PlayerId,
+        /// What it is doing.
+        busy: Busy,
+    },
+    /// A player's game: its player talked to NPC `npc` and waits for a busy player near it (D13).
+    Waiting {
+        /// The NPC.
+        npc: FormId,
+    },
+    /// Host: player `player` waits to talk to NPC `npc` (the busy player near it is told).
+    WaitingFor {
+        /// The player who waits.
+        player: PlayerId,
+        /// The NPC.
+        npc: FormId,
+    },
+}
+
+/// What a player is doing, for a conversation that would take it in (D13).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Busy {
+    /// Free: a conversation near it takes it in.
+    #[default]
+    Free,
+    /// In a menu (the Pip-Boy, a container, a trade): a conversation near it waits.
+    Menu,
+    /// In a fight: a conversation near it waits.
+    Combat,
+    /// In a conversation: it is not waited for.
+    Talking,
 }
 
 /// What the game must do on the host.

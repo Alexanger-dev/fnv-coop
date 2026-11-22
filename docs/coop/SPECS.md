@@ -1707,5 +1707,22 @@ every other game shows it, holds, and lists its own options when the step is ove
     players are named `Host`, `Guest`, `Guest 2`, ... (`PlayerId::label`) in subtitles, notices,
     others' options and the rest vote; "... is talking to ..." names a player in the
     conversation (its starter may have left it).
+- Shared listening (2026-11-22, D13, replacing D12's opt-in for players near the NPC): each game
+  tells the table what its player is doing (`DialogueMsg::Busy`: free, in a menu, fighting, or
+  talking; the table tells everyone, `PlayerBusy`). A conversation near this player (the NPC in
+  its cell), when it is free, not in its own opening and did not leave that conversation, takes
+  it in (`Talker::share`: a `Join`, `pulled_in`). This player talking to (activating) an actor in a
+  cell where another player's avatar stands while that player is in a menu or fighting (not
+  talking) is held: the activation's seam notes it (`Event::Held`), its menu is refused once,
+  the player is told "[Name] is currently in a menu. Please wait." (or "in battle"), the table
+  tells the others (`Waiting`, `WaitingFor`; the busy player near the NPC is told "[Name] wants to
+  talk to [NPC]."), and the conversation starts (`talk::activate`) as soon as no busy player is
+  near it and this player is free; walking away from the NPC gives it up. An NPC's own greeting is
+  never held. A player who joins mid-line gets its window at once on the line being said, from
+  its start (the owner, 2026-11-22: talking to the NPC did nothing until the line ended). A chosen
+  line's subtitle shows the option as the option list does (its prompt, or its topic's name:
+  "I wanted to ask you some questions." had no subtitle). Checked: unit tests, mutation checks
+  (unneeded code removed; one survivor known: a pull-in left pending when a conversation ends
+  before the join reaches the host while another is shown, a three-player race), session tests.
 - Not yet: votes (step 3b), rewards (step 4). Lines of no shared quest are not sent between
   players yet (S16), so they are not shown to a watcher.

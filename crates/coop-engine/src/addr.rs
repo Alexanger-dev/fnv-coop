@@ -638,6 +638,9 @@ pub const LOAD_GAME_SITE: u32 = 0x0084_8c3c;
 /// activator; `tesobjectrefr_p4.rs`, engine-core's seam table): every activation, the player's
 /// talking to an actor included (an actor's own greeting queues its menu without it).
 pub const REFR_ACTIVATE_SITE: u32 = 0x0057_318e;
+/// `TESObjectREFR::Activate` (`00573170`, thiscall: the reference, the activator, two words for
+/// an item and its count, a flag; `tesobjectrefr_p4.rs`): what the activate key calls.
+pub const REFR_ACTIVATE: u32 = 0x0057_3170;
 
 /// `SleepWaitMenu::DoClick` (`thiscall`: menu, button id, tile; `RET 8`; `007c0220`,
 /// `sleepwaitmenu.rs`): button 4 starts the rest, button 5 cancels and closes the menu.

@@ -118,6 +118,16 @@ fn menu_create(e: &mut Engine, a: &[u32]) -> Ret {
     eax(1)
 }
 
+/// `TESObjectREFR::Activate` as far as a conversation goes: its seam, then the actor's menu
+/// asked of the game.
+fn activate(e: &mut Engine, a: &[u32]) -> Ret {
+    e.site(addr::REFR_ACTIVATE_SITE, &[a[0], a[1]]);
+    let made = e
+        .call(addr::DIALOG_MENU_CREATE, &args![a[0], 0u32, 0u32])
+        .u32();
+    eax(made)
+}
+
 fn menu_close(e: &mut Engine, _: &[u32]) -> Ret {
     e.mem.set_u32(addr::DIALOG_MENU_OPEN, 0);
     Ret::default()
@@ -231,6 +241,7 @@ pub(crate) fn register(e: &mut Engine) {
         Ret::default()
     });
     e.register(addr::DIALOG_MENU_CREATE, menu_create);
+    e.register(addr::REFR_ACTIVATE, activate);
     e.register(addr::DIALOG_MENU_CLOSE, menu_close);
     e.register(addr::TOPIC_GET_OWNER_TOPIC, owner_topic);
     e.register(addr::TOPIC_INFO_QUEST, topic_info_quest);
@@ -244,6 +255,8 @@ pub(crate) fn register(e: &mut Engine) {
     e.register(addr::PLAYER_SET_WAIT, set_wait);
     e.register(addr::PLAYER_WAIT_HOUR, wait_hour);
     e.register(addr::TES_RUN_SCRIPTS, run_scripts);
+    // A name's characters: in this kit right after the name's two words.
+    e.register(addr::FULL_NAME_CHARS, |_, a| eax(a[0] + 8));
     e.register(addr::FULL_NAME_TEXT, |_, a| Ret {
         eax: a[0],
         ..Ret::default()
@@ -362,12 +375,20 @@ impl Story {
     }
 
     /// The player activates (talks to) `npc`, as the activate key does: the activation's seam,
-    /// then the conversation asked of the game ([`Self::talk_to`]); whether a menu opened.
+    /// then the conversation asked of the game; whether a menu opened.
     pub fn activate(&mut self, npc: u32) -> bool {
-        let r = forms::form(&mut self.e, npc).expect("a reference of the story");
-        let player = self.e.mem.u32(addr::PLAYER_SINGLETON);
-        self.e.site(addr::REFR_ACTIVATE_SITE, &[r, player]);
-        self.talk_to(npc)
+        crate::talk::activate(&mut self.e, npc)
+    }
+
+    /// Names the topic of info `id` `name` (an option with no prompt of its own shows its
+    /// topic's name).
+    pub fn set_topic_name(&mut self, id: u32, name: &str) {
+        assert!(name.len() < 0x60);
+        let info = self.info_at(id);
+        self.e.mem.set_cstr(
+            info + INFO_TOPIC + addr::FORM_FULL_NAME_OFFSET + 8,
+            name.as_bytes(),
+        );
     }
 
     /// The player clicks `[Leave conversation]` (S42, D12).

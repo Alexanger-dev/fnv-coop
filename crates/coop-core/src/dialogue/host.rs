@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    CloseReason, Deny, DialogueEvent, DialogueMsg, MenuItem, ASK_TIMEOUT_MS, HEARTBEAT_MISS_MS,
-    LEASE_MS, LINE_TIMEOUT_MS, OPTIONS_MAX,
+    Busy, CloseReason, Deny, DialogueEvent, DialogueMsg, MenuItem, ASK_TIMEOUT_MS,
+    HEARTBEAT_MISS_MS, LEASE_MS, LINE_TIMEOUT_MS, OPTIONS_MAX,
 };
 use crate::ids::{FormId, PlayerId};
 use crate::interest::Audience;
@@ -108,6 +108,8 @@ pub struct DialogueHost {
     talking: BTreeMap<PlayerId, u32>,
     dead: BTreeSet<FormId>,
     combat: BTreeSet<FormId>,
+    /// What each player is doing (D13), as its game last said.
+    busy: BTreeMap<PlayerId, Busy>,
     next_id: u32,
     events: Vec<DialogueEvent>,
 }
@@ -255,6 +257,21 @@ impl DialogueHost {
                 }
             }
             DialogueMsg::Join { session } => self.join(from, session, members),
+            // D13: what a player is doing, told to everyone when it changes.
+            DialogueMsg::Busy { busy } => {
+                if self.busy.get(&from).copied().unwrap_or_default() == busy {
+                    return vec![];
+                }
+                self.busy.insert(from, busy);
+                vec![out(
+                    Audience::All,
+                    DialogueMsg::PlayerBusy { player: from, busy },
+                )]
+            }
+            DialogueMsg::Waiting { npc } => vec![out(
+                Audience::All,
+                DialogueMsg::WaitingFor { player: from, npc },
+            )],
             DialogueMsg::Leave { session } => {
                 if self
                     .sessions
@@ -538,10 +555,16 @@ impl DialogueHost {
         vec![out(Audience::All, DialogueMsg::Closed { session, reason })]
     }
 
+    /// What player `p` is doing, as its game last said (D13).
+    pub fn busy_of(&self, p: PlayerId) -> Busy {
+        self.busy.get(&p).copied().unwrap_or_default()
+    }
+
     /// A peer left. It leaves the conversation it was in (which ends when no one is left in
     /// it); anyone else just stops counting for barriers.
     pub fn on_disconnect(&mut self, p: PlayerId) -> Vec<DOut> {
         let mut res = Vec::new();
+        self.busy.remove(&p);
         if let Some(s) = self.talking.get(&p).copied() {
             res.extend(self.drop_player(s, p, CloseReason::InitiatorLeft));
         }
@@ -1790,5 +1813,37 @@ mod tests {
             },
         );
         assert!(matches!(o[0].msg, DialogueMsg::Ask { by: H, .. }), "{o:?}");
+    }
+
+    #[test]
+    fn what_a_player_is_doing_is_told_to_everyone_when_it_changes() {
+        let mut h = DialogueHost::new();
+        assert_eq!(h.busy_of(A), Busy::Free);
+        let o = msg(&mut h, A, DialogueMsg::Busy { busy: Busy::Menu });
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].aud, Audience::All);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::PlayerBusy {
+                player: A,
+                busy: Busy::Menu
+            }
+        );
+        assert_eq!(h.busy_of(A), Busy::Menu);
+        assert!(msg(&mut h, A, DialogueMsg::Busy { busy: Busy::Menu }).is_empty());
+        assert_eq!(h.busy_of(B), Busy::Free);
+        // A player waiting to talk: told to everyone.
+        let o = msg(&mut h, B, DialogueMsg::Waiting { npc: NPC });
+        assert_eq!(o[0].aud, Audience::All);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::WaitingFor {
+                player: B,
+                npc: NPC
+            }
+        );
+        // Gone: free again.
+        h.on_disconnect(A);
+        assert_eq!(h.busy_of(A), Busy::Free);
     }
 }

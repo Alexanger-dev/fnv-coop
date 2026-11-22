@@ -11,6 +11,7 @@ use coop_core::sync::HostConfig;
 use coop_core::transport::{LoopbackEndpoint, LoopbackNet};
 use coop_engine::testkit::{Story, StorySpec};
 use coop_engine::{forms, gate, live, talk};
+use coop_engine_session::ladder::{Cap, Ladder, DEFAULT_AVATAR_BASE};
 use coop_engine_session::party::{self, Part};
 use coop_engine_session::{gate_guest, GuestDriver, HostDriver};
 
@@ -27,6 +28,8 @@ const SALOON: u32 = 0x0010_5a00;
 const STORE: u32 = 0x0010_5a01;
 /// The inventory's menu class (one of the Pip-Boy's menus).
 const INVENTORY: u32 = 1002;
+/// The dialogue menu's class.
+const DIALOGUE: u32 = 1009;
 /// Sunny's line of the shared story: said, it sets MQ's stage 10; ended, stage 20.
 const SHARED_LINE: u32 = 0x0010_9001;
 /// A line of the player's own quest: said, it sets OWN's stage 5.
@@ -275,6 +278,9 @@ fn a_busy_far_player_told_of_a_second_players_conversation_is_told_both_ends() {
     assert!(w.guests[0].game.talk_to(SUNNY));
     w.guests[0].game.say(SHARED_LINE, false);
     w.run(10);
+    // Guest 2, taken into it (D13), leaves it to talk to Chet.
+    w.guests[1].game.click_leave();
+    w.run(2);
     assert!(w.guests[1].game.talk_to(CHET));
     w.guests[1].game.say_as(CHET, PLAIN_LINE, false);
     w.run(10);
@@ -287,6 +293,24 @@ fn a_busy_far_player_told_of_a_second_players_conversation_is_told_both_ends() {
             "Guest 2 is talking to Chet.",
             "Guest finished talking to Sunny Smiles."
         ]
+    );
+}
+
+/// The owner, 2026-11-22: an option whose text is its topic's name ("I wanted to ask you some
+/// questions.", no prompt of its own) had no subtitle; it has, as the option list shows it.
+#[test]
+fn an_option_named_by_its_topic_is_subtitled_with_that_name() {
+    let mut w = World::new(&["Sunny"]);
+    w.host
+        .set_topic_name(PLAIN_LINE, "I wanted to ask you some questions.");
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.run(10);
+    assert_eq!(
+        w.host.messages(),
+        ["Guest: I wanted to ask you some questions.", "Howdy."]
     );
 }
 
@@ -441,24 +465,19 @@ fn a_guests_line_runs_once_on_the_host_and_the_others_see_it() {
     assert_eq!(w.guests[0].game.said(SHARED_LINE), 1);
     assert_eq!(w.guests[0].driver.social.talker.opened, 1);
     w.assert_in_step();
-    // The guest standing by, not in the conversation (S42, D12: it did not talk to Sunny), was
-    // told it may join and saw what was chosen and each response; so did the host, elsewhere
-    // and free (S42, the owner's choice of 2026-11-21: far off, the lines come as text), with no
-    // word of joining.
+    // The guest standing by, taken into the conversation (D13; with no window in this test
+    // game, as text), saw what was chosen and each response; so did the host, elsewhere and free
+    // (S42, the owner's choice of 2026-11-21: far off, the lines come as text), not taken in.
     let lines = [
         "Guest: Where is Sunny?",
         "Head on up to the saloon.",
         "I will meet you there.",
     ];
-    let hint = "Guest is talking to someone. Talk to them to join.";
-    assert_eq!(
-        w.guests[1].game.messages(),
-        std::iter::once(hint).chain(lines).collect::<Vec<_>>()
-    );
-    assert_eq!(w.guests[1].driver.social.talker.join_hints, 1);
-    assert_eq!(w.guests[1].driver.social.talker.lines_far_shown, 1);
+    assert_eq!(w.guests[1].game.messages(), lines);
+    assert_eq!(w.guests[1].driver.social.talker.pulled_in, 1);
+    assert_eq!(w.guests[1].driver.social.talker.lines_shown, 1);
     assert_eq!(w.host.messages(), lines);
-    assert_eq!(w.hd.social.talker.join_hints, 0);
+    assert_eq!(w.hd.social.talker.pulled_in, 0);
     assert_eq!(w.hd.social.talker.lines_far, 1);
     assert_eq!(w.hd.social.talker.lines_far_shown, 1);
     // The line counts as said in every game, near or far (the owner, 2026-11-16: a line the
@@ -529,7 +548,6 @@ fn a_line_whose_end_never_comes_is_finished_by_the_next_line_and_by_the_goodbye(
     assert_eq!(
         w.host.messages(),
         [
-            "Guest is talking to someone. Talk to them to join.",
             "Howdy.",
             "Guest: Where is Sunny?",
             "Head on up to the saloon.",
@@ -557,7 +575,6 @@ fn the_hosts_line_is_seen_by_a_guest_and_runs_in_the_hosts_game_only() {
     assert_eq!(
         w.guests[0].game.messages(),
         [
-            "Host is talking to someone. Talk to them to join.",
             "Host: Where is Sunny?",
             "Head on up to the saloon.",
             "I will meet you there."
@@ -614,102 +631,93 @@ fn in_their_own_openings_both_players_talk_to_the_same_npc_at_once() {
     assert!(w.host.talk_to(SUNNY));
     w.host.say(PLAIN_LINE, false);
     w.run(10);
-    // Talking to her now joins the host's conversation (S42, D12); the menu the game then asks
-    // for is refused with no word.
-    assert!(!w.guests[0].game.activate(SUNNY));
-    w.run(2);
+    // Near and free, the guest is taken into the host's conversation (D13), with no word.
+    assert_eq!(w.guests[0].driver.social.talker.pulled_in, 1);
+    assert!(w.guests[0].driver.sync.live.dialogue.joined());
     assert_eq!(w.guests[0].driver.social.talker.blocked, 0);
-    assert_eq!(w.guests[0].driver.social.talker.joins, 1);
-    assert!(w.guests[0]
-        .game
-        .messages()
-        .iter()
-        .all(|m| m != "Another player is talking to them."));
 }
 
-/// S42, D12 (the owner, 2026-11-21: a player is not pulled into another's conversation): a
-/// player near another's conversation only follows it, until it talks to the NPC, which joins
-/// it; one in it leaves it with `[Leave conversation]`; an NPC is in one conversation at a time.
+/// D13 (the owner, 2026-11-22: every player near a conversation hears it together): the players
+/// near a conversation are taken into it; one may leave it with `[Leave conversation]` and is not
+/// taken in again, only told it may join; talking to the NPC joins it again; an NPC's own greeting
+/// joins nothing; an NPC is in one conversation at a time.
 #[test]
-fn talking_to_the_npc_of_another_players_conversation_joins_it() {
+fn the_players_near_a_conversation_are_taken_in_and_may_leave_and_join_again() {
     let mut w = World::new(&["Sunny", "Chet"]);
     w.run(20);
     assert!(w.guests[0].game.talk_to(SUNNY));
     w.guests[0].game.say(PLAIN_LINE, false);
     w.run(10);
     let session = w.hd.sync.live.dialogue.session_of(PlayerId(1)).unwrap();
-    // Alone in it, the starter has no leave row (its own goodbye ends it).
-    assert!(!coop_engine::choices::leave_offered(
-        &mut w.guests[0].game.e
-    ));
-    // Guest 2 talks to Sunny: no menu of its own, it joins; no word that she is taken.
-    assert!(!w.guests[1].game.activate(SUNNY));
-    w.run(4);
-    assert_eq!(w.guests[1].driver.social.talker.joins, 1);
-    assert_eq!(w.guests[1].driver.social.talker.blocked, 0);
-    assert_eq!(
-        w.hd.sync.live.dialogue.players_in(session),
-        [PlayerId(1), PlayerId(2)]
-    );
+    // Guest 2 and the host, in the saloon too, are taken in, told nothing.
+    let mut players = w.hd.sync.live.dialogue.players_in(session).to_vec();
+    players.sort();
+    assert_eq!(players, [PlayerId::HOST, PlayerId(1), PlayerId(2)]);
+    assert_eq!(w.guests[1].driver.social.talker.pulled_in, 1);
+    assert_eq!(w.hd.social.talker.pulled_in, 1);
+    assert_eq!(w.guests[1].driver.social.talker.join_hints, 0);
     assert!(w.guests[1].driver.sync.live.dialogue.joined());
-    // The leave row: for the player who joined, and for the starter once someone joined; not
-    // for the host, not in it.
-    assert!(coop_engine::choices::leave_offered(&mut w.guests[1].game.e));
-    assert!(coop_engine::choices::leave_offered(&mut w.guests[0].game.e));
-    assert!(!coop_engine::choices::leave_offered(&mut w.host.e));
-    assert!(w.guests[1]
-        .game
-        .messages()
-        .iter()
-        .all(|m| m != "Another player is talking to them."));
-    // The host, near and not in it, was told it may join, and joins none.
-    assert_eq!(w.hd.social.talker.join_hints, 1);
-    assert!(w
-        .host
-        .messages()
-        .contains(&"Guest is talking to someone. Talk to them to join.".to_string()));
-    assert_eq!(w.hd.social.talker.joins, 0);
-    // Chet activating Sunny in the host's game is not the host talking to her.
-    let (sunny, chet) = (
-        forms::form(&mut w.host.e, SUNNY).unwrap(),
-        forms::form(&mut w.host.e, CHET).unwrap(),
-    );
-    w.host
-        .e
-        .site(coop_engine::addr::REFR_ACTIVATE_SITE, &[sunny, chet]);
-    w.run(2);
-    assert_eq!(w.hd.social.talker.joins, 0);
-    // Sunny coming to greet the host (her menu asked of the game with no activation) joins
-    // nothing: refused, and the host told why.
-    assert!(!w.host.talk_to(SUNNY));
-    w.run(2);
-    assert_eq!(w.hd.social.talker.joins, 0);
-    assert_eq!(w.hd.social.talker.blocked, 1);
-    assert_eq!(
-        w.host.messages().last().map(String::as_str),
-        Some("Another player is talking to them.")
-    );
-    assert_eq!(
-        w.hd.sync.live.dialogue.players_in(session),
-        [PlayerId(1), PlayerId(2)]
-    );
-    // Guest 2 leaves (its "[Leave conversation]"): out, the conversation goes on with guest 1.
+    // Each has the leave row.
+    for g in &mut w.guests {
+        assert!(coop_engine::choices::leave_offered(&mut g.game.e));
+    }
+    assert!(coop_engine::choices::leave_offered(&mut w.host.e));
+    // Guest 2 leaves: out, not taken in again, told at its next line that it may join.
+    w.guests[1].game.messages();
     w.guests[1].game.click_leave();
     w.run(4);
     assert_eq!(w.guests[1].driver.social.talker.leaves, 1);
-    assert_eq!(w.hd.sync.live.dialogue.players_in(session), [PlayerId(1)]);
+    assert!(!w
+        .hd
+        .sync
+        .live
+        .dialogue
+        .players_in(session)
+        .contains(&PlayerId(2)));
     assert!(!coop_engine::choices::leave_offered(
         &mut w.guests[1].game.e
     ));
-    assert!(!coop_engine::choices::leave_offered(
-        &mut w.guests[0].game.e
-    ));
-    assert_eq!(w.hd.sync.live.dialogue.open_sessions(), 1);
-    // Sunny greeting guest 2 now: refused as any greeting, not taken for its old join.
+    w.guests[0].game.say(PLAIN_LINE, true);
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.run(10);
+    assert_eq!(w.guests[1].driver.social.talker.pulled_in, 1);
+    assert!(w.guests[1]
+        .game
+        .messages()
+        .contains(&"Guest is talking to someone. Talk to them to join.".to_string()));
+    // Chet activating Sunny in its game is not guest 2 talking to her.
+    let (sunny, chet) = (
+        forms::form(&mut w.guests[1].game.e, SUNNY).unwrap(),
+        forms::form(&mut w.guests[1].game.e, CHET).unwrap(),
+    );
+    w.guests[1]
+        .game
+        .e
+        .site(coop_engine::addr::REFR_ACTIVATE_SITE, &[sunny, chet]);
+    w.run(2);
+    assert_eq!(w.guests[1].driver.social.talker.joins, 0);
+    // Sunny coming to greet guest 2 (her menu asked of the game with no activation): refused,
+    // and told why; joins nothing.
     assert!(!w.guests[1].game.talk_to(SUNNY));
     w.run(2);
+    assert_eq!(w.guests[1].driver.social.talker.joins, 0);
     assert_eq!(w.guests[1].driver.social.talker.blocked, 1);
+    assert_eq!(
+        w.guests[1].game.messages().last().map(String::as_str),
+        Some("Another player is talking to them.")
+    );
+    // Guest 2 talks to Sunny: it joins again, with no word that she is taken.
+    assert!(!w.guests[1].game.activate(SUNNY));
+    w.run(4);
     assert_eq!(w.guests[1].driver.social.talker.joins, 1);
+    assert_eq!(w.guests[1].driver.social.talker.blocked, 1);
+    assert!(w
+        .hd
+        .sync
+        .live
+        .dialogue
+        .players_in(session)
+        .contains(&PlayerId(2)));
     // Once the conversation is over, Sunny is free again: the host talks to her itself.
     w.guests[0].game.say(PLAIN_LINE, true);
     w.guests[0].game.leave();
@@ -718,7 +726,143 @@ fn talking_to_the_npc_of_another_players_conversation_joins_it() {
     assert!(w.host.talk_to(SUNNY));
 }
 
-/// S42, D12: the starter leaves its own conversation and the player who joined goes on with it:
+/// D13 (the owner, 2026-11-22): a player who talks to an NPC near another player in a menu waits
+/// for it ("... is currently in a menu. Please wait.", the other told who waits); the
+/// conversation starts once that player is free, with no timer; walking away gives it up; an
+/// NPC's own greeting does not wait.
+#[test]
+fn a_conversation_near_a_busy_player_waits_for_it_and_starts_once_it_is_free() {
+    let mut w = World::new(&["Sunny", "Chet"]);
+    // The players' avatars: where each other player stands in this game.
+    w.hd.ladder = Some(Ladder::new(false, Cap::Avatar, DEFAULT_AVATAR_BASE).quiet());
+    for g in &mut w.guests {
+        g.driver.ladder = Some(Ladder::new(true, Cap::Avatar, DEFAULT_AVATAR_BASE).quiet());
+        g.game.set_name(SUNNY, "Sunny Smiles");
+    }
+    w.host.set_name(SUNNY, "Sunny Smiles");
+    w.run(20);
+    assert_eq!(w.hd.social.talker.avatars.len(), 2, "the guests' avatars");
+    // Guest 2 goes to the store: not near Sunny, not waited for.
+    w.guests[1].game.move_player(STORE, [0.0; 3], 0.0);
+    w.run(10);
+    w.guests[0].game.open_menu(INVENTORY);
+    w.run(4);
+    // The host talks to Sunny: held, told why; the guest told who waits.
+    assert!(!w.host.activate(SUNNY));
+    w.run(4);
+    assert_eq!(w.hd.social.talker.waits, 1);
+    assert_eq!(talk::menu_npc(&mut w.host.e), None);
+    assert_eq!(
+        w.host.messages().last().map(String::as_str),
+        Some("Guest is currently in a menu. Please wait.")
+    );
+    assert_eq!(
+        w.guests[0].game.messages().last().map(String::as_str),
+        Some("Host wants to talk to Sunny Smiles.")
+    );
+    // Guest 2, free and elsewhere, is not told.
+    assert!(w.guests[1]
+        .game
+        .messages()
+        .iter()
+        .all(|m| !m.contains("wants to talk")));
+    // Still in the menu a while later: still waiting.
+    w.run(40);
+    assert_eq!(w.hd.social.talker.waits_started, 0);
+    assert_eq!(talk::menu_npc(&mut w.host.e), None);
+    // The guest closes its menu while the host is in a menu itself: it starts once the host is
+    // out of it too.
+    w.host.open_menu(INVENTORY);
+    w.guests[0].game.close_menu();
+    w.run(6);
+    assert_eq!(w.hd.social.talker.waits_started, 0);
+    w.host.close_menu();
+    w.run(6);
+    assert_eq!(w.hd.social.talker.waits_started, 1);
+    assert!(talk::menu_npc(&mut w.host.e).is_some());
+    w.host.say(PLAIN_LINE, false);
+    w.run(10);
+    assert_eq!(w.guests[0].driver.social.talker.pulled_in, 1);
+    w.host.say(PLAIN_LINE, true);
+    w.host.leave();
+    w.run(10);
+    // The guest in a fight: "in battle"; the conversation starts once the fight is over.
+    w.guests[0]
+        .game
+        .set_combat(coop_engine::actors::PLAYER_REF_ID, CHET);
+    w.run(4);
+    assert!(!w.host.activate(SUNNY));
+    w.run(2);
+    assert_eq!(
+        w.host.messages().last().map(String::as_str),
+        Some("Guest is currently in battle. Please wait.")
+    );
+    w.guests[0]
+        .game
+        .set_combat(coop_engine::actors::PLAYER_REF_ID, 0);
+    w.run(6);
+    assert_eq!(w.hd.social.talker.waits_started, 2);
+    talk::close_menu(&mut w.host.e);
+    w.host.leave();
+    w.run(4);
+    let waits = w.hd.social.talker.waits;
+    // Something there that is not an actor (a door, say) activated: no wait.
+    w.guests[0].game.open_menu(INVENTORY);
+    w.host.place(CHET, SALOON);
+    w.run(4);
+    let chet = forms::form(&mut w.host.e, CHET).unwrap();
+    let kind = w.host.e.mem.u8(chet + coop_engine::addr::FORM_TYPE_OFFSET);
+    w.host.e.mem.set_u8(
+        chet + coop_engine::addr::FORM_TYPE_OFFSET,
+        coop_engine::addr::FORM_TYPE_REFR,
+    );
+    talk::activate(&mut w.host.e, CHET);
+    w.run(2);
+    assert_eq!(w.hd.social.talker.waits, waits);
+    w.host
+        .e
+        .mem
+        .set_u8(chet + coop_engine::addr::FORM_TYPE_OFFSET, kind);
+    talk::close_menu(&mut w.host.e);
+    w.host.leave();
+    // Sunny greeting the host herself while the guest is busy: no wait.
+    assert!(w.host.talk_to(SUNNY));
+    assert_eq!(w.hd.social.talker.waits, waits);
+    talk::close_menu(&mut w.host.e);
+    w.host.leave();
+    w.guests[0].game.close_menu();
+    w.run(4);
+    // The guest in a conversation of its own (with Chet): the host is not held for it.
+    w.guests[0].game.place(CHET, SALOON);
+    assert!(w.guests[0].game.talk_to(CHET));
+    // (Its dialogue window is a menu to the game, as in the game.)
+    w.guests[0].game.open_menu(DIALOGUE);
+    w.guests[0].game.say_as(CHET, PLAIN_LINE, false);
+    w.run(6);
+    assert!(w.host.activate(SUNNY));
+    w.run(2);
+    assert_eq!(w.hd.social.talker.waits, waits);
+    talk::close_menu(&mut w.host.e);
+    w.host.leave();
+    w.guests[0].game.close_menu();
+    w.guests[0].game.leave();
+    w.run(10);
+    // Held again, then the host walks away: given up, nothing starts when the guest is free.
+    w.guests[0].game.open_menu(INVENTORY);
+    w.run(4);
+    assert!(!w.host.activate(SUNNY));
+    w.run(2);
+    assert_eq!(w.hd.social.talker.waits, waits + 1);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    w.run(2);
+    w.guests[0].game.close_menu();
+    w.run(6);
+    assert_eq!(w.hd.social.talker.waits_started, 2);
+    assert_eq!(talk::menu_npc(&mut w.host.e), None);
+}
+
+/// S42, D12: the starter leaves its own conversation and the player who joined goes on with it
+/// (not taken in again):
 /// the starter's window closes without ending it, its later lines run as any guest's, the
 /// starter follows them as text, and the conversation ends once no one is left in it.
 #[test]
@@ -730,8 +874,9 @@ fn the_starter_leaves_and_the_player_who_joined_goes_on() {
     w.host.say(PLAIN_LINE, true);
     w.run(10);
     let session = w.hd.sync.live.dialogue.session_of(PlayerId::HOST).unwrap();
-    assert!(!w.guests[0].game.activate(SUNNY));
+    // The guest, near, is taken in (D13).
     w.run(4);
+    assert_eq!(w.guests[0].driver.social.talker.pulled_in, 1);
     assert_eq!(
         w.hd.sync.live.dialogue.players_in(session),
         [PlayerId::HOST, PlayerId(1)]

@@ -1,6 +1,6 @@
 //! Guest side of the dialogue protocol: what the dialogue UI needs to know.
 
-use super::{CloseReason, Deny, DialogueMsg, MenuItem, HEARTBEAT_MS};
+use super::{Busy, CloseReason, Deny, DialogueMsg, MenuItem, HEARTBEAT_MS};
 use crate::ids::{FormId, PlayerId};
 
 /// The session this machine currently sees.
@@ -69,6 +69,12 @@ pub struct DialogueClient {
     /// An option of ours another player picked, for this game to say (only for the shown
     /// conversation's next step: [`Self::take_asked`]).
     asked: Option<Asked>,
+    /// What each other player is doing (D13), as the host last told.
+    busy: std::collections::BTreeMap<PlayerId, Busy>,
+    /// What this player is doing, as last told to the host.
+    told_busy: Busy,
+    /// Players waiting to talk to an NPC, newest last (the host's word), not yet taken.
+    waiting: Vec<(PlayerId, FormId)>,
 }
 
 impl DialogueClient {
@@ -84,7 +90,30 @@ impl DialogueClient {
             refused: 0,
             last_refused: None,
             asked: None,
+            busy: Default::default(),
+            told_busy: Busy::Free,
+            waiting: Vec::new(),
         }
+    }
+
+    /// What this player is doing, for the host when it changed (D13).
+    pub fn set_busy(&mut self, busy: Busy) -> Option<DialogueMsg> {
+        (std::mem::replace(&mut self.told_busy, busy) != busy).then_some(DialogueMsg::Busy { busy })
+    }
+
+    /// What another player is doing, as the host last told (free when never told).
+    pub fn busy_of(&self, p: PlayerId) -> Busy {
+        self.busy.get(&p).copied().unwrap_or_default()
+    }
+
+    /// This player waits to talk to `npc` for a busy player near it: the host tells the others.
+    pub fn waiting(&self, npc: FormId) -> DialogueMsg {
+        DialogueMsg::Waiting { npc }
+    }
+
+    /// The players who started waiting to talk to an NPC since the last call (taken once).
+    pub fn take_waiting(&mut self) -> Vec<(PlayerId, FormId)> {
+        std::mem::take(&mut self.waiting)
     }
 
     /// The conversation shown: the one this player is in, else the newest.
@@ -370,6 +399,16 @@ impl DialogueClient {
             DialogueMsg::Joined { session, players } => {
                 if let Some(k) = self.sessions.get_mut(&session) {
                     k.joined = players;
+                }
+            }
+            DialogueMsg::PlayerBusy { player, busy } => {
+                if player != self.me {
+                    self.busy.insert(player, busy);
+                }
+            }
+            DialogueMsg::WaitingFor { player, npc } => {
+                if player != self.me {
+                    self.waiting.push((player, npc));
                 }
             }
             DialogueMsg::Closed { session, reason } => {
@@ -817,5 +856,34 @@ mod tests {
         );
         assert!(c.take_asked().is_none());
         assert_eq!(c.refused, 0);
+    }
+
+    #[test]
+    fn what_the_players_are_doing_and_who_waits_is_kept() {
+        let mut c = DialogueClient::new(PlayerId(1));
+        // This player's own: sent when it changes.
+        assert_eq!(c.set_busy(Busy::Free), None);
+        assert_eq!(
+            c.set_busy(Busy::Combat),
+            Some(DialogueMsg::Busy { busy: Busy::Combat })
+        );
+        assert_eq!(c.set_busy(Busy::Combat), None);
+        assert_eq!(c.waiting(NPC), DialogueMsg::Waiting { npc: NPC });
+        // The others': as the host tells; this player's own word back is not kept.
+        assert_eq!(c.busy_of(PlayerId(0)), Busy::Free);
+        for player in [PlayerId(0), PlayerId(1)] {
+            c.on_msg(
+                DialogueMsg::PlayerBusy {
+                    player,
+                    busy: Busy::Menu,
+                },
+                1,
+            );
+            c.on_msg(DialogueMsg::WaitingFor { player, npc: NPC }, 1);
+        }
+        assert_eq!(c.busy_of(PlayerId(0)), Busy::Menu);
+        assert_eq!(c.busy_of(PlayerId(1)), Busy::Free);
+        assert_eq!(c.take_waiting(), [(PlayerId(0), NPC)]);
+        assert!(c.take_waiting().is_empty());
     }
 }

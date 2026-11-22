@@ -95,6 +95,12 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
     let share = |e: &mut Engine, info: u32, _held: bool| {
         game_talk::info_quest(e, info).is_some_and(|q| quests.contains(&q))
     };
+    // The other players' avatars: a conversation near a busy one waits for it (D13).
+    h.social.talker.avatars = h
+        .ladder
+        .as_ref()
+        .map(crate::ladder::Ladder::avatar_ids)
+        .unwrap_or_default();
     let msgs = h
         .social
         .talker
@@ -160,6 +166,11 @@ pub(crate) fn guest_step(
     let me = g.sync.player;
     let share = |_: &mut Engine, _info: u32, held: bool| held;
     g.social.talker.story_rev = g.sync.store.rev().0;
+    g.social.talker.avatars = g
+        .ladder
+        .as_ref()
+        .map(crate::ladder::Ladder::avatar_ids)
+        .unwrap_or_default();
     let msgs = g
         .social
         .talker
