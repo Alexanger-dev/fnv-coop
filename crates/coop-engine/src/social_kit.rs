@@ -391,6 +391,16 @@ impl Story {
         );
     }
 
+    /// The open dialogue window lists the infos `ids` as this player's options.
+    pub fn list_options(&mut self, ids: &[u32]) {
+        crate::choices::note_list(&mut self.e, ids.to_vec());
+    }
+
+    /// The player clicks the row of line `id`, one voted on (S42 step 3b).
+    pub fn click_vote(&mut self, id: u32) {
+        crate::choices::note_vote_click(&mut self.e, id);
+    }
+
     /// The player clicks `[Leave conversation]` (S42, D12).
     pub fn click_leave(&mut self) {
         crate::choices::note_leave_click(&mut self.e);

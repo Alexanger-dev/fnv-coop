@@ -185,6 +185,8 @@ struct GameData {
     clock: Vec<u32>,
     /// The quests each object script names (its `SCRO` references that are quests).
     object_script_quests: std::collections::BTreeMap<u32, Vec<u32>>,
+    /// The dialogue lines voted on (S42 step 3b), read from the plugins as the owner's list is.
+    vote_lines: std::collections::HashSet<u32>,
 }
 
 /// For every object script (`SCHR` type 0) of the load order, the quests it names.
@@ -302,8 +304,10 @@ fn game_data(data: &Path) -> Result<GameData, String> {
     let clock = clock.into_iter().map(|(_, id)| id).collect();
     let globals = globals.into_iter().map(|(_, id)| id).collect();
     let object_script_quests = object_script_quests(&order);
+    let vote_lines = coop_votelist::vote_lines(&order);
     Ok(GameData {
         object_script_quests,
+        vote_lines,
         plugins,
         quests,
         own_quests,
@@ -355,6 +359,8 @@ pub struct Coop {
     own_quests: Vec<u32>,
     own_scripts: Vec<u32>,
     object_script_quests: std::collections::BTreeMap<u32, Vec<u32>>,
+    /// The dialogue lines voted on, handed to the game on the first frame.
+    vote_lines: Option<std::collections::HashSet<u32>>,
     scenes_set: bool,
     started: Instant,
     last_status: Option<Instant>,
@@ -595,12 +601,16 @@ impl Coop {
             globals,
             clock,
             object_script_quests,
+            vote_lines,
         } = game_data(data)?;
         let cfg = EndpointConfig {
             name: name.to_string(),
             ..EndpointConfig::default()
         };
-        let mut lines = Vec::new();
+        let mut lines = vec![format!(
+            "co-op: {} dialogue lines are voted on (S42)",
+            vote_lines.len()
+        )];
         // voice
         let (voice, line) = {
             let (settings, notes) = crate::coop_voice::settings();
@@ -710,6 +720,7 @@ impl Coop {
                 own_quests: own_quests.clone(),
                 own_scripts,
                 object_script_quests,
+                vote_lines: Some(vote_lines),
                 scenes_set: false,
                 started: Instant::now(),
                 last_status: None,
@@ -825,6 +836,10 @@ impl Coop {
                 }
                 NetEvent::SendError(why) => lines.push(format!("co-op: send failed: {why}")),
             }
+        }
+        // The lines voted on (S42 step 3b): a click on one's row is a vote.
+        if let Some(lines) = self.vote_lines.take() {
+            coop_engine::choices::set_vote_lines(e, lines);
         }
         if let Role::Guest(_) = self.role {
             // Gated from the first frame of a join, before the host answers; its own quests (the

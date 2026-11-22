@@ -369,6 +369,10 @@ impl HostLive {
         for o in self.dialogue.tick(now_ms) {
             self.route(o.aud, Msg::Dialogue(o.msg), &mut out);
         }
+        let members = self.members.clone();
+        for o in self.dialogue.tick_votes(now_ms, &members) {
+            self.route(o.aud, Msg::Dialogue(o.msg), &mut out);
+        }
         for o in self.loot.tick(now_ms) {
             self.route(o.aud, Msg::Loot(o.msg), &mut out);
         }

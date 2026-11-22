@@ -1730,5 +1730,30 @@ every other game shows it, holds, and lists its own options when the step is ove
   talking to Sunny was held (no window); the guest closed it and within three seconds the host's
   conversation started and the guest was pulled in, both windows with the leave row; the quest the
   same, no stop.
-- Not yet: votes (step 3b), rewards (step 4). Lines of no shared quest are not sent between
-  players yet (S16), so they are not shown to a watcher.
+- Step 3b, votes (2026-11-22, the owner's terms with D13). A click on the row of a line voted on
+  (step 3a's list, `coop_votelist::vote_lines`, computed by the viewer at start and given to
+  `choices::set_vote_lines`), the player's own option or another's, is not said: it is this
+  player's vote (`choices::take_voted`, `DialogueMsg::Vote`). The table (`DialogueHost::vote`)
+  keeps one vote a player, which it may change; the first opens the vote for 20 seconds
+  (`VOTE_MS`), the later ones keep that time. The voters are every player in the game but those who
+  left the conversation (a player away from the NPC is waited for too, the owner: "the vote lines
+  still wait the 20 seconds for them"); every voter on one option chooses it at once; at the end
+  of the 20 seconds the lead's option goes through, else the first vote's. Everyone is told the
+  votes (`Votes`: each voter's option, how many vote, the time left) and the choice (`Chosen`);
+  the chosen option's owner (the lead if it is one) is asked to say it (`Ask`, as step 2c), and
+  the step is the lead's pick when the lead voted. A player out of it (it left, or it left the
+  game, in it or away) is a voter fewer: its vote goes and the others' may decide it
+  (`recount`); a vote for an option its owner took out of the list goes too; a vote lapses with
+  its ask (the owner gone before saying it) and is held afresh. A line not voted on picked while a
+  vote is open ends the vote.
+  - Shown: each row voted for ends with "(n/N Votes, Xs)" (`choices::set_marks`, written into the
+    row tile's `string` trait through `Tile::SetString` `00a01350`, only rows whose text changes);
+    "Chosen: TEXT" to the players in it; a player not in it is told once a step "[Name] voted for
+    "TEXT". Talk to [NPC] to vote (Xs)." (it may then join, D13).
+  - Checked: unit tests (the table: the 20 seconds, changing a vote, one option for all, the lead
+    at the end, a player gone or leaving, stale votes, the lead's ask and a lapsed ask; the
+    client; the rows), mutation checks (all killed; a redundant check removed), a session test
+    (three players, the third away: the host voted, the guest, the starter, too, the host changed
+    its mind, the third told once; at 20 seconds the guest's pick was chosen and said by it).
+- Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
+  they are not shown to a watcher.

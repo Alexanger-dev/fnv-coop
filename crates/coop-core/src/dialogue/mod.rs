@@ -27,6 +27,9 @@ pub const LINE_TIMEOUT_MS: u64 = 30_000;
 pub const ASK_TIMEOUT_MS: u64 = 10_000;
 /// Most options one player's game may offer for a step.
 pub const OPTIONS_MAX: usize = 64;
+/// How long a vote stays open after its first vote (D13, the owner: 20 seconds): then the
+/// starter's pick goes through, or the first vote when the starter did not vote.
+pub const VOTE_MS: u64 = 20_000;
 
 /// One option of a conversation's merged list (S42 step 2): an info a player may say next, and
 /// the players whose game offered it, the one the table asks to say it first.
@@ -238,6 +241,41 @@ pub enum DialogueMsg {
         player: PlayerId,
         /// The NPC.
         npc: FormId,
+    },
+    /// A player in the conversation votes for option `choice` of step `step`, a line that matters
+    /// (S42 step 3b): its click is held until the vote is decided. A later vote of the same
+    /// player replaces its earlier one.
+    Vote {
+        /// Session.
+        session: u32,
+        /// Step.
+        step: u32,
+        /// The option voted for (an info of the merged list).
+        choice: u32,
+    },
+    /// Host: the votes so far for step `step`, in the order the players first voted, and how
+    /// many players vote; the vote closes `left_ms` from now.
+    Votes {
+        /// Session.
+        session: u32,
+        /// Step.
+        step: u32,
+        /// Each voter's option.
+        votes: Vec<(PlayerId, u32)>,
+        /// How many players vote (the players in the game, but those who left the
+        /// conversation).
+        of: u8,
+        /// Milliseconds until the vote closes.
+        left_ms: u64,
+    },
+    /// Host: option `choice` was chosen for step `step` (its owner is asked to say it).
+    Chosen {
+        /// Session.
+        session: u32,
+        /// Step.
+        step: u32,
+        /// The option.
+        choice: u32,
     },
 }
 

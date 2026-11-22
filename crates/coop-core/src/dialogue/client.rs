@@ -45,7 +45,13 @@ struct Known {
     menu: Option<(u32, Vec<MenuItem>)>,
     /// The info of its last step picked.
     last: Option<u32>,
+    /// Its open vote (S42 step 3b): (step, each voter's option, how many vote, when it closes in
+    /// this machine's time).
+    votes: Option<(u32, Vec<Ballot>, u8, u64)>,
 }
+
+/// One vote: the player and the option (its info) it voted for.
+pub type Ballot = (PlayerId, u32);
 
 /// Dialogue state for one machine.
 ///
@@ -75,6 +81,8 @@ pub struct DialogueClient {
     told_busy: Busy,
     /// Players waiting to talk to an NPC, newest last (the host's word), not yet taken.
     waiting: Vec<(PlayerId, FormId)>,
+    /// Options chosen by a vote, not yet taken: (session, choice).
+    chosen: Vec<(u32, u32)>,
 }
 
 impl DialogueClient {
@@ -93,7 +101,36 @@ impl DialogueClient {
             busy: Default::default(),
             told_busy: Busy::Free,
             waiting: Vec::new(),
+            chosen: Vec::new(),
         }
+    }
+
+    /// Votes for option `choice` of the next step, a line that matters (S42 step 3b).
+    pub fn vote(&self, choice: u32) -> Option<DialogueMsg> {
+        let v = self.view().filter(|v| v.playing.is_none())?;
+        Some(DialogueMsg::Vote {
+            session: v.session,
+            step: v.step + 1,
+            choice,
+        })
+    }
+
+    /// The shown conversation's open vote for its next step: each voter's option, how many
+    /// vote, and the milliseconds left at `now_ms`.
+    pub fn votes(&self, now_ms: u64) -> Option<(&[Ballot], u8, u64)> {
+        // (Gone once its step is picked.)
+        let (_, votes, of, ends) = self.current()?.votes.as_ref()?;
+        Some((votes.as_slice(), *of, ends.saturating_sub(now_ms)))
+    }
+
+    /// The options chosen by a vote since the last call, of the shown conversation (taken once).
+    pub fn take_chosen(&mut self) -> Vec<u32> {
+        let shown = self.view().map(|v| v.session);
+        std::mem::take(&mut self.chosen)
+            .into_iter()
+            .filter(|(s, _)| Some(*s) == shown)
+            .map(|(_, c)| c)
+            .collect()
     }
 
     /// What this player is doing, for the host when it changed (D13).
@@ -329,6 +366,7 @@ impl DialogueClient {
                         joined: vec![initiator],
                         menu: None,
                         last: None,
+                        votes: None,
                     },
                 );
                 if initiator == self.me {
@@ -384,6 +422,7 @@ impl DialogueClient {
                     k.view.picker = Some(by);
                     k.view.reported = false;
                     k.menu = None;
+                    k.votes = None;
                     k.last = Some(choice);
                 }
             }
@@ -399,6 +438,25 @@ impl DialogueClient {
             DialogueMsg::Joined { session, players } => {
                 if let Some(k) = self.sessions.get_mut(&session) {
                     k.joined = players;
+                }
+            }
+            DialogueMsg::Votes {
+                session,
+                step,
+                votes,
+                of,
+                left_ms,
+            } => {
+                if let Some(k) = self.sessions.get_mut(&session) {
+                    k.votes = Some((step, votes, of, now_ms + left_ms));
+                }
+            }
+            DialogueMsg::Chosen {
+                session, choice, ..
+            } => {
+                if let Some(k) = self.sessions.get_mut(&session) {
+                    k.votes = None;
+                    self.chosen.push((session, choice));
                 }
             }
             DialogueMsg::PlayerBusy { player, busy } => {
@@ -885,5 +943,92 @@ mod tests {
         assert_eq!(c.busy_of(PlayerId(1)), Busy::Free);
         assert_eq!(c.take_waiting(), [(PlayerId(0), NPC)]);
         assert!(c.take_waiting().is_empty());
+    }
+
+    #[test]
+    fn a_vote_is_sent_and_the_votes_and_the_choice_are_kept_for_the_shown_one() {
+        let mut c = DialogueClient::new(PlayerId(2));
+        assert!(c.vote(3).is_none() && c.votes(0).is_none());
+        start(&mut c, 1);
+        assert_eq!(
+            c.vote(3),
+            Some(DialogueMsg::Vote {
+                session: 4,
+                step: 1,
+                choice: 3
+            })
+        );
+        c.on_msg(
+            DialogueMsg::Votes {
+                session: 4,
+                step: 1,
+                votes: vec![(PlayerId(1), 3)],
+                of: 2,
+                left_ms: 20_000,
+            },
+            1_000,
+        );
+        let (votes, of, left) = c.votes(6_000).unwrap();
+        assert_eq!((votes, of, left), (&[(PlayerId(1), 3)][..], 2, 15_000));
+        assert_eq!(c.votes(30_000).unwrap().2, 0);
+        // Another conversation's, one this player follows but is not in: not this one's.
+        c.on_msg(
+            DialogueMsg::Joined {
+                session: 4,
+                players: vec![PlayerId(1), PlayerId(2)],
+            },
+            2_000,
+        );
+        c.on_msg(
+            DialogueMsg::Started {
+                session: 9,
+                npc: FormId(0x99),
+                initiator: PlayerId(3),
+                req: 1,
+            },
+            2_000,
+        );
+        c.on_msg(
+            DialogueMsg::Chosen {
+                session: 9,
+                step: 1,
+                choice: 5,
+            },
+            2_000,
+        );
+        assert!(c.take_chosen().is_empty());
+        // Chosen: the vote is over, the choice taken once.
+        c.on_msg(
+            DialogueMsg::Chosen {
+                session: 4,
+                step: 1,
+                choice: 3,
+            },
+            2_000,
+        );
+        assert!(c.votes(2_000).is_none());
+        assert_eq!(c.take_chosen(), [3]);
+        assert!(c.take_chosen().is_empty());
+        // A step picked: its votes are gone; none while it plays.
+        c.on_msg(
+            DialogueMsg::Votes {
+                session: 4,
+                step: 1,
+                votes: vec![(PlayerId(1), 3)],
+                of: 2,
+                left_ms: 20_000,
+            },
+            3_000,
+        );
+        c.on_msg(
+            DialogueMsg::Picked {
+                session: 4,
+                step: 1,
+                choice: 3,
+                by: PlayerId(1),
+            },
+            3_000,
+        );
+        assert!(c.votes(3_000).is_none() && c.vote(3).is_none());
     }
 }

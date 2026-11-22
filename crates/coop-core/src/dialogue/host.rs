@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     Busy, CloseReason, Deny, DialogueEvent, DialogueMsg, MenuItem, ASK_TIMEOUT_MS,
-    HEARTBEAT_MISS_MS, LEASE_MS, LINE_TIMEOUT_MS, OPTIONS_MAX,
+    HEARTBEAT_MISS_MS, LEASE_MS, LINE_TIMEOUT_MS, OPTIONS_MAX, VOTE_MS,
 };
 use crate::ids::{FormId, PlayerId};
 use crate::interest::Audience;
@@ -60,6 +60,12 @@ struct Session {
     /// to the NPC, in that order), until they leave. Only they pick, offer options and vote, and
     /// only they hold a step's end.
     joined: Vec<PlayerId>,
+    /// The players who left the conversation: their vote is not waited for (D13).
+    left: BTreeSet<PlayerId>,
+    /// The votes for the next step's line (S42 step 3b), in the order the players first voted.
+    votes: Vec<(PlayerId, u32)>,
+    /// When the open vote closes.
+    vote_ends_ms: Option<u64>,
 }
 
 impl Session {
@@ -72,6 +78,13 @@ impl Session {
         } else {
             self.joined.first().copied()
         }
+    }
+
+    /// The votes for options no longer in the list (their owners are out of it) gone.
+    fn drop_stale_votes(&mut self) {
+        let menu = &self.menu;
+        self.votes
+            .retain(|(_, c)| menu.iter().any(|i| i.choice == *c));
     }
 
     /// Every player's options merged: the initiator's first, in its order, then each other
@@ -99,6 +112,16 @@ impl Session {
     }
 }
 
+/// The players who vote in a conversation (D13, the owner): every player in the game but those
+/// who left it (a player away from the NPC is waited for too).
+fn voters(s: &Session, members: &[PlayerId]) -> Vec<PlayerId> {
+    members
+        .iter()
+        .copied()
+        .filter(|p| !s.left.contains(p))
+        .collect()
+}
+
 /// The authoritative dialogue lock and step sequencer.
 #[derive(Clone, Debug, Default)]
 pub struct DialogueHost {
@@ -110,6 +133,12 @@ pub struct DialogueHost {
     combat: BTreeSet<FormId>,
     /// What each player is doing (D13), as its game last said.
     busy: BTreeMap<PlayerId, Busy>,
+    /// The players in the game, as last told ([`Self::on_msg`], [`Self::tick_votes`]): who
+    /// votes when one leaves.
+    members: Vec<PlayerId>,
+    /// The time last told ([`Self::on_msg`], [`Self::tick_votes`]): the time
+    /// of a player leaving the game, for the votes' time left.
+    now_ms: u64,
     next_id: u32,
     events: Vec<DialogueEvent>,
 }
@@ -205,6 +234,8 @@ impl DialogueHost {
         now_ms: u64,
         members: &[PlayerId],
     ) -> Vec<DOut> {
+        self.members = members.to_vec();
+        self.now_ms = now_ms;
         match msg {
             DialogueMsg::Open { req, npc } => self.open(from, req, npc, now_ms),
             DialogueMsg::Pick {
@@ -257,6 +288,11 @@ impl DialogueHost {
                 }
             }
             DialogueMsg::Join { session } => self.join(from, session, members),
+            DialogueMsg::Vote {
+                session,
+                step,
+                choice,
+            } => self.vote(from, session, step, choice, now_ms, members),
             // D13: what a player is doing, told to everyone when it changes.
             DialogueMsg::Busy { busy } => {
                 if self.busy.get(&from).copied().unwrap_or_default() == busy {
@@ -278,7 +314,7 @@ impl DialogueHost {
                     .get(&session)
                     .is_some_and(|s| s.joined.contains(&from))
                 {
-                    self.drop_player(session, from, CloseReason::Finished)
+                    self.drop_player(session, from, CloseReason::Finished, now_ms)
                 } else {
                     vec![]
                 }
@@ -318,6 +354,9 @@ impl DialogueHost {
                 menu: Vec::new(),
                 asking: None,
                 joined: vec![from],
+                left: BTreeSet::new(),
+                votes: Vec::new(),
+                vote_ends_ms: None,
             },
         );
         self.npc_lock.insert(npc, session);
@@ -362,6 +401,8 @@ impl DialogueHost {
         s.offers.clear();
         s.menu.clear();
         s.asking = None;
+        s.votes.clear();
+        s.vote_ends_ms = None;
         s.last_pick_ms = now_ms;
         s.last_beat_ms = now_ms;
         // Only the players in the conversation hold the step's end (a player gone is out of it);
@@ -565,8 +606,12 @@ impl DialogueHost {
     pub fn on_disconnect(&mut self, p: PlayerId) -> Vec<DOut> {
         let mut res = Vec::new();
         self.busy.remove(&p);
+        self.members.retain(|m| *m != p);
+        let mut dropped = None;
         if let Some(s) = self.talking.get(&p).copied() {
-            res.extend(self.drop_player(s, p, CloseReason::InitiatorLeft));
+            let now = self.now_ms;
+            res.extend(self.drop_player(s, p, CloseReason::InitiatorLeft, now));
+            dropped = Some(s);
         }
         let ids: Vec<u32> = self.sessions.keys().copied().collect();
         for id in ids {
@@ -602,6 +647,11 @@ impl DialogueHost {
                     },
                 ));
             }
+            // A player away from it voted too (D13): one voter fewer.
+            if dropped != Some(id) {
+                let now = self.now_ms;
+                res.extend(self.recount(id, now));
+            }
             res.extend(self.maybe_finish_step(id));
         }
         res
@@ -622,14 +672,165 @@ impl DialogueHost {
         vec![out(Audience::All, DialogueMsg::Joined { session, players })]
     }
 
+    /// A vote of a player in the conversation for an option of the merged list (S42 step 3b):
+    /// the first opens the vote for [`VOTE_MS`]; everyone is told the votes. All the players who
+    /// vote on one option: chosen at once.
+    fn vote(
+        &mut self,
+        from: PlayerId,
+        session: u32,
+        step: u32,
+        choice: u32,
+        now_ms: u64,
+        members: &[PlayerId],
+    ) -> Vec<DOut> {
+        let Some(s) = self.sessions.get_mut(&session) else {
+            return vec![];
+        };
+        // (No list while a line plays: a step picked takes it, and none is offered until its end.)
+        if !(s.joined.contains(&from) && members.contains(&from))
+            || step != s.step + 1
+            || s.asking.is_some()
+            || !s.menu.iter().any(|i| i.choice == choice)
+        {
+            return vec![];
+        }
+        match s.votes.iter_mut().find(|(p, _)| *p == from) {
+            Some(v) => v.1 = choice,
+            None => s.votes.push((from, choice)),
+        }
+        s.vote_ends_ms.get_or_insert(now_ms + VOTE_MS);
+        let mut res = vec![self.votes_out(session, now_ms, members)];
+        res.extend(self.decide(session, now_ms, members, false));
+        res
+    }
+
+    /// The votes so far, for everyone.
+    fn votes_out(&self, session: u32, now_ms: u64, members: &[PlayerId]) -> DOut {
+        let s = &self.sessions[&session];
+        out(
+            Audience::All,
+            DialogueMsg::Votes {
+                session,
+                step: s.step + 1,
+                votes: s.votes.clone(),
+                of: voters(s, members).len() as u8,
+                left_ms: s.vote_ends_ms.map_or(0, |end| end.saturating_sub(now_ms)),
+            },
+        )
+    }
+
+    /// An open vote after a player is out of it (it left the conversation, or the game):
+    /// everyone told the votes and how many vote now, and the vote decided if the others are
+    /// all on one option.
+    fn recount(&mut self, session: u32, now_ms: u64) -> Vec<DOut> {
+        if !self
+            .sessions
+            .get(&session)
+            .is_some_and(|s| s.vote_ends_ms.is_some())
+        {
+            return vec![];
+        }
+        let members = self.members.clone();
+        let mut res = vec![self.votes_out(session, now_ms, &members)];
+        res.extend(self.decide(session, now_ms, &members, false));
+        res
+    }
+
+    /// The open vote decided, when it is: every player who votes on one option (or, `closing`,
+    /// the vote's time is up: the lead's option, else the first vote's). The chosen option's
+    /// owner is asked to say it (the lead when it is one), and everyone is told.
+    fn decide(
+        &mut self,
+        session: u32,
+        now_ms: u64,
+        members: &[PlayerId],
+        closing: bool,
+    ) -> Vec<DOut> {
+        let Some(s) = self.sessions.get_mut(&session) else {
+            return vec![];
+        };
+        let Some(&(first, first_choice)) = s.votes.first() else {
+            s.vote_ends_ms = None;
+            return vec![];
+        };
+        let voters = voters(s, members);
+        let all = voters
+            .iter()
+            .all(|p| s.votes.iter().any(|(v, c)| v == p && *c == first_choice));
+        let lead = s.lead();
+        let choice = if all {
+            first_choice
+        } else if closing {
+            s.votes
+                .iter()
+                .find(|(p, _)| Some(*p) == lead)
+                .map_or(first_choice, |v| v.1)
+        } else {
+            return vec![];
+        };
+        let by = lead
+            .filter(|l| s.votes.iter().any(|(p, _)| p == l))
+            .unwrap_or(first);
+        s.votes.clear();
+        s.vote_ends_ms = None;
+        let owners = s
+            .menu
+            .iter()
+            .find(|i| i.choice == choice)
+            .map(|i| i.owners.clone())
+            .unwrap_or_default();
+        let owner = owners
+            .iter()
+            .copied()
+            .find(|o| Some(*o) == lead)
+            .or_else(|| owners.first().copied());
+        let step = s.step + 1;
+        let mut res = vec![out(
+            Audience::All,
+            DialogueMsg::Chosen {
+                session,
+                step,
+                choice,
+            },
+        )];
+        if let Some(owner) = owner {
+            s.asking = Some(Asking {
+                step,
+                choice,
+                by,
+                owner,
+                since_ms: now_ms,
+            });
+            res.push(out(
+                Audience::To(owner),
+                DialogueMsg::Ask {
+                    session,
+                    step,
+                    choice,
+                    by,
+                },
+            ));
+        }
+        res
+    }
+
     /// A player is out of a conversation (it left, or it is gone): its options, its ask and its
     /// part in the step go with it; the conversation ends with `reason` when no one is left in
     /// it, else everyone is told who is in it.
-    fn drop_player(&mut self, session: u32, p: PlayerId, reason: CloseReason) -> Vec<DOut> {
+    fn drop_player(
+        &mut self,
+        session: u32,
+        p: PlayerId,
+        reason: CloseReason,
+        now_ms: u64,
+    ) -> Vec<DOut> {
         let Some(s) = self.sessions.get_mut(&session) else {
             return vec![];
         };
         s.joined.retain(|j| *j != p);
+        s.left.insert(p);
+        s.votes.retain(|(v, _)| *v != p);
         self.talking.remove(&p);
         if s.joined.is_empty() {
             return self.close(session, reason);
@@ -647,6 +848,7 @@ impl DialogueHost {
             let merged = s.merged();
             if merged != s.menu {
                 s.menu = merged.clone();
+                s.drop_stale_votes();
                 res.push(out(
                     Audience::All,
                     DialogueMsg::Menu {
@@ -660,7 +862,27 @@ impl DialogueHost {
         if lapsed {
             res.extend(self.ask_lapsed(session));
         }
+        // One voter fewer (its vote gone too): everyone told, and the others may now decide it.
+        res.extend(self.recount(session, now_ms));
         res.extend(self.maybe_finish_step(session));
+        res
+    }
+
+    /// Votes whose time is up: decided (the lead's option, else the first vote's), at `now_ms`
+    /// with `members` the players in the game.
+    pub fn tick_votes(&mut self, now_ms: u64, members: &[PlayerId]) -> Vec<DOut> {
+        self.members = members.to_vec();
+        self.now_ms = now_ms;
+        let due: Vec<u32> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.vote_ends_ms.is_some_and(|end| now_ms >= end))
+            .map(|(id, _)| *id)
+            .collect();
+        let mut res = Vec::new();
+        for id in due {
+            res.extend(self.decide(id, now_ms, members, true));
+        }
         res
     }
 
@@ -1845,5 +2067,379 @@ mod tests {
         // Gone: free again.
         h.on_disconnect(A);
         assert_eq!(h.busy_of(A), Busy::Free);
+    }
+
+    fn vote(h: &mut DialogueHost, from: PlayerId, s: u32, choice: u32, now: u64) -> Vec<DOut> {
+        h.on_msg(
+            from,
+            DialogueMsg::Vote {
+                session: s,
+                step: 1,
+                choice,
+            },
+            now,
+            &ALL,
+        )
+    }
+
+    /// A conversation A started that H joined (B did not: it is away), H and A offering
+    /// options 3 (A's) and 4 (H's).
+    fn voting() -> (DialogueHost, u32) {
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        msg(&mut h, H, DialogueMsg::Join { session: s });
+        offer(&mut h, A, s, 1, &[3]);
+        offer(&mut h, H, s, 1, &[4]);
+        (h, s)
+    }
+
+    #[test]
+    fn a_vote_opens_for_twenty_seconds_and_everyone_is_told_the_votes() {
+        let (mut h, s) = voting();
+        // Not an option of the list, or a player not in it: nothing.
+        assert!(vote(&mut h, A, s, 9, 0).is_empty());
+        assert!(vote(&mut h, B, s, 3, 0).is_empty());
+        let o = vote(&mut h, A, s, 3, 1_000);
+        assert_eq!(o.len(), 1, "{o:?}");
+        assert_eq!(o[0].aud, Audience::All);
+        // Every player in the game votes (B, away, too: the owner, D13).
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Votes {
+                session: s,
+                step: 1,
+                votes: vec![(A, 3)],
+                of: 3,
+                left_ms: VOTE_MS,
+            }
+        );
+        // H votes another option, then changes its mind: the time is the first vote's.
+        let o = vote(&mut h, H, s, 4, 5_000);
+        assert!(matches!(
+            &o[0].msg,
+            DialogueMsg::Votes { votes, left_ms, .. }
+                if *votes == [(A, 3), (H, 4)] && *left_ms == VOTE_MS - 4_000
+        ));
+        let o = vote(&mut h, H, s, 3, 6_000);
+        assert!(matches!(
+            &o[0].msg,
+            DialogueMsg::Votes { votes, .. } if *votes == [(A, 3), (H, 3)]
+        ));
+        assert_eq!(o.len(), 1, "B has not voted: not decided");
+        // Before its time: nothing; at it: the lead's option (A's), its owner asked.
+        assert!(h.tick_votes(VOTE_MS, &ALL).is_empty());
+        let o = h.tick_votes(1_000 + VOTE_MS, &ALL);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Chosen {
+                session: s,
+                step: 1,
+                choice: 3
+            }
+        );
+        assert_eq!(o[1].aud, Audience::To(A));
+        assert!(matches!(
+            o[1].msg,
+            DialogueMsg::Ask {
+                choice: 3,
+                by: A,
+                ..
+            }
+        ));
+        assert!(h.tick_votes(2_000 + VOTE_MS, &ALL).is_empty(), "once");
+        // The owner says it: the step starts, the vote is gone.
+        let o = msg(
+            &mut h,
+            A,
+            DialogueMsg::Pick {
+                session: s,
+                step: 1,
+                choice: 3,
+            },
+        );
+        assert!(matches!(o[0].msg, DialogueMsg::Picked { choice: 3, .. }));
+    }
+
+    #[test]
+    fn every_player_on_one_option_is_chosen_at_once_and_a_split_goes_to_the_lead() {
+        // All three on one option: at once, said by its owner (H's option: H).
+        let (mut h, s) = voting();
+        msg(&mut h, B, DialogueMsg::Join { session: s });
+        vote(&mut h, H, s, 4, 0);
+        vote(&mut h, B, s, 4, 0);
+        // The lead (A) votes last: the step is still its pick.
+        let o = vote(&mut h, A, s, 4, 0);
+        assert!(
+            matches!(o[1].msg, DialogueMsg::Chosen { choice: 4, .. }),
+            "{o:?}"
+        );
+        assert_eq!(o[2].aud, Audience::To(H));
+        assert!(matches!(
+            o[2].msg,
+            DialogueMsg::Ask {
+                choice: 4,
+                by: A,
+                ..
+            }
+        ));
+        // Split when the time is up: the lead's (A's) option.
+        let (mut h, s) = voting();
+        vote(&mut h, H, s, 4, 0);
+        vote(&mut h, A, s, 3, 0);
+        let o = h.tick_votes(VOTE_MS, &ALL);
+        assert!(matches!(o[0].msg, DialogueMsg::Chosen { choice: 3, .. }));
+        // The lead did not vote: the first vote's option, its owner asked by that voter.
+        let (mut h, s) = voting();
+        vote(&mut h, H, s, 4, 0);
+        let o = h.tick_votes(VOTE_MS, &ALL);
+        assert!(matches!(o[0].msg, DialogueMsg::Chosen { choice: 4, .. }));
+        assert!(matches!(o[1].msg, DialogueMsg::Ask { by: H, .. }));
+    }
+
+    #[test]
+    fn a_player_who_left_is_not_waited_for_and_a_pick_ends_the_vote() {
+        // B left the conversation: H and A on one option is everyone.
+        let (mut h, s) = voting();
+        msg(&mut h, B, DialogueMsg::Join { session: s });
+        let o = msg(&mut h, B, DialogueMsg::Leave { session: s });
+        assert!(
+            !o.iter().any(|m| matches!(m.msg, DialogueMsg::Votes { .. })),
+            "no vote open: {o:?}"
+        );
+        vote(&mut h, A, s, 3, 0);
+        let o = vote(&mut h, H, s, 3, 0);
+        assert!(
+            matches!(o[1].msg, DialogueMsg::Chosen { choice: 3, .. }),
+            "{o:?}"
+        );
+        // A voter who leaves: its vote goes, and the others' decide it.
+        let (mut h, s) = voting();
+        msg(&mut h, B, DialogueMsg::Join { session: s });
+        vote(&mut h, A, s, 3, 0);
+        vote(&mut h, B, s, 4, 0);
+        vote(&mut h, H, s, 3, 0);
+        let o = msg(&mut h, B, DialogueMsg::Leave { session: s });
+        assert!(o.iter().any(|m| matches!(
+            &m.msg,
+            DialogueMsg::Votes { votes, of: 2, .. } if *votes == [(A, 3), (H, 3)]
+        )));
+        assert!(o
+            .iter()
+            .any(|m| matches!(m.msg, DialogueMsg::Chosen { choice: 3, .. })));
+        // A line that is no vote picked while one is open: the vote is gone.
+        let (mut h, s) = voting();
+        vote(&mut h, H, s, 4, 0);
+        msg(
+            &mut h,
+            A,
+            DialogueMsg::Pick {
+                session: s,
+                step: 1,
+                choice: 3,
+            },
+        );
+        msg(
+            &mut h,
+            A,
+            DialogueMsg::LineDone {
+                session: s,
+                step: 1,
+            },
+        );
+        msg(
+            &mut h,
+            H,
+            DialogueMsg::LineDone {
+                session: s,
+                step: 1,
+            },
+        );
+        assert!(h.tick_votes(VOTE_MS, &ALL).is_empty());
+        // A vote while the chosen option is being said: not taken.
+        let (mut h, s) = voting();
+        vote(&mut h, H, s, 4, 0);
+        h.tick_votes(VOTE_MS, &ALL);
+        assert!(vote(&mut h, A, s, 3, VOTE_MS).is_empty());
+    }
+
+    #[test]
+    fn a_vote_from_a_player_gone_for_an_old_step_or_while_a_line_plays_is_not_taken() {
+        let (mut h, s) = voting();
+        // Its game said goodbye in the meantime: not in the game any more.
+        assert!(h
+            .on_msg(
+                A,
+                DialogueMsg::Vote {
+                    session: s,
+                    step: 1,
+                    choice: 3
+                },
+                0,
+                &[H, B]
+            )
+            .is_empty());
+        // For a step but the next.
+        for step in [0, 2] {
+            let o = msg(
+                &mut h,
+                A,
+                DialogueMsg::Vote {
+                    session: s,
+                    step,
+                    choice: 3,
+                },
+            );
+            assert!(o.is_empty(), "step {step}");
+        }
+        // While a line plays (A picked one that is no vote).
+        msg(
+            &mut h,
+            A,
+            DialogueMsg::Pick {
+                session: s,
+                step: 1,
+                choice: 3,
+            },
+        );
+        offer(&mut h, H, s, 2, &[4]);
+        let o = msg(
+            &mut h,
+            H,
+            DialogueMsg::Vote {
+                session: s,
+                step: 2,
+                choice: 4,
+            },
+        );
+        assert!(o.is_empty(), "{o:?}");
+    }
+
+    #[test]
+    fn a_player_out_of_the_game_is_a_voter_fewer_and_its_vote_goes() {
+        // B, away, leaves the game: H and A on one option is everyone now.
+        let (mut h, s) = voting();
+        vote(&mut h, A, s, 3, 0);
+        vote(&mut h, H, s, 3, 2_000);
+        let o = h.on_disconnect(B);
+        assert!(
+            matches!(
+                &o[0].msg,
+                DialogueMsg::Votes { votes, of: 2, .. } if *votes == [(A, 3), (H, 3)]
+            ),
+            "{o:?}"
+        );
+        assert!(matches!(o[1].msg, DialogueMsg::Chosen { choice: 3, .. }));
+        // H, in it, leaves the game: told once, with the time left at the last word.
+        let (mut h, s) = voting();
+        vote(&mut h, A, s, 3, 0);
+        vote(&mut h, H, s, 4, 0);
+        h.on_msg(B, DialogueMsg::Busy { busy: Busy::Menu }, 5_000, &ALL);
+        let o = h.on_disconnect(H);
+        let told: Vec<_> = o
+            .iter()
+            .filter(|m| matches!(m.msg, DialogueMsg::Votes { .. }))
+            .collect();
+        assert_eq!(told.len(), 1, "{o:?}");
+        assert_eq!(
+            told[0].msg,
+            DialogueMsg::Votes {
+                session: s,
+                step: 1,
+                votes: vec![(A, 3)],
+                of: 2,
+                left_ms: VOTE_MS - 5_000,
+            }
+        );
+        // The players in the game as last told: B gone from it, then H.
+        let (mut h, s) = voting();
+        vote(&mut h, A, s, 3, 0);
+        h.tick_votes(1_000, &[H, A]);
+        let o = h.on_disconnect(H);
+        assert!(
+            o.iter()
+                .any(|m| matches!(m.msg, DialogueMsg::Chosen { choice: 3, .. })),
+            "A alone is everyone: {o:?}"
+        );
+        assert!(o.iter().any(|m| matches!(
+            m.msg,
+            DialogueMsg::Votes {
+                left_ms: 19_000,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn the_only_voter_gone_a_new_vote_has_its_twenty_seconds() {
+        let (mut h, s) = voting();
+        msg(&mut h, B, DialogueMsg::Join { session: s });
+        vote(&mut h, B, s, 3, 0);
+        let o = msg(&mut h, B, DialogueMsg::Leave { session: s });
+        assert!(o.iter().any(|m| matches!(
+            &m.msg,
+            DialogueMsg::Votes { votes, of: 2, .. } if votes.is_empty()
+        )));
+        let o = vote(&mut h, H, s, 4, 15_000);
+        assert!(matches!(
+            o[0].msg,
+            DialogueMsg::Votes {
+                left_ms: VOTE_MS,
+                ..
+            }
+        ));
+        assert!(h.tick_votes(VOTE_MS + 1_000, &ALL).is_empty());
+        // A vote for an option whose owner left with it: gone too.
+        let (mut h, s) = voting();
+        vote(&mut h, A, s, 4, 0);
+        msg(&mut h, H, DialogueMsg::Leave { session: s });
+        assert!(h.tick_votes(VOTE_MS, &ALL).is_empty());
+        let o = vote(&mut h, A, s, 3, 10_000);
+        assert!(matches!(
+            &o[0].msg,
+            DialogueMsg::Votes { votes, left_ms: VOTE_MS, .. } if *votes == [(A, 3)]
+        ));
+    }
+
+    #[test]
+    fn the_lead_says_an_option_it_shares_and_a_lapsed_ask_is_voted_on_again() {
+        // A started, B then H joined, A left: B leads. H and B both offer 5: B asked.
+        let mut h = DialogueHost::new();
+        let s = started(&mut h, A);
+        msg(&mut h, B, DialogueMsg::Join { session: s });
+        msg(&mut h, H, DialogueMsg::Join { session: s });
+        msg(&mut h, A, DialogueMsg::Leave { session: s });
+        offer(&mut h, H, s, 1, &[5, 6]);
+        offer(&mut h, B, s, 1, &[5]);
+        vote(&mut h, H, s, 5, 0);
+        let o = vote(&mut h, B, s, 5, 0);
+        assert_eq!(o[2].aud, Audience::To(B), "{o:?}");
+        // Split, the lead's (A's) chosen; A leaves before it says it: voted on again, afresh.
+        let (mut h, s) = voting();
+        msg(&mut h, B, DialogueMsg::Join { session: s });
+        offer(&mut h, B, s, 1, &[4]);
+        vote(&mut h, A, s, 3, 0);
+        vote(&mut h, H, s, 4, 0);
+        vote(&mut h, B, s, 4, 0);
+        let o = h.tick_votes(VOTE_MS, &ALL);
+        assert!(matches!(o[1].msg, DialogueMsg::Ask { choice: 3, .. }));
+        let o = msg(&mut h, A, DialogueMsg::Leave { session: s });
+        assert!(
+            !o.iter().any(|m| matches!(
+                m.msg,
+                DialogueMsg::Chosen { .. } | DialogueMsg::Votes { .. }
+            )),
+            "no vote open while it is being said: {o:?}"
+        );
+        let o = vote(&mut h, H, s, 4, 30_000);
+        assert_eq!(
+            o[0].msg,
+            DialogueMsg::Votes {
+                session: s,
+                step: 1,
+                votes: vec![(H, 4)],
+                of: 2,
+                left_ms: VOTE_MS,
+            }
+        );
     }
 }

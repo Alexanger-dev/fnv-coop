@@ -21,6 +21,7 @@ coop-engine-session = { path = "../crates/coop-engine-session" }
 engine-core = { path = "../crates/engine-core" }
 engine-platform = { path = "../crates/engine-platform" }
 esm = { path = "../crates/esm" }
+coop-votelist = { path = "../crates/coop-votelist" }
 # voice: co-op voice chat's microphone, codec (Opus) and speakers (docs/coop/SPECS.md S32).
 coop-voice = { path = "../crates/coop-voice", optional = true }
 

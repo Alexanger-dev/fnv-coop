@@ -296,6 +296,84 @@ fn a_busy_far_player_told_of_a_second_players_conversation_is_told_both_ends() {
     );
 }
 
+/// S42 step 3b (D13, the owner): a click on a line that matters is a vote; the votes show after
+/// its row ("(1/3 Votes, 20s)"); a player away from the NPC is told and waited for; when the 20 s
+/// are up the starter's pick goes through, its owner asked to say it, and the players in it are
+/// told what was chosen.
+#[test]
+fn a_vote_is_shown_waited_for_twenty_seconds_and_chosen() {
+    let mut w = World::new(&["Sunny", "Chet"]);
+    for e in std::iter::once(&mut w.host.e).chain(w.guests.iter_mut().map(|g| &mut g.game.e)) {
+        coop_engine::choices::set_vote_lines(
+            e,
+            std::collections::HashSet::from([SHARED_LINE, PLAIN_LINE]),
+        );
+    }
+    w.guests[1].game.set_name(SUNNY, "Sunny Smiles");
+    w.run(20);
+    // Guest 2 is in the store, away from Sunny.
+    w.guests[1].game.move_player(STORE, [0.0; 3], 0.0);
+    w.run(10);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.guests[0].game.say(PLAIN_LINE, true);
+    w.run(10);
+    assert_eq!(w.hd.social.talker.pulled_in, 1);
+    // The guest's window lists two lines that matter; the host votes for one.
+    w.guests[0].game.list_options(&[SHARED_LINE, PLAIN_LINE]);
+    w.run(4);
+    w.host.click_vote(SHARED_LINE);
+    w.run(4);
+    assert_eq!(w.hd.social.talker.votes_cast, 1);
+    assert_eq!(
+        forms::quest_stage(&mut w.host.e, MQ),
+        Some(0),
+        "nothing said yet"
+    );
+    // The guest, in it, sees the votes after the row; guest 2, away, is told and may come.
+    // (The seconds left rounded up: under 20 s gone by, still 20.)
+    assert_eq!(
+        coop_engine::choices::marks(&mut w.guests[0].game.e),
+        [(SHARED_LINE, "(1/3 Votes, 20s)".to_string())]
+    );
+    let told = "Host voted for \"Where is Sunny?\". Talk to Sunny Smiles to vote (20s).";
+    // The guest (the starter) votes for it too: 2 of 3, one row.
+    w.guests[0].game.click_vote(SHARED_LINE);
+    w.run(4);
+    let marks = coop_engine::choices::marks(&mut w.host.e);
+    assert_eq!(marks.len(), 1, "{marks:?}");
+    assert!(marks[0].1.starts_with("(2/3 Votes, "), "{marks:?}");
+    // The host changes its mind: 1 of 3 each; guest 2 still waited for.
+    w.host.click_vote(PLAIN_LINE);
+    w.run(4);
+    let marks = coop_engine::choices::marks(&mut w.host.e);
+    assert_eq!(marks.len(), 2, "{marks:?}");
+    assert!(
+        marks.iter().all(|(_, m)| m.starts_with("(1/3 Votes, ")),
+        "{marks:?}"
+    );
+    assert_eq!(w.hd.social.talker.votes_chosen, 0);
+    // The 20 s are up: the starter's pick (not the first vote's), the guest (its owner) asked to
+    // say it; the players in it told.
+    w.run_every(25, 1_000);
+    assert_eq!(w.hd.social.talker.votes_chosen, 1);
+    assert_eq!(w.guests[0].driver.social.talker.votes_chosen, 1);
+    assert!(w
+        .host
+        .messages()
+        .contains(&"Chosen: Where is Sunny?".to_string()));
+    assert!(coop_engine::choices::marks(&mut w.host.e).is_empty());
+    assert_eq!(
+        w.guests[0].driver.social.talker.asks_said + w.guests[0].driver.social.talker.asks_failed,
+        1,
+        "the owner was asked to say it"
+    );
+    // Guest 2, away, was told of the vote once, and nothing of what was chosen.
+    let far = w.guests[1].game.messages();
+    assert_eq!(far.iter().filter(|m| *m == told).count(), 1, "{far:?}");
+    assert!(!far.iter().any(|m| m.starts_with("Chosen")), "{far:?}");
+}
+
 /// The owner, 2026-11-22: an option whose text is its topic's name ("I wanted to ask you some
 /// questions.", no prompt of its own) had no subtitle; it has, as the option list shows it.
 #[test]

@@ -82,6 +82,15 @@ pub struct Talker {
     pub waits: u32,
     /// See [`Self::waits`].
     pub waits_started: u32,
+    /// The time, set by the caller each step (the dialogue client's clock): a vote's seconds left.
+    pub now_ms: u64,
+    /// Votes this player cast (S42 step 3b), and the options chosen by votes in its
+    /// conversations.
+    pub votes_cast: u32,
+    /// See [`Self::votes_cast`].
+    pub votes_chosen: u32,
+    /// The vote this player, not in the conversation, was told of: (session, step).
+    vote_told: Option<(u32, u32)>,
     /// The step whose last line was shown to a player who joined: (session, step).
     join_shown: Option<(u32, u32)>,
     /// Conversations a copy of an actor another game runs began itself with this player, left to
@@ -346,11 +355,63 @@ impl Talker {
         // joins it). (In this player's opening the game refuses no NPC: `talk::set_own_opening`.)
         talk::set_busy(e, client.busy_npcs().into_iter().map(|n| n.0));
         self.leave(e, client, &mut out);
+        self.vote(e, client, &mut out);
         self.share(e, me, client, &mut out);
         self.watch(e, me, client, &mut out);
         self.drive(e, client, &mut out);
         self.options(e, me, client, &mut out);
         out
+    }
+
+    /// S42 step 3b: a click on a line that matters is this player's vote; the votes so far show
+    /// after the rows' text ("(1/2 Votes, 18s)"), the choice is told; a player not in the
+    /// conversation is told once that a vote is open and how to take part.
+    fn vote(&mut self, e: &mut Engine, client: &mut DialogueClient, out: &mut Vec<DialogueMsg>) {
+        if let Some(info) = coop_engine::choices::take_voted(e) {
+            if let Some(msg) = client.vote(info) {
+                out.push(msg);
+                self.votes_cast += 1;
+            }
+        }
+        for choice in client.take_chosen() {
+            self.votes_chosen += 1;
+            if client.joined() {
+                let text = coop_engine::choices::option_text(e, choice).unwrap_or_default();
+                talk::show(e, &format!("Chosen: {text}"));
+            }
+        }
+        let view = client.view().copied();
+        let votes = client
+            .votes(self.now_ms)
+            .map(|(v, of, left)| (v.to_vec(), of, left));
+        let mut marks = Vec::new();
+        if let (Some(v), Some((votes, of, left))) = (view, votes) {
+            let secs = left.div_ceil(1000);
+            if client.joined() {
+                for &(_, choice) in &votes {
+                    if marks.iter().any(|(c, _)| *c == choice) {
+                        continue;
+                    }
+                    let n = votes.iter().filter(|(_, c)| *c == choice).count();
+                    marks.push((choice, format!("({n}/{of} Votes, {secs}s)")));
+                }
+            } else if let Some(&(who, choice)) = votes
+                .first()
+                .filter(|_| self.vote_told != Some((v.session, v.step)))
+            {
+                self.vote_told = Some((v.session, v.step));
+                let text = coop_engine::choices::option_text(e, choice).unwrap_or_default();
+                let npc = talk::name_of(e, v.npc.0).unwrap_or_else(|| "them".into());
+                talk::show(
+                    e,
+                    &format!(
+                        "{} voted for \"{text}\". Talk to {npc} to vote ({secs}s).",
+                        player_name(who)
+                    ),
+                );
+            }
+        }
+        coop_engine::choices::set_marks(e, marks);
     }
 
     /// The other player busy (in a menu, fighting) whose avatar is in cell `cell`, if any.

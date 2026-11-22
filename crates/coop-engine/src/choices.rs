@@ -20,12 +20,18 @@
 //! its results are then this game's, and the line it said is the step's pick). [`say`] clicks a
 //! row of this game's own when the table asks this game to say it.
 //!
+//! A click on the row of a line that matters (one of [`set_vote_lines`], S42 step 3b), this game's
+//! own or another player's, is not said either: it is noted as a vote ([`take_voted`]), and the
+//! line is said once the vote chose it (the table asks its owner: [`say`]). The votes so far are
+//! shown after the rows' text ([`set_marks`], e.g. `Okay, I'm in. (1/2 Votes, 18s)`).
+//!
 //! A player in a conversation with another player gets a last row, `[Leave conversation]`
 //! ([`set_leave`], S42 D12): a click on it is noted ([`take_leave`]) and the game does nothing
 //! with it (the session closes this player's window and tells the table).
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use engine_core::extend::{Owner, WrapSlot};
 use engine_core::{args, Engine, Ret};
@@ -63,6 +69,16 @@ struct State {
     leave_row: Option<usize>,
     /// The `[Leave conversation]` row clicked.
     left: bool,
+    /// The lines voted on (form ids; S42 step 3b).
+    vote_lines: Arc<HashSet<u32>>,
+    /// A row of a line voted on clicked: its info.
+    voted: Option<u32>,
+    /// [`say`] runs: its click is said, not voted.
+    saying: bool,
+    /// What is shown after the rows of these infos (the votes so far).
+    marks: Vec<(u32, String)>,
+    /// The rows of the window's list: (index, info, the text it was listed with).
+    bases: Vec<(u32, u32, String)>,
     /// The menu's `uiIgnoreInputStartTime` when its list was last taken.
     stamp: u32,
 }
@@ -163,9 +179,99 @@ pub fn leave_offered(e: &mut Engine) -> bool {
     state(e, |s| s.leave)
 }
 
+/// What is shown after the rows of each info now (the votes so far).
+pub fn marks(e: &mut Engine) -> Vec<(u32, String)> {
+    state(e, |s| s.marks.clone())
+}
+
+/// The open window lists `infos` as this game's own options, for the test games (which build no
+/// list of their own).
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn note_list(e: &mut Engine, infos: Vec<u32>) {
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    state(e, |s| {
+        s.menu = menu;
+        s.own = infos;
+    });
+    e.ext_free::<Choices>().lists.fetch_add(1, Ordering::SeqCst);
+}
+
+/// The player's click on the row of line `info`, voted on, for the test games.
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn note_vote_click(e: &mut Engine, info: u32) {
+    state(e, |s| s.voted = Some(info));
+}
+
 /// Whether the `[Leave conversation]` row was clicked since the last call.
 pub fn take_leave(e: &mut Engine) -> bool {
     state(e, |s| std::mem::take(&mut s.left))
+}
+
+/// The lines voted on (form ids, S42 step 3b): a click on one's row is a vote.
+pub fn set_vote_lines(e: &mut Engine, lines: HashSet<u32>) {
+    state(e, |s| s.vote_lines = Arc::new(lines));
+}
+
+/// A row of a line voted on clicked since the last call: its info (taken once).
+pub fn take_voted(e: &mut Engine) -> Option<u32> {
+    state(e, |s| s.voted.take())
+}
+
+/// What is shown after the rows of these infos (the votes so far), the others' rows as listed.
+/// Whether it changed (the open window's rows then show it).
+pub fn set_marks(e: &mut Engine, marks: Vec<(u32, String)>) -> bool {
+    if state(e, |s| s.marks == marks) {
+        return false;
+    }
+    state(e, |s| s.marks = marks);
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if menu != 0 && state(e, |s| s.menu == menu) {
+        apply_marks(e, menu);
+    }
+    true
+}
+
+/// The rows' texts with the marks after them.
+fn apply_marks(e: &mut Engine, menu: u32) {
+    let (bases, marks) = state(e, |s| (s.bases.clone(), s.marks.clone()));
+    for (index, info, base) in bases {
+        let text = match marks.iter().find(|(i, _)| *i == info) {
+            Some((_, mark)) => format!("{base} {mark}"),
+            None => base,
+        };
+        let Some(tile) = row_tile(e, menu, index) else {
+            continue;
+        };
+        if row_text(e, tile).as_deref() == Some(text.as_str()) {
+            continue;
+        }
+        let bytes = row_bytes(&text);
+        e.with_stack(0x200, |e, buffer| {
+            e.mem.set_cstr(buffer.addr(), &bytes);
+            e.call(
+                addr::TILE_SET_STRING,
+                &args![tile, addr::TRAIT_STRING, buffer.addr(), 1u32],
+            );
+        });
+    }
+}
+
+/// The text a row tile shows (its `string` trait): the tile's values (`+0x14` the array, `+0x18`
+/// how many), each (id, number at +8, text at +0xc).
+fn row_text(e: &mut Engine, tile: u32) -> Option<String> {
+    let data = e.mem.u32(tile + 0x14);
+    let n = e.mem.u32(tile + 0x18).min(256);
+    (0..n).find_map(|i| {
+        let v = e.mem.u32(data + i * 4);
+        (v != 0 && e.mem.u32(v) == addr::TRAIT_STRING).then(|| {
+            let chars = e.mem.u32(v + 0xc);
+            if chars == 0 {
+                String::new()
+            } else {
+                e.mem.cstr(chars).into_iter().map(char::from).collect()
+            }
+        })
+    })
 }
 
 /// An added row (another player's option) clicked since the last call: its info.
@@ -192,8 +298,10 @@ pub fn say(e: &mut Engine, info: u32) -> bool {
     };
     e.mem
         .set_u32(menu + addr::DIALOG_MENU_IGNORE_INPUT_OFFSET, 0);
+    state(e, |s| s.saying = true);
     e.call(addr::DIALOG_MENU_DO_CLICK, &args![menu, -1i32 as u32, tile]);
-    log(|| format!("option {info:08x} said for another player's pick"));
+    state(e, |s| s.saying = false);
+    log(|| format!("option {info:08x} said for another player's pick or the vote"));
     true
 }
 
@@ -266,15 +374,21 @@ pub fn option_text(e: &mut Engine, id: u32) -> Option<String> {
     (!name.trim().is_empty()).then_some(name)
 }
 
-/// Adds a row at `index` with `text` to the window's list, as `LoadTopicsList` adds its own:
-/// named `topic_<index>`, its index kept in trait `0xfac`, at full brightness.
-fn add_row(e: &mut Engine, menu: u32, index: u32, text: &str) -> bool {
+/// A row's text as the game's bytes: Latin-1 (others `?`), no NUL, at most [`ROW_TEXT_MAX`].
+fn row_bytes(text: &str) -> Vec<u8> {
     let mut bytes: Vec<u8> = text
         .chars()
         .map(|c| if (c as u32) < 0x100 { c as u8 } else { b'?' })
         .filter(|b| *b != 0)
         .collect();
     bytes.truncate(ROW_TEXT_MAX);
+    bytes
+}
+
+/// Adds a row at `index` with `text` to the window's list, as `LoadTopicsList` adds its own:
+/// named `topic_<index>`, its index kept in trait `0xfac`, at full brightness.
+fn add_row(e: &mut Engine, menu: u32, index: u32, text: &str) -> bool {
+    let bytes = row_bytes(text);
     let name = format!("topic_{index}");
     let list = menu + addr::DIALOG_MENU_LIST_OFFSET;
     let tile = e.with_stack(0x200, |e, buffer| {
@@ -385,11 +499,26 @@ fn take_list(e: &mut Engine, menu: u32) {
     }
     log(|| format!("list of {menu:08x}: own {own:08x?}, added {rows:08x?}"));
     let stamp = e.mem.u32(menu + addr::DIALOG_MENU_IGNORE_INPUT_OFFSET);
+    // The rows' texts as listed, for the votes shown after them.
+    let mut bases = Vec::new();
+    for (index, info) in own.iter().copied().enumerate() {
+        if let Some(text) = row_tile(e, menu, index as u32).and_then(|t| row_text(e, t)) {
+            bases.push((index as u32, info, text));
+        }
+    }
+    for (k, info) in rows.iter().copied().enumerate() {
+        let index = (own.len() + k) as u32;
+        if let Some(text) = row_tile(e, menu, index).and_then(|t| row_text(e, t)) {
+            bases.push((index, info, text));
+        }
+    }
     state(e, |s| {
         s.rows = rows;
         s.leave_row = leave_row;
         s.stamp = stamp;
+        s.bases = bases;
     });
+    apply_marks(e, menu);
 }
 
 /// The wrap at `007624f0`. Its words: the menu, the clicked id, the tile.
@@ -429,6 +558,28 @@ pub(crate) fn do_click(e: &mut Engine, a: &[u32]) -> Ret {
         hit
     }) {
         log(|| "[Leave conversation] clicked".to_string());
+        e.ext_free::<Choices>()
+            .clicks_held
+            .fetch_add(1, Ordering::SeqCst);
+        return Ret::default();
+    }
+    // A line voted on (this game's row or another player's): noted, nothing said (S42 step 3b).
+    let voted = state(e, |s| {
+        if s.menu != menu || s.saying {
+            return None;
+        }
+        let info = if index < s.own.len() {
+            s.own.get(index).copied()
+        } else {
+            s.rows.get(index - s.own.len()).copied()
+        }?;
+        s.vote_lines.contains(&info).then(|| {
+            s.voted = Some(info);
+            info
+        })
+    });
+    if let Some(info) = voted {
+        log(|| format!("a vote for {info:08x}"));
         e.ext_free::<Choices>()
             .clicks_held
             .fetch_add(1, Ordering::SeqCst);
@@ -489,6 +640,7 @@ mod tests {
     const SYNCS: u32 = COUNTS + 4;
     const GAME_LISTS: u32 = COUNTS + 8;
     const HEAP: u32 = COUNTS + 0xc;
+    const SET_STRINGS: u32 = COUNTS + 0x10;
     const ALPHA: u32 = 0x1234;
     const ITEMS: u32 = BASE + 0xb000;
     const NODES: u32 = BASE + 0xb800;
@@ -596,6 +748,17 @@ mod tests {
             let text = e.mem.cstr(a[2]);
             e.mem.set_cstr(at + 4, &text);
             e.mem.set_u32(ROWS, n + 1);
+            // The row tile's values: its list index, then its `string` trait, the row's text.
+            let block = e.mem.u32(HEAP);
+            e.mem.set_u32(HEAP, block + 0x30);
+            e.mem.set_u32(block, block + 8);
+            e.mem.set_u32(block + 4, block + 0x1c);
+            e.mem.set_u32(block + 8, addr::TILE_TRAIT_LIST_INDEX);
+            e.mem.set_u32(block + 8 + 0xc, at + 4);
+            e.mem.set_u32(block + 0x1c, addr::TRAIT_STRING);
+            e.mem.set_u32(block + 0x1c + 0xc, at + 4);
+            e.mem.set_u32(tile(n) + 0x14, block);
+            e.mem.set_u32(tile(n) + 0x18, 2);
             // The list box's items, a list from the node embedded at +4: (tile, data).
             let item = ITEMS + 0x10 * n;
             e.mem.set_u32(item, tile(n));
@@ -609,6 +772,14 @@ mod tests {
                 e.mem.set_u32(prev + 4, node);
             }
             eax(tile(n))
+        });
+        e.register(addr::TILE_SET_STRING, |e, a| {
+            assert_eq!(a[1], addr::TRAIT_STRING);
+            e.mem.set_u32(SET_STRINGS, e.mem.u32(SET_STRINGS) + 1);
+            let n = (a[0] - TILES) / TILE;
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(ROWS + 4 + ROW * n + 4, &text);
+            Ret::default()
         });
         e.register(addr::TILE_SET_NAME, |e, a| {
             let n = (a[0] - TILES) / TILE;
@@ -780,6 +951,109 @@ mod tests {
         e.mem.set_u32(SAID, 0);
         e.call(addr::DIALOG_MENU_DO_CLICK, &args![MENU, 0u32, ROOT]);
         assert_eq!(take_clicked(&mut e), None);
+    }
+
+    #[test]
+    fn a_click_on_a_line_voted_on_is_a_vote_and_the_votes_show_after_its_text() {
+        let mut e = world(&[0, 1]);
+        set_vote_lines(&mut e, HashSet::from([IDS[1], IDS[3]]));
+        set_foreign(&mut e, vec![(IDS[3], "Guest".into())]);
+        list(&mut e);
+        // This game's own line voted on: not said, a vote.
+        click(&mut e, 1);
+        assert_eq!(e.mem.u32(SAID), 0);
+        assert_eq!(take_voted(&mut e), Some(IDS[1]));
+        assert_eq!(take_voted(&mut e), None, "taken once");
+        // Another player's: a vote, not a pick of its option.
+        click(&mut e, 2);
+        assert_eq!(take_voted(&mut e), Some(IDS[3]));
+        assert_eq!(take_clicked(&mut e), None);
+        assert_eq!(counts(&mut e).2, 2);
+        // A line not voted on: said as before.
+        click(&mut e, 0);
+        assert_eq!(e.mem.u32(SAID), 1);
+        assert_eq!(take_voted(&mut e), None);
+        // The vote chose it: said here when the table asks.
+        assert!(say(&mut e, IDS[1]));
+        assert_eq!(e.mem.u32(SAID), 2);
+        assert_eq!(take_voted(&mut e), None);
+        // The votes after the rows' text, changed, then gone.
+        assert!(set_marks(
+            &mut e,
+            vec![
+                (IDS[1], "(1/2 Votes)".into()),
+                (IDS[3], "(1/2 Votes)".into())
+            ]
+        ));
+        assert_eq!(
+            rows(&e),
+            [
+                (0, "Prompt 0".into()),
+                (1, "Prompt 1 (1/2 Votes)".into()),
+                (2, "Prompt 3 (Guest) (1/2 Votes)".into()),
+            ]
+        );
+        assert!(!set_marks(
+            &mut e,
+            vec![
+                (IDS[1], "(1/2 Votes)".into()),
+                (IDS[3], "(1/2 Votes)".into())
+            ]
+        ));
+        // Only the rows whose text changes are written.
+        let written = e.mem.u32(SET_STRINGS);
+        assert!(set_marks(&mut e, vec![(IDS[1], "(2/2 Votes)".into())]));
+        assert_eq!(rows(&e)[1].1, "Prompt 1 (2/2 Votes)");
+        assert_eq!(e.mem.u32(SET_STRINGS), written + 2, "rows 1 and 2");
+        assert_eq!(rows(&e)[2].1, "Prompt 3 (Guest)");
+        // A new list shows them too.
+        list(&mut e);
+        assert_eq!(rows(&e).len(), 3);
+        assert_eq!(rows(&e)[1].1, "Prompt 1 (2/2 Votes)");
+        assert!(set_marks(&mut e, vec![]));
+        assert!(rows(&e).iter().all(|(_, t)| !t.contains("Votes")));
+        // A window this did not list (a new one, not yet listed): its rows are the game's own,
+        // neither marked nor voted from.
+        state(&mut e, |s| s.menu = 0);
+        assert!(set_marks(&mut e, vec![(IDS[1], "(1/2 Votes)".into())]));
+        assert_eq!(rows(&e)[1].1, "Prompt 1");
+        click(&mut e, 1);
+        assert_eq!(e.mem.u32(SAID), 2, "said");
+        assert_eq!(take_voted(&mut e), None);
+    }
+
+    #[test]
+    fn the_votes_after_a_row_keep_its_text_in_the_games_bytes() {
+        let mut e = world(&[0, 1]);
+        e.mem.set_cstr(PROMPTS + 0x40, b"Caf\xe9?");
+        set_vote_lines(&mut e, HashSet::from([IDS[1]]));
+        list(&mut e);
+        assert!(set_marks(&mut e, vec![(IDS[1], "(1/2 Votes, 9s)".into())]));
+        assert_eq!(rows(&e)[1].1, "Caf\u{e9}? (1/2 Votes, 9s)");
+    }
+
+    #[test]
+    fn a_rows_text_is_its_string_trait_in_the_games_bytes() {
+        let mut e = world(&[]);
+        let tile = BASE + 0xf000;
+        let values = tile + 0x40;
+        assert_eq!(row_text(&mut e, tile), None, "no values");
+        // A value of another trait, then the string with no text.
+        e.mem.set_u32(tile + 0x14, values);
+        e.mem.set_u32(tile + 0x18, 2);
+        e.mem.set_u32(values, values + 0x10);
+        e.mem.set_u32(values + 4, values + 0x30);
+        e.mem.set_u32(values + 0x10, addr::TILE_TRAIT_LIST_INDEX);
+        e.mem.set_u32(values + 0x10 + 0xc, values + 0x80);
+        e.mem.set_cstr(values + 0x80, b"index");
+        e.mem.set_u32(values + 0x30, addr::TRAIT_STRING);
+        assert_eq!(row_text(&mut e, tile).as_deref(), Some(""));
+        e.mem.set_u32(values + 0x30 + 0xc, values + 0xa0);
+        e.mem.set_cstr(values + 0xa0, b"Prompt");
+        assert_eq!(row_text(&mut e, tile).as_deref(), Some("Prompt"));
+        // Others than Latin-1 as `?`, NUL dropped, cut to the game's room.
+        assert_eq!(row_bytes("caf\u{e9} \u{2014}\0!"), b"caf\xe9 ?!");
+        assert_eq!(row_bytes(&"x".repeat(ROW_TEXT_MAX + 5)).len(), ROW_TEXT_MAX);
     }
 
     #[test]
