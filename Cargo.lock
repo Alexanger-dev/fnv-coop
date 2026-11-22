@@ -1394,6 +1394,7 @@ dependencies = [
  "coop-net",
  "coop-policy",
  "coop-voice",
+ "coop-votelist",
  "engine-core",
  "engine-platform",
  "esm",
