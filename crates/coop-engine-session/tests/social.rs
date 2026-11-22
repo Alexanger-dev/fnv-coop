@@ -595,6 +595,51 @@ fn an_option_named_by_its_topic_is_subtitled_with_that_name() {
     );
 }
 
+/// The owner's log, 2026-11-22: Sunny's bark (one topic) is said at VCG02's stage 20 and again at
+/// 40; the guest's ask at 40 was refused as "said here 149 s ago". A line a script has an NPC say
+/// is the same only for the same occasion, its quest's stage (council 3-0, A).
+#[test]
+fn the_same_scripted_line_at_a_later_stage_is_said_again() {
+    const BARK: u32 = 0x0010_9100;
+    let mut w = World::new(&["Sunny"]);
+    w.host.add_topic(BARK, MQ);
+    w.guests[0].game.add_topic(BARK, MQ);
+    forms::set_quest_stage(&mut w.host.e, MQ, 10);
+    w.run(20);
+    assert_eq!(coop_engine::commands::say_occasion(&mut w.host.e, BARK), 10);
+    // At stage 10 the host's trigger says it, for everyone; the guest's then is the same line.
+    w.host.script_say_to_player(SUNNY, BARK);
+    w.run(30);
+    assert_eq!(w.host.said_to_player(SUNNY), (1, BARK));
+    w.guests[0].game.script_say_to_player(SUNNY, BARK);
+    w.run(30);
+    assert_eq!(w.hd.says_refused, 1);
+    assert_eq!(w.host.said_to_player(SUNNY).0, 1);
+    // At stage 20 the guest's trigger says it again: said, for everyone.
+    forms::set_quest_stage(&mut w.host.e, MQ, 20);
+    w.run(30);
+    w.guests[0].game.script_say_to_player(SUNNY, BARK);
+    w.run(30);
+    assert_eq!(w.hd.says_refused, 1);
+    assert_eq!(w.hd.says_for_guests, 1);
+    assert_eq!(w.host.said_to_player(SUNNY), (2, BARK));
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 2);
+    // The host's own trigger a moment later, at the same stage: not again.
+    w.host.script_say_to_player(SUNNY, BARK);
+    w.run(30);
+    assert_eq!(w.host.said_to_player(SUNNY).0, 2);
+    // A form that is no topic has no occasion (its words are not a topic's quest list).
+    let f = forms::form(&mut w.host.e, BARK).expect("the topic");
+    w.host.e.mem.set_u8(
+        f + coop_engine::addr::FORM_TYPE_OFFSET,
+        coop_engine::addr::FORM_TYPE_INFO,
+    );
+    assert_eq!(
+        coop_engine::commands::say_occasion(&mut w.host.e, BARK),
+        coop_engine::commands::NO_OCCASION
+    );
+}
+
 /// The owner, 2026-11-21: a far player's lines came as Pip-Boy notifications, cut short. They
 /// are the game's own subtitles now, one at a time (each its full time), the NPC's named.
 #[test]

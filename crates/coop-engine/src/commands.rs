@@ -21,19 +21,21 @@ pub struct Commands {
     evaluate: Mutex<Vec<u32>>,
     /// Conversations between two actors a script started, in order.
     scenes: Mutex<Vec<Scene>>,
-    /// Lines a script had an actor say to the player (`SayTo`), in order: speaker, topic.
-    says: Mutex<Vec<(u32, u32)>>,
+    /// Lines a script had an actor say to the player (`SayTo`), in order: speaker, topic,
+    /// occasion ([`say_occasion`]).
+    says: Mutex<Vec<Say>>,
     /// Host: scenes played for a guest's ask (actor, target, topic), and when.
     asked: Mutex<Vec<AskedScene>>,
     /// Host: `SayTo` commands seen, for the log.
     says_seen: AtomicU32,
-    /// Host: lines said for a guest's ask (speaker, topic), and when: this game's own copy of
-    /// the same is not said again ([`SAY_AGAIN`]).
-    says_asked: Mutex<Vec<((u32, u32), std::time::Instant)>>,
+    /// Host: lines said for a guest's ask (speaker, topic, occasion), and when: this game's own
+    /// copy of the same is not said again ([`SAY_AGAIN`]).
+    says_asked: Mutex<Vec<(Say, std::time::Instant)>>,
     /// Guest: its own scripts' lines to its player, asked of the host and not said here.
     says_dropped: AtomicU32,
-    /// The lines (speaker, topic, on a guest) already written to the log as not said here.
-    says_noted: Mutex<std::collections::BTreeSet<(u32, u32, bool)>>,
+    /// The lines (speaker, topic, occasion, on a guest) already written to the log as not said
+    /// here.
+    says_noted: Mutex<std::collections::BTreeSet<(Say, bool)>>,
     /// Guest: the speakers saying a line here for the host's that the host's game said too: the
     /// line's result is the host's (it ran there), not run again here.
     echoes: Mutex<std::collections::BTreeSet<u32>>,
@@ -383,13 +385,40 @@ pub(crate) fn parse(e: &mut Engine, a: &[u32], keep: bool) -> Option<[u32; 6]> {
 /// trigger that set it off in the guest's game fires in the host's when its player comes).
 pub const SAY_AGAIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
-/// Host: the line `speaker` says `topic` was said here for a guest's ask.
-pub fn said_for_a_guest(e: &mut Engine, speaker: u32, topic: u32) {
+/// A line a script has an actor say to the player: the speaker, the topic (form ids) and the
+/// occasion it is said for ([`say_occasion`]).
+pub type Say = (u32, u32, u32);
+
+/// What a line a script has an actor say is said for: the stage, now, of the quest its topic is
+/// first under (the owner, 2026-11-22: Sunny's `VCG02SunnyBark` is said at VCG02's stage 20 and
+/// again at 40, two occasions; a trigger's script saying it every frame at one stage, one).
+/// [`NO_OCCASION`] for a topic with no quest (or not a topic).
+pub fn say_occasion(e: &mut Engine, topic: u32) -> u32 {
+    let Some(t) = crate::forms::form(e, topic) else {
+        return NO_OCCASION;
+    };
+    if e.mem.u8(t.wrapping_add(addr::FORM_TYPE_OFFSET)) != addr::FORM_TYPE_DIAL {
+        return NO_OCCASION;
+    }
+    let entry = e.mem.u32(t.wrapping_add(addr::TOPIC_QUEST_LIST_OFFSET));
+    let quest = if entry == 0 { 0 } else { e.mem.u32(entry) };
+    if quest == 0 {
+        return NO_OCCASION;
+    }
+    let id = e.mem.u32(quest.wrapping_add(addr::FORM_ID_OFFSET));
+    crate::forms::quest_stage(e, id).map_or(NO_OCCASION, u32::from)
+}
+
+/// [`say_occasion`] of a topic under no quest.
+pub const NO_OCCASION: u32 = u32::MAX;
+
+/// Host: the line `say` was said here for a guest's ask.
+pub fn said_for_a_guest(e: &mut Engine, say: Say) {
     e.ext_free::<Commands>()
         .says_asked
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .push(((speaker, topic), std::time::Instant::now()));
+        .push((say, std::time::Instant::now()));
 }
 
 /// Guest: how many of its own scripts' lines to its player were asked of the host.
@@ -420,17 +449,18 @@ pub(crate) fn say_to(e: &mut Engine, a: &[u32]) -> Ret {
         .filter(|v| v[0] == e.mem.u32(addr::PLAYER_SINGLETON) && v[1] != 0)
         .map(|v| e.mem.u32(v[1].wrapping_add(addr::FORM_ID_OFFSET)));
     if let Some(topic) = line {
+        let say = (speaker, topic, say_occasion(e, topic));
         let recent = !guest && {
             let c = e.ext_free::<Commands>();
             let mut asked = c.says_asked.lock().unwrap_or_else(PoisonError::into_inner);
             asked.retain(|(_, at)| at.elapsed() < SAY_AGAIN);
-            asked.iter().any(|(k, _)| *k == (speaker, topic))
+            asked.iter().any(|(k, _)| *k == say)
         };
         // A trigger's script says its line every frame until the line's result comes: noted once.
         let first = {
             let c = e.ext_free::<Commands>();
             let mut noted = c.says_noted.lock().unwrap_or_else(PoisonError::into_inner);
-            noted.insert((speaker, topic, guest))
+            noted.insert((say, guest))
         };
         if guest || recent {
             // Read past the parameters as the body would; the command ran.
@@ -441,7 +471,7 @@ pub(crate) fn say_to(e: &mut Engine, a: &[u32]) -> Ret {
                 c.says
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .push((speaker, topic));
+                    .push(say);
             }
             if first {
                 note(
@@ -462,7 +492,7 @@ pub(crate) fn say_to(e: &mut Engine, a: &[u32]) -> Ret {
             .says
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((speaker, topic));
+            .push(say);
     }
     let ret = e.call_next(addr::CMD_SAY_TO, a);
     let n = e
@@ -493,9 +523,9 @@ pub fn played_for_a_guest(e: &mut Engine, s: &Scene) {
         .push(((s.actor, s.target, s.topic), std::time::Instant::now()));
 }
 
-/// The lines scripts had an actor say to the player since the last call (speaker, topic): on the
+/// The lines scripts had an actor say to the player since the last call (speaker, topic, occasion): on the
 /// host, said here; on a guest, to ask of the host.
-pub fn drain_says(e: &mut Engine) -> Vec<(u32, u32)> {
+pub fn drain_says(e: &mut Engine) -> Vec<Say> {
     std::mem::take(
         &mut *e
             .ext_free::<Commands>()

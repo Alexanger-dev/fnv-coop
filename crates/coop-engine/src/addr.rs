@@ -383,6 +383,11 @@ pub const FORM_TYPE_FACTION: u8 = 8;
 pub const FORM_TYPE_NOTE: u8 = 0x31;
 /// See [`FORM_TYPE_REFR`].
 pub const FORM_TYPE_INFO: u8 = 0x46;
+/// A dialogue topic's (`TESTopic`) form type.
+pub const FORM_TYPE_DIAL: u8 = 0x45;
+/// A topic's list of its quests' infos (`005d8a70`: `this + 0x2c`, a `BSSimpleList` whose items
+/// are per-quest entries, each beginning with its quest).
+pub const TOPIC_QUEST_LIST_OFFSET: u32 = 0x2c;
 /// See [`FORM_TYPE_REFR`].
 pub const FORM_TYPE_REPUTATION: u8 = 0x68;
 

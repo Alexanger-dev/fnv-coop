@@ -332,7 +332,7 @@ pub struct HostDriver {
     /// actor was talking).
     pub scenes_refused: u32,
     /// Host: each line a script had an actor say to the player here (speaker, topic), with when.
-    says_played: BTreeMap<(u32, u32), u64>,
+    says_played: BTreeMap<commands::Say, u64>,
     /// Host: lines guests' games asked for, said here (and so for everyone), and those not (said
     /// here lately).
     pub says_for_guests: u32,
@@ -508,9 +508,12 @@ impl HostDriver {
             // line and its rounds came twice). Not one said here lately (the trigger fired here
             // too).
             if let Some((_, topic, _)) = say_of(&field) {
+                // For the occasion it is asked for now (its quest's stage, the guest's story
+                // changes before it applied): the same line at a later stage is said again.
+                let say = (id, topic, commands::say_occasion(e, topic));
                 let ago = self
                     .says_played
-                    .get(&(id, topic))
+                    .get(&say)
                     .map(|t| self.now_ms.saturating_sub(*t))
                     .filter(|ago| *ago < SCENE_AGAIN_MS);
                 if let Some(ago) = ago {
@@ -531,9 +534,9 @@ impl HostDriver {
                         Err(why) => format!("not said here ({why:?}): the guests near say it"),
                     }
                 ));
-                commands::said_for_a_guest(e, id, topic);
+                commands::said_for_a_guest(e, say);
                 self.says_for_guests += 1;
-                self.tell_say(id, topic, said.is_ok());
+                self.tell_say(say, said.is_ok());
                 continue;
             }
             // A scene a guest's own script started: played here, and so for everyone. Not one
@@ -615,8 +618,9 @@ impl HostDriver {
 
     /// Tells every guest that `speaker` says `topic` to the player (said here when `host_said`:
     /// its result ran here), and notes when.
-    fn tell_say(&mut self, speaker: u32, topic: u32, host_said: bool) {
-        self.says_played.insert((speaker, topic), self.now_ms);
+    fn tell_say(&mut self, say: commands::Say, host_said: bool) {
+        let (speaker, topic, _) = say;
+        self.says_played.insert(say, self.now_ms);
         let n = self.says.entry(speaker).or_insert(0);
         *n = n.wrapping_add(1);
         let mut data = vec![*n];
@@ -932,7 +936,8 @@ impl HostDriver {
         }
         // A line a script had an actor say to the host's player: every guest near it says it
         // there too; its result is the host's when the host's game said it (near its player).
-        for (speaker, topic) in commands::drain_says(e) {
+        for say in commands::drain_says(e) {
+            let (speaker, topic, _) = say;
             let far = match (coop_engine::live::local(e), actors::actor(e, speaker)) {
                 (Some(me), Some(a)) if me.loaded => {
                     let here = coop_engine::fight::place_of_ptr(e, a);
@@ -950,7 +955,7 @@ impl HostDriver {
                 "say: actor {speaker:08x} says topic {topic:08x} to the player{}: the guests near it say it",
                 if far { ", away from this game's (its result is theirs)" } else { "" }
             ));
-            self.tell_say(speaker, topic, !far);
+            self.tell_say(say, !far);
         }
         // A conversation a script started between two actors: the guests' games play it too.
         for scene in commands::drain_scenes(e) {
@@ -1235,7 +1240,7 @@ pub struct GuestDriver {
     pub says_asked: u32,
     /// Such lines to ask at the next heal (after its proposals), and when each was last asked.
     says_to_ask: Vec<(u32, u32)>,
-    says_asked_at: BTreeMap<(u32, u32), u64>,
+    says_asked_at: BTreeMap<commands::Say, u64>,
     /// Scenes this game's own scripts started, asked of the host.
     pub scenes_asked: u32,
     joined: bool,
@@ -1527,14 +1532,14 @@ impl GuestDriver {
             // comes), after the story changes the same scripts made (the next heal's proposals:
             // PC harness, 2026-11-22: Sunny's line said on the host before the guest's stage 20
             // reached it ran the result's `ResetAI` branch, which cut the result short).
-            for (speaker, topic) in commands::drain_says(e) {
+            for say in commands::drain_says(e) {
                 let asked = self
                     .says_asked_at
-                    .get(&(speaker, topic))
+                    .get(&say)
                     .is_some_and(|at| now_ms.saturating_sub(*at) < SCENE_AGAIN_MS);
                 if !asked {
-                    self.says_asked_at.insert((speaker, topic), now_ms);
-                    self.says_to_ask.push((speaker, topic));
+                    self.says_asked_at.insert(say, now_ms);
+                    self.says_to_ask.push((say.0, say.1));
                 }
             }
         } else {

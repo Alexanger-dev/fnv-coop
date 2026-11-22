@@ -855,6 +855,14 @@ line), mutation checks (all killed). Two headless games, three runs: the guest's
 first each time; the line was said once in each game, one rifle and 30 rounds each, objectives the
 same.
 
+- The same line is the same occasion (the owner's log, 2026-11-22: Sunny's bark,
+  `VCG02SunnyBark`, is said at VCG02's stage 20 and again at 40; the guest's ask at 40 was refused
+  as "said here 149 s ago"; council 3-0, A, the owner's go-ahead). Each check that a line was said
+  lately (the host's for a guest's ask and for its own copy, a guest's own asks) is of (speaker,
+  topic, occasion): the occasion is the stage, now, of the quest the topic is first under
+  (`commands::say_occasion`: the topic's list of quests, `+0x2c`). Session test, mutation checks
+  (all killed).
+
 ## S29: a guest's completed objectives and items between players (in part implemented)
 
 Found in the harness on 2026-11-13 (VCG03, Sunny's healing powder). A quest script runs in the

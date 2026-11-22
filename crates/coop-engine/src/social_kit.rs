@@ -41,6 +41,10 @@ const DIALOG_MENU: u32 = KIT + 0xc000;
 /// window's test game has it.
 const MENU_TOPICS: u32 = KIT + 0xc200;
 const MENU_TOPIC: u32 = KIT + 0xc240;
+/// Dialogue topics made ([`Story::add_topic`]): how many, then each in a slot of its own.
+const TOPICS_MADE: u32 = KIT + 0xd000;
+const TOPIC_FORMS: u32 = KIT + 0xd040;
+const TOPIC_SLOT: u32 = 0x40;
 const SLEEP_MENU: u32 = KIT + 0x200;
 const HOURS_TILE: u32 = KIT + 0x300;
 const SAVE_NAME: u32 = KIT + 0x400;
@@ -290,6 +294,24 @@ impl Story {
             addr::FORM_TYPE_INFO
         );
         f
+    }
+
+    /// Adds a dialogue topic `id` whose first quest is `quest` (as one a script has an NPC say:
+    /// its list of quests, `+0x2c`, one entry beginning with the quest).
+    pub fn add_topic(&mut self, id: u32, quest: u32) {
+        let n = self.e.mem.u32(TOPICS_MADE);
+        assert!(n < 32, "a test story's topics fit");
+        self.e.mem.set_u32(TOPICS_MADE, n + 1);
+        let t = TOPIC_FORMS + TOPIC_SLOT * n;
+        let q = forms::quest(&mut self.e, quest).expect("a quest of the story");
+        self.e
+            .mem
+            .set_u8(t + addr::FORM_TYPE_OFFSET, addr::FORM_TYPE_DIAL);
+        self.e.mem.set_u32(t + addr::FORM_ID_OFFSET, id);
+        let entry = t + 0x38;
+        self.e.mem.set_u32(entry, q);
+        self.e.mem.set_u32(t + addr::TOPIC_QUEST_LIST_OFFSET, entry);
+        self.add_form(id, t);
     }
 
     /// Adds a line of dialogue: info `id` of quest `quest` (0 for none), with its response text
