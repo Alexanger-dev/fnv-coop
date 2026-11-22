@@ -66,6 +66,11 @@ const CONTROLLER_FN: u32 = 0x0130_0070;
 const STOP_COMBAT_FN: u32 = 0x0130_0080;
 const NODE_FN: u32 = 0x0130_0090;
 const END_DIALOGUE_FN: u32 = 0x0130_00b0;
+/// A process saying a topic (`SayTo`'s slot 0x2a4): the speaker counts the lines it was made to
+/// say to the player and keeps the last topic's id.
+const SAY_TOPIC_FN: u32 = 0x0130_00c0;
+const SAID: u32 = 0xe00;
+const SAID_TOPIC: u32 = 0xe04;
 /// Counters: real `HitMe` runs, starts of combat.
 const HITS: u32 = RAN + 32;
 const COMBATS: u32 = RAN + 36;
@@ -251,9 +256,23 @@ pub(super) fn register(e: &mut Engine) {
         addr::PROCESS_PACKAGE_DONE_SLOT,
         addr::PROCESS_SET_DONE_ONCE_SLOT,
         addr::PROCESS_FOLLOWED_SLOT,
+        addr::PROCESS_TALK_STATE_SLOT,
+        addr::PROCESS_TALK_TO_SLOT,
     ] {
         e.mem.set_u32(PROCESS_VTABLE + slot, super::NOTHING_FN);
     }
+    // `SayTo`'s calls: the speaker is made to say the topic (noted on it).
+    e.mem
+        .set_u32(PROCESS_VTABLE + addr::PROCESS_SAY_TOPIC_SLOT, SAY_TOPIC_FN);
+    e.register(SAY_TOPIC_FN, |e, a| {
+        bump(e, a[1] + SAID);
+        let topic = e.mem.u32(a[2] + addr::FORM_ID_OFFSET);
+        e.mem.set_u32(a[1] + SAID_TOPIC, topic);
+        Ret::default()
+    });
+    e.register(addr::MOBILE_STOP_CURRENT_DIALOGUE, |_, _| Ret::default());
+    e.register(addr::ACTOR_SAY_PAIR, |_, _| Ret::default());
+    e.register(addr::MOBILE_PROCESS_TYPE, |_, _| eax(0));
     for i in 0..e.mem.u32(TABLE) {
         let f = e.mem.u32(TABLE + 8 + 8 * i);
         let kind = e.mem.u8(f + addr::FORM_TYPE_OFFSET);
@@ -508,6 +527,19 @@ impl Story {
     }
 
     /// Reference `id` (an actor or an avatar) has its 3D, or none (it is not drawn).
+    /// How many lines actor `id` was made to say to the player (`SayTo`), and the last one's
+    /// topic.
+    pub fn said_to_player(&mut self, id: u32) -> (u32, u32) {
+        let a = forms::form(&mut self.e, id).expect("an actor of the story");
+        (self.e.mem.u32(a + SAID), self.e.mem.u32(a + SAID_TOPIC))
+    }
+
+    /// A script has actor `speaker` say topic `topic` to the player (`SayTo`), as the host's
+    /// wrap of the command notes it (the line itself is the test's to play: [`Story::say_as`]).
+    pub fn script_says(&mut self, speaker: u32, topic: u32) {
+        crate::commands::note_say(&mut self.e, speaker, topic);
+    }
+
     pub fn set_has_3d(&mut self, id: u32, has: bool) {
         let a = forms::form(&mut self.e, id).expect("a reference of the story");
         self.e.mem.set_u8(a + NO_3D, u8::from(!has));

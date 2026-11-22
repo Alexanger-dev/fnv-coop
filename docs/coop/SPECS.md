@@ -823,6 +823,20 @@ processes, the process's say slot `0x2a4`); its result runs in that game and its
 host as proposals (S26). One that came with the join is not said. Not tested against the game's own
 command: the stand-ins have no `SayTo`.
 
+**Every player near hears it (2026-11-22, the owner; council 3-0).** The owner heard nothing of
+Sunny's "see those sarsaparilla bottles" in the guest's game (the line that gives the rifle, said by
+the host's game only: she was near its player). Now the host writes `SAY_TAG` for every such line,
+with a sixth byte: whether its own game said it (near its player). Every guest near the speaker says
+it there; when the host's game said it, its result is the host's (it ran there: the rifle, the ammo,
+the stage) and is not run again here (`commands::skips_echoed_result`: the speaker's next line's
+two parts, never a dialogue window's line). The test kit now has `SayTo`'s calls (`fight_kit`: the
+process's say slot noted on the speaker); a session test (near: heard by the guest near, not by the
+one away, result not run there; a line of the window and the next line its own again; away from the
+host's player: said and run there), mutation checks (all killed). Two headless games: the guest's
+game said it; one rifle and 30 rounds each. Seen in a second run: the trigger's script ran in both
+games (each player in it), so the line came twice and the ammunition twice (60 each); open, put to
+the owner.
+
 ## S29: a guest's completed objectives and items between players (in part implemented)
 
 Found in the harness on 2026-11-13 (VCG03, Sunny's healing powder). A quest script runs in the

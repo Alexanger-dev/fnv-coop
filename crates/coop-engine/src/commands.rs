@@ -27,6 +27,11 @@ pub struct Commands {
     asked: Mutex<Vec<AskedScene>>,
     /// Host: `SayTo` commands seen, for the log.
     says_seen: AtomicU32,
+    /// Guest: the speakers saying a line here for the host's that the host's game said too: the
+    /// line's result is the host's (it ran there), not run again here.
+    echoes: Mutex<std::collections::BTreeSet<u32>>,
+    /// Guest: the results of such lines not run here.
+    echo_results_skipped: AtomicU32,
     /// A guest's own conversations between two actors, dropped.
     dropped: AtomicU32,
     /// Guest: the package the host's copy of each actor runs (reference id to package id).
@@ -421,6 +426,16 @@ pub fn played_for_a_guest(e: &mut Engine, s: &Scene) {
         .push(((s.actor, s.target, s.topic), std::time::Instant::now()));
 }
 
+/// A script's `SayTo` of `speaker` to the player, as [`say_to`] notes it, for the test games.
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn note_say(e: &mut Engine, speaker: u32, topic: u32) {
+    e.ext_free::<Commands>()
+        .says
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((speaker, topic));
+}
+
 /// Host: the lines scripts had an actor say to the player since the last call (speaker, topic).
 pub fn drain_says(e: &mut Engine) -> Vec<(u32, u32)> {
     std::mem::take(
@@ -441,9 +456,16 @@ pub fn put_back_says(e: &mut Engine, mut earlier: Vec<(u32, u32)>) {
 }
 
 /// Has actor `speaker` say topic `topic` to this game's player, as `SayTo` does for an actor in
-/// high process that is not run at once: the line is said through its process, and its result
-/// runs in this game when it ends.
-pub fn say_to_player(e: &mut Engine, speaker: u32, topic: u32) -> Result<(), NoScene> {
+/// high process that is not run at once: the line is said through its process. Its result runs
+/// in this game when it ends, unless `host_said`: the host's game said it to its own player and
+/// ran its result there (gave the items, moved the quest), so here the line is only heard
+/// ([`skips_echoed_result`]).
+pub fn say_to_player(
+    e: &mut Engine,
+    speaker: u32,
+    topic: u32,
+    host_said: bool,
+) -> Result<(), NoScene> {
     let (Some(a), Some(t)) = (actors::actor(e, speaker), crate::forms::form(e, topic)) else {
         return Err(NoScene::Absent);
     };
@@ -471,6 +493,14 @@ pub fn say_to_player(e: &mut Engine, speaker: u32, topic: u32) -> Result<(), NoS
         e.vcall(sp, addr::PROCESS_TALK_TO_SLOT, &args![player]);
     }
     e.call(addr::ACTOR_SAY_PAIR, &args![a, player]);
+    let echoes = &e.ext_free::<Commands>().echoes;
+    let mut echoes = echoes.lock().unwrap_or_else(PoisonError::into_inner);
+    if host_said {
+        echoes.insert(speaker);
+    } else {
+        echoes.remove(&speaker);
+    }
+    drop(echoes);
     let sp = process(e, a);
     e.vcall(
         sp,
@@ -478,6 +508,29 @@ pub fn say_to_player(e: &mut Engine, speaker: u32, topic: u32) -> Result<(), NoS
         &args![a, t, 0u32, 0u32, 1u32, 1u32],
     );
     Ok(())
+}
+
+/// Whether the result of the line `speaker` says now (part `index`: 0 its start, 1 its end) is
+/// the host's: it says a line here for one the host's game said and ran ([`say_to_player`]'s
+/// `host_said`). The line's end ends that.
+pub(crate) fn skips_echoed_result(e: &mut Engine, speaker: u32, index: u32) -> bool {
+    let c = e.ext_free::<Commands>();
+    let mut echoes = c.echoes.lock().unwrap_or_else(PoisonError::into_inner);
+    if !echoes.contains(&speaker) {
+        return false;
+    }
+    if index != 0 {
+        echoes.remove(&speaker);
+    }
+    c.echo_results_skipped.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+/// Guest: how many results of lines said here for the host's (said there too) were not run.
+pub fn echo_results_skipped(e: &mut Engine) -> u32 {
+    e.ext_free::<Commands>()
+        .echo_results_skipped
+        .load(Ordering::SeqCst)
 }
 
 /// The wrap at `005c8740`. A conversation with the player on either side is that player's own

@@ -296,6 +296,72 @@ fn a_busy_far_player_told_of_a_second_players_conversation_is_told_both_ends() {
     );
 }
 
+/// The owner, 2026-11-22: a line a script has an NPC say to the host's player (`SayTo`: Sunny's
+/// "see those sarsaparilla bottles", which gives the rifle) is heard by every player near the NPC,
+/// in their own game; its result runs once, where the host's game said it. Said away from the
+/// host's player, the host's game does not say it and the near guest's game runs its result.
+#[test]
+fn a_line_a_script_has_an_npc_say_is_heard_by_every_player_near_it_and_its_result_runs_once() {
+    let mut w = World::new(&["Sunny", "Chet"]);
+    w.run(20);
+    // Guest 2 is in the store, away from Sunny.
+    w.guests[1].game.move_player(STORE, [0.0; 3], 0.0);
+    w.run(10);
+    // The host's script has Sunny say the line to its player; the host's game says it.
+    w.host.script_says(SUNNY, SHARED_LINE);
+    w.host.say_as(SUNNY, SHARED_LINE, false);
+    w.host.say_as(SUNNY, SHARED_LINE, true);
+    w.run(10);
+    // The guest near her: she says it there, to that player.
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY), (1, SHARED_LINE));
+    assert_eq!(w.guests[0].driver.says_said, 1);
+    // Guest 2, away: not.
+    assert_eq!(w.guests[1].game.said_to_player(SUNNY).0, 0);
+    // The guest's game says it: its result is the host's, not run again (both its parts).
+    w.guests[0].game.say_as(SUNNY, SHARED_LINE, false);
+    w.guests[0].game.say_as(SUNNY, SHARED_LINE, true);
+    assert_eq!(
+        coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e),
+        2
+    );
+    // A line no one says: nothing to skip.
+    w.guests[0].game.say_unspoken(PLAIN_LINE);
+    // Her next line there is that game's own again.
+    w.guests[0].game.say_as(SUNNY, PLAIN_LINE, false);
+    assert_eq!(
+        coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e),
+        2
+    );
+    // Another, said there but never played (no end): her lines in the dialogue window are the
+    // window's still.
+    w.host.script_says(SUNNY, SHARED_LINE);
+    w.run(10);
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 2);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(PLAIN_LINE, false);
+    assert_eq!(
+        coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e),
+        2,
+        "a line of the window"
+    );
+    talk::close_menu(&mut w.guests[0].game.e);
+    w.run(10);
+    // Said away from the host's player: the host's game does not say it; the guest near her
+    // says it and runs its result.
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    w.run(10);
+    w.host.script_says(SUNNY, SHARED_LINE);
+    w.run(10);
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 3);
+    w.guests[0].game.say_as(SUNNY, SHARED_LINE, false);
+    w.guests[0].game.say_as(SUNNY, SHARED_LINE, true);
+    assert_eq!(
+        coop_engine::commands::echo_results_skipped(&mut w.guests[0].game.e),
+        2,
+        "run here"
+    );
+}
+
 /// S42 step 3b (D13, the owner): a click on a line that matters is a vote; the votes show after
 /// its row ("(1/3 Votes, 20s)"); a player away from the NPC is told and waited for; when the 20 s
 /// are up the starter's pick goes through, its owner asked to say it, and the players in it are

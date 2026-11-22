@@ -1133,7 +1133,7 @@ impl Coop {
                     g.refused,
                     g.heal_refused,
                 ) + &format!(
-                    ", own quest scripts run {}, objectives put back in the Pip-Boy {}, deaths told to the host {}, drifts with a named cause {} (unknown {}), the host's scenes played {} (not played {}), own scenes between actors dropped {}",
+                    ", own quest scripts run {}, objectives put back in the Pip-Boy {}, deaths told to the host {}, drifts with a named cause {} (unknown {}), the host's scenes played {} (not played {}), own scenes between actors dropped {}, the host's lines said here {} (results left to the host {})",
                     coop_engine::gate::ran_own(e),
                     g.relisted,
                     g.claims_sent,
@@ -1141,7 +1141,9 @@ impl Coop {
                     g.drift_unnamed,
                     g.scenes_played,
                     g.scenes_missed,
-                    coop_engine::commands::dropped_scenes(e)
+                    coop_engine::commands::dropped_scenes(e),
+                    g.says_said,
+                    coop_engine::commands::echo_results_skipped(e)
                 )
                     + "; "
                     + &g.ladder.as_ref().map_or("live: off".into(), Ladder::status)

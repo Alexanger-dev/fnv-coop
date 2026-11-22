@@ -100,19 +100,23 @@ pub const SCENE_TAG: u16 = 0x5343;
 /// played again: the guest came later to what the host had set off.
 pub const SCENE_AGAIN_MS: u64 = 10 * 60_000;
 /// The tag of a line an actor was made to say to the player (`SayTo`), on the speaker's form:
-/// a count, then the topic. The guest whose player the speaker is near says it there.
+/// a count, the topic, then whether the host's game said it to its own player (and ran its
+/// result). Every guest whose player the speaker is near says it there (the owner, 2026-11-22:
+/// every player near an NPC hears what it says; Sunny's "see those sarsaparilla bottles" was
+/// heard by the host only), its result run there only when the host's game did not say it.
 pub const SAY_TAG: u16 = 0x5359;
 /// How far from the host's player a speaker must be (or in another space, or not loaded) for
-/// its line to be said in the guests' games too.
+/// the host's game not to say its line (its result is then the guest's game's to run).
 pub const SAY_FAR: f32 = 1500.0;
 /// How near a guest's player a speaker must be for that guest's game to say the line.
 pub const SAY_NEAR: f32 = 2500.0;
 
-fn say_of(field: &Field) -> Option<(u8, u32)> {
+fn say_of(field: &Field) -> Option<(u8, u32, bool)> {
     match field {
-        Field::Custom { tag, data } if *tag == SAY_TAG && data.len() == 5 => Some((
+        Field::Custom { tag, data } if *tag == SAY_TAG && data.len() == 6 => Some((
             data[0],
             u32::from_le_bytes([data[1], data[2], data[3], data[4]]),
+            data[5] != 0,
         )),
         _ => None,
     }
@@ -872,13 +876,8 @@ impl HostDriver {
                 },
             );
         }
-        // A line a script had an actor say to the host's player far from it (or one a guest's
-        // game runs): the guest near it says it there.
-        let theirs = self
-            .fight
-            .as_ref()
-            .map(|f| f.theirs().clone())
-            .unwrap_or_default();
+        // A line a script had an actor say to the host's player: every guest near it says it
+        // there too; its result is the host's when the host's game said it (near its player).
         for (speaker, topic) in commands::drain_says(e) {
             let far = match (coop_engine::live::local(e), actors::actor(e, speaker)) {
                 (Some(me), Some(a)) if me.loaded => {
@@ -893,15 +892,14 @@ impl HostDriver {
                 }
                 _ => true,
             };
-            if !(far || theirs.contains(&speaker)) {
-                continue;
-            }
             let n = self.says.entry(speaker).or_insert(0);
             *n = n.wrapping_add(1);
             let mut data = vec![*n];
             data.extend(topic.to_le_bytes());
+            data.push(u8::from(!far));
             self.stage_notes.push(format!(
-                "say: actor {speaker:08x} says topic {topic:08x} to the player, away from this game's: the guest near it says it"
+                "say: actor {speaker:08x} says topic {topic:08x} to the player{}: the guests near it say it",
+                if far { ", away from this game's (its result is theirs)" } else { "" }
             ));
             self.sync
                 .write(FormId(speaker), Field::Custom { tag: SAY_TAG, data });
@@ -1842,7 +1840,7 @@ impl GuestDriver {
             .map(|(k, en)| (k.form.0, en.field.clone()))
             .collect();
         for (form, field) in due {
-            if let Some((count, topic)) = say_of(&field) {
+            if let Some((count, topic, host_said)) = say_of(&field) {
                 let seen = self.say_seen.insert(form, count);
                 if !self.joined || seen == Some(count) {
                     continue;
@@ -1860,9 +1858,12 @@ impl GuestDriver {
                     _ => false,
                 };
                 if !near {
+                    self.healed_notes.push(format!(
+                        "co-op guest: the host's line of actor {form:08x} (topic {topic:08x}) is not said here: it is away from this player"
+                    ));
                     continue;
                 }
-                match commands::say_to_player(e, form, topic) {
+                match commands::say_to_player(e, form, topic, host_said) {
                     Ok(()) => {
                         self.says_said += 1;
                         self.healed_notes.push(format!(

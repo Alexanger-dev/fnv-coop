@@ -482,6 +482,20 @@ pub fn result_quest(e: &mut Engine) -> Option<u32> {
 }
 
 fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
+    // A line said here for one the host's game said to its player too (a script's `SayTo`): its
+    // result ran there; here the line is only heard. (Never one of the dialogue window's.)
+    let speaker = a.get(2).copied().unwrap_or(0);
+    // (Only a guest's game says such lines; only the host's enacts another's result.)
+    if speaker != 0
+        && menu_speaker(e) != Some(speaker)
+        && crate::commands::skips_echoed_result(
+            e,
+            e.mem.u32(speaker.wrapping_add(addr::FORM_ID_OFFSET)),
+            a.get(1).copied().unwrap_or(0),
+        )
+    {
+        return Ret::default();
+    }
     // A line shown in the window watching another player's conversation, or one of another
     // player's put to this player's own window: its result ran where it was said (S42). One the
     // host's game runs for a guest is not the window's; one this game's player said in the window

@@ -374,6 +374,12 @@ impl Story {
             .call(addr::INFO_RUN_RESULT, &args![info, u32::from(end), speaker]);
     }
 
+    /// Info `id`'s result runs with no speaker (a line no reference says).
+    pub fn say_unspoken(&mut self, id: u32) {
+        let info = self.info_at(id);
+        self.e.call(addr::INFO_RUN_RESULT, &args![info, 0u32, 0u32]);
+    }
+
     /// The player activates (talks to) `npc`, as the activate key does: the activation's seam,
     /// then the conversation asked of the game; whether a menu opened.
     pub fn activate(&mut self, npc: u32) -> bool {
