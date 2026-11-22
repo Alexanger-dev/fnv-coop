@@ -768,11 +768,14 @@ impl Talker {
             self.list_mark = None;
             return;
         };
+        // Another player's options, but for the lines each player has for itself (a trade, ...):
+        // that player's copy would open its menu, not this player's (the owner, 2026-11-22).
         let foreign: Vec<(u32, String)> = client
             .menu()
             .unwrap_or_default()
             .iter()
             .filter(|i| !i.owners.contains(&me))
+            .filter(|i| !coop_engine::choices::is_personal(e, i.choice))
             .filter_map(|i| Some((i.choice, player_name(*i.owners.first()?))))
             .collect();
         self.foreign_set = !foreign.is_empty();
@@ -820,6 +823,14 @@ impl Talker {
         let key = (v.session, v.step + 1, own.clone());
         if self.offered.as_ref() == Some(&key) {
             return;
+        }
+        if std::env::var_os("NV_COOP_TALK_LOG").is_some() {
+            eprintln!(
+                "co-op talk: this game's options for step {} of conversation {}: {:08x?}",
+                v.step + 1,
+                v.session,
+                own
+            );
         }
         if let Some(msg) = client.options(own) {
             out.push(msg);

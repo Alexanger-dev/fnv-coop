@@ -577,6 +577,51 @@ fn a_vote_is_shown_waited_for_twenty_seconds_and_chosen() {
     assert!(!far.iter().any(|m| m.starts_with("Chosen")), "{far:?}");
 }
 
+/// The owner, 2026-11-22: the guest saw "Show me what you have for sale (Host)", which opened the
+/// host's trade window. A line that opens a menu for the player who picks it is each player's own:
+/// another player's copy is never shown (council 3-0, A).
+#[test]
+fn another_players_line_that_opens_a_menu_is_not_shown() {
+    use coop_core::dialogue::{DialogueMsg, MenuItem};
+    let mut w = World::new(&["Sunny"]);
+    w.run(20);
+    // The guest talks to Sunny; between two lines the table merges the host's options too.
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.guests[0].game.say(PLAIN_LINE, true);
+    w.run(10);
+    let v = *w.guests[0].driver.sync.live.dialogue.view().expect("in it");
+    let hosts = |choice| MenuItem {
+        choice,
+        owners: vec![PlayerId::HOST],
+    };
+    w.guests[0].driver.sync.live.dialogue.on_msg(
+        DialogueMsg::Menu {
+            session: v.session,
+            step: v.step + 1,
+            items: vec![hosts(SHARED_LINE), hosts(PLAIN_LINE)],
+        },
+        w.t,
+    );
+    let shown = |w: &mut World| {
+        let mut f: Vec<u32> = coop_engine::choices::foreign(&mut w.guests[0].game.e)
+            .into_iter()
+            .map(|(i, _)| i)
+            .collect();
+        f.sort();
+        f
+    };
+    w.run(2);
+    assert_eq!(shown(&mut w), [SHARED_LINE, PLAIN_LINE]);
+    // One of them opens a menu (a trade): each player's own, the host's not shown to the guest.
+    coop_engine::choices::set_personal_lines(
+        &mut w.guests[0].game.e,
+        std::collections::HashSet::from([SHARED_LINE]),
+    );
+    w.run(2);
+    assert_eq!(shown(&mut w), [PLAIN_LINE]);
+}
+
 /// The owner, 2026-11-22: an option whose text is its topic's name ("I wanted to ask you some
 /// questions.", no prompt of its own) had no subtitle; it has, as the option list shows it.
 #[test]

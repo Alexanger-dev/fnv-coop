@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use coop_core::dialogue::votes::{classify, settle, with_follow_ups, LineFacts, Verdict};
+use coop_core::dialogue::votes::{classify, settle, with_follow_ups, LineFacts, Reason, Verdict};
 use esm::{sig, FormId, FourCC, LoadOrder, Subrecord};
 
 const QSTI: FourCC = FourCC::new(b"QSTI");
@@ -295,12 +295,42 @@ pub fn lines(order: &LoadOrder) -> (Vec<Line>, usize) {
 /// The lines voted on in `order` (form IDs in the load order): the game holds a click on one of
 /// them for the players' votes (S42 step 3b).
 pub fn vote_lines(order: &LoadOrder) -> HashSet<u32> {
-    lines(order)
-        .0
-        .into_iter()
-        .filter(|l| matches!(l.verdict, Verdict::Vote(_)))
-        .map(|l| l.form)
-        .collect()
+    line_sets(order).vote
+}
+
+/// The lines of `order` the game treats apart (form IDs in the load order).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LineSets {
+    /// Voted on (S42 step 3b).
+    pub vote: HashSet<u32>,
+    /// Each player's own: not voted on, and the line itself opens a menu for the player who
+    /// picks it (a trade, repairs, crafting, a companion's things). Another player's copy is
+    /// never shown as an option (the owner, 2026-11-22: "Each person's dialogue option to open a
+    /// trading window is exclusive to each player").
+    pub personal: HashSet<u32>,
+}
+
+/// [`LineSets`] of `order`, in one reading.
+pub fn line_sets(order: &LoadOrder) -> LineSets {
+    sets_of(lines(order).0)
+}
+
+fn sets_of(lines: Vec<Line>) -> LineSets {
+    let mut sets = LineSets::default();
+    for l in lines {
+        match (&l.verdict, &l.own) {
+            (Verdict::Vote(_), _) => {
+                sets.vote.insert(l.form);
+            }
+            (Verdict::NoVote(_), Verdict::NoVote(own))
+                if own.iter().any(|r| matches!(r, Reason::OpensMenu(_))) =>
+            {
+                sets.personal.insert(l.form);
+            }
+            _ => {}
+        }
+    }
+    sets
 }
 
 /// The verdicts of every line that follows `form` on its own, followed further (each line once).
@@ -318,4 +348,50 @@ fn follow_verdicts(form: u32, by_form: &HashMap<u32, usize>, all: &[Read]) -> Ve
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(form: u32, own: Verdict, verdict: Verdict) -> Line {
+        Line {
+            plugin: "FalloutNV.esm".into(),
+            form,
+            quest: String::new(),
+            speaker: String::new(),
+            topic: String::new(),
+            option: String::new(),
+            answer: String::new(),
+            own,
+            follow: Verdict::NoVote(Vec::new()),
+            verdict,
+            exception: String::new(),
+        }
+    }
+
+    /// Trudy's "Show me what you have for sale." (`ShowBarterMenu`) is each player's own; a line
+    /// that also moves a quest is voted on (its menu still the picker's); a plain line, and one
+    /// whose menu is a later line's, are neither.
+    #[test]
+    fn a_line_that_opens_a_menu_itself_is_each_players_own() {
+        let menu = || Reason::OpensMenu("showbartermenu".into());
+        let stage = || Reason::ChangesQuest("setstage".into());
+        let sets = sets_of(vec![
+            line(
+                1,
+                Verdict::NoVote(vec![menu()]),
+                Verdict::NoVote(vec![menu()]),
+            ),
+            line(
+                2,
+                Verdict::Vote(vec![stage()]),
+                Verdict::Vote(vec![stage()]),
+            ),
+            line(3, Verdict::NoVote(vec![]), Verdict::NoVote(vec![])),
+            line(4, Verdict::NoVote(vec![]), Verdict::NoVote(vec![menu()])),
+        ]);
+        assert_eq!(sets.personal, HashSet::from([1]));
+        assert_eq!(sets.vote, HashSet::from([2]));
+    }
 }

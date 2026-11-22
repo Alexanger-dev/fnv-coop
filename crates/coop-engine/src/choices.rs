@@ -71,6 +71,8 @@ struct State {
     left: bool,
     /// The lines voted on (form ids; S42 step 3b).
     vote_lines: Arc<HashSet<u32>>,
+    /// The lines each player has for itself (form ids): another player's copy is never shown.
+    personal_lines: Arc<HashSet<u32>>,
     /// A row of a line voted on clicked: its info.
     voted: Option<u32>,
     /// [`say`] runs: its click is said, not voted.
@@ -137,6 +139,11 @@ pub fn own(e: &mut Engine) -> Option<Vec<u32>> {
     let open = e.mem.u32(addr::DIALOG_MENU_OPEN);
     let (menu, own) = state(e, |s| (s.menu, s.own.clone()));
     (open != 0 && menu == open).then(|| own.into_iter().filter(|i| *i != 0).collect())
+}
+
+/// The other players' options shown in the window now: (info, the owner's name).
+pub fn foreign(e: &mut Engine) -> Vec<(u32, String)> {
+    state(e, |s| s.foreign.clone())
 }
 
 /// The other players' options, each an info's form id and the name of the player it is said by:
@@ -226,6 +233,19 @@ pub fn take_leave(e: &mut Engine) -> bool {
 /// The lines voted on (form ids, S42 step 3b): a click on one's row is a vote.
 pub fn set_vote_lines(e: &mut Engine, lines: HashSet<u32>) {
     state(e, |s| s.vote_lines = Arc::new(lines));
+}
+
+/// The lines each player has for itself (form ids: lines that open a menu for the player who
+/// picks it, a trade, repairs, crafting, a companion's things; the owner, 2026-11-22: "Each
+/// person's dialogue option to open a trading window is exclusive to each player").
+pub fn set_personal_lines(e: &mut Engine, lines: HashSet<u32>) {
+    state(e, |s| s.personal_lines = Arc::new(lines));
+}
+
+/// Whether line `info` (a form id) is each player's own ([`set_personal_lines`]): another
+/// player's copy of it is not shown in this game's window.
+pub fn is_personal(e: &mut Engine, info: u32) -> bool {
+    state(e, |s| s.personal_lines.contains(&info))
 }
 
 /// A row of a line voted on clicked since the last call: its info (taken once).

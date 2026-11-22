@@ -1884,6 +1884,14 @@ the player who picked the line, for every menu with the same problem.
   the category). One it cannot open (no such NPC, no actor, no such category) is logged
   ("co-op guest: the host's menu ... was not opened here").
 - A line of a player's own quest runs in its own game, and its menu opens there as before.
+- Each player's own (the owner, 2026-11-22: the guest saw "Show me what you have for sale
+  (Host)", which opened the host's trade window; "Each person's dialogue option to open a trading
+  window is exclusive to each player"; council 3-0, A). A line not voted on whose own result
+  opens a menu (`coop_votelist::LineSets::personal`, 1 per trader line, read from the plugins as
+  the vote list is) is never shown in another player's window as that player's option
+  (`choices::set_personal_lines`, the foreign rows filtered); each player picks its own copy, and
+  its menu opens in its game. Unit and session tests, mutation checks (all killed); in the base
+  game Chet's and Trudy's "Show me what you have for sale." are such lines.
 - Not done: the barter and recipe commands can also open on a talking activator's speaker; such a
   menu is not opened for the picker (logged).
 - Checked: session tests (a guest's line's trade with its discount, a companion's inventory only
