@@ -393,25 +393,39 @@ impl Story {
     pub fn say(&mut self, id: u32, end: bool) {
         let npc = crate::talk::menu_npc(&mut self.e).expect("a conversation is open");
         if !end {
-            // The menu's current topic is the line, its first response said
-            // (`DialogMenu::LoadNextScreen`).
-            let info = self.info_at(id);
-            let responses = self
-                .e
-                .mem
-                .cstr(info + INFO_TEXT)
-                .split(|b| *b == b'|')
-                .count() as u32;
-            self.e
-                .mem
-                .set_u32(MENU_TOPIC + addr::MENU_TOPIC_INFO_OFFSET, info);
-            self.e.mem.set_u32(MENU_TOPIC + 0x20, responses - 1);
-            self.e.mem.set_u32(MENU_TOPICS, MENU_TOPIC);
-            self.e
-                .mem
-                .set_u8(DIALOG_MENU + addr::DIALOG_MENU_RESPONSE_SHOWN_OFFSET, 1);
+            self.begin_line(id);
         }
+        // The player chose it: a click on its row says it.
+        crate::choices::note_clicking(&mut self.e, !end);
         self.say_as(npc, id, end);
+        crate::choices::note_clicking(&mut self.e, false);
+    }
+
+    /// The NPC the dialogue menu is open on begins line `id` itself (a greeting, a line chained
+    /// to the last, one a script had it say): no player chose it.
+    pub fn npc_begins(&mut self, id: u32) {
+        let npc = crate::talk::menu_npc(&mut self.e).expect("a conversation is open");
+        self.begin_line(id);
+        self.say_as(npc, id, false);
+    }
+
+    /// The menu's current topic is line `id`, its first response said (`LoadNextScreen`).
+    fn begin_line(&mut self, id: u32) {
+        let info = self.info_at(id);
+        let responses = self
+            .e
+            .mem
+            .cstr(info + INFO_TEXT)
+            .split(|b| *b == b'|')
+            .count() as u32;
+        self.e
+            .mem
+            .set_u32(MENU_TOPIC + addr::MENU_TOPIC_INFO_OFFSET, info);
+        self.e.mem.set_u32(MENU_TOPIC + 0x20, responses - 1);
+        self.e.mem.set_u32(MENU_TOPICS, MENU_TOPIC);
+        self.e
+            .mem
+            .set_u8(DIALOG_MENU + addr::DIALOG_MENU_RESPONSE_SHOWN_OFFSET, 1);
     }
 
     /// The dialogue menu says the next response of the line it says (its voice for the last one

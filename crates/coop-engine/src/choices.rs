@@ -81,6 +81,15 @@ struct State {
     bases: Vec<(u32, u32, String)>,
     /// The menu's `uiIgnoreInputStartTime` when its list was last taken.
     stamp: u32,
+    /// A click on one of this game's own rows runs now (its line's said result runs within).
+    clicking: bool,
+}
+
+/// Whether a click on one of this game's own rows runs now: a line said now was chosen by a
+/// player (this game's, or another whose pick it says), not begun by the NPC itself (a greeting,
+/// a line chained to the last, one a script had it say: the owner, 2026-11-22).
+pub fn clicking(e: &mut Engine) -> bool {
+    state(e, |s| s.clicking)
 }
 
 /// The game-wide state.
@@ -182,6 +191,13 @@ pub fn leave_offered(e: &mut Engine) -> bool {
 /// What is shown after the rows of each info now (the votes so far).
 pub fn marks(e: &mut Engine) -> Vec<(u32, String)> {
     state(e, |s| s.marks.clone())
+}
+
+/// A click on one of the window's rows runs (or ended), for the test games (whose lines are said
+/// without the game's `DoClick`).
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn note_clicking(e: &mut Engine, on: bool) {
+    state(e, |s| s.clicking = on);
 }
 
 /// The open window lists `infos` as this game's own options, for the test games (which build no
@@ -600,7 +616,9 @@ pub(crate) fn do_click(e: &mut Engine, a: &[u32]) -> Ret {
         } else {
             crate::watch::clear_injected(e);
         }
+        state(e, |s| s.clicking = true);
         let r = e.call_next(addr::DIALOG_MENU_DO_CLICK, a);
+        state(e, |s| s.clicking = false);
         if watched {
             let last = e.mem.u32(addr::DIALOG_LAST_INFO);
             let said = (last != 0).then(|| e.mem.u32(last + addr::FORM_ID_OFFSET));
@@ -641,6 +659,7 @@ mod tests {
     const GAME_LISTS: u32 = COUNTS + 8;
     const HEAP: u32 = COUNTS + 0xc;
     const SET_STRINGS: u32 = COUNTS + 0x10;
+    const CHOSEN: u32 = COUNTS + 0x14;
     const ALPHA: u32 = 0x1234;
     const ITEMS: u32 = BASE + 0xb000;
     const NODES: u32 = BASE + 0xb800;
@@ -816,6 +835,9 @@ mod tests {
         // The game's DoClick: the row's index said.
         e.register(addr::DIALOG_MENU_DO_CLICK, |e, a| {
             let index = e.mem.f32(a[2]) as u32;
+            // (Whether the line's said result, run within, sees a click.)
+            let chosen = u32::from(clicking(e));
+            e.mem.set_u32(CHOSEN, chosen);
             e.mem.set_u32(SAID, index + 1);
             Ret::default()
         });
@@ -941,6 +963,8 @@ mod tests {
         list(&mut e);
         click(&mut e, 1);
         assert_eq!(e.mem.u32(SAID), 2, "the game's own row: said");
+        assert_eq!(e.mem.u32(CHOSEN), 1, "chosen by a click while it ran");
+        assert!(!clicking(&mut e), "only while the click runs");
         assert_eq!(take_clicked(&mut e), None);
         click(&mut e, 2);
         assert_eq!(e.mem.u32(SAID), 0, "another player's: not said here");
@@ -951,6 +975,7 @@ mod tests {
         e.mem.set_u32(SAID, 0);
         e.call(addr::DIALOG_MENU_DO_CLICK, &args![MENU, 0u32, ROOT]);
         assert_eq!(take_clicked(&mut e), None);
+        assert_eq!(e.mem.u32(CHOSEN), 0, "no row: no line chosen");
     }
 
     #[test]

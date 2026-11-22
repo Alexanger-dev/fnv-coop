@@ -60,6 +60,9 @@ pub enum Event {
         end: bool,
         /// The result script did not run here: the host is to run it.
         held: bool,
+        /// Said by a click on one of the window's rows (a player chose it), not begun by the NPC
+        /// itself ([`crate::choices::clicking`]).
+        chosen: bool,
     },
     /// A conversation a copy of an actor another game runs began itself with this game's player
     /// was refused: the owner's game greets its own player.
@@ -650,11 +653,14 @@ fn run_result_shared(e: &mut Engine, a: &[u32]) -> Ret {
         (false, 0) => t.unknown.fetch_add(1, Ordering::SeqCst),
         (false, _) => t.own.fetch_add(1, Ordering::SeqCst),
     };
+    let chosen = crate::choices::clicking(e);
+    let t = e.ext_free::<Talk>();
     t.push(Event::Said {
         npc,
         info: id,
         end: index != 0,
         held,
+        chosen,
     });
     if held {
         gate::applying(e, |e| e.call_next(addr::INFO_RUN_RESULT, a))
@@ -888,7 +894,8 @@ mod tests {
                 npc: NPC,
                 info: SHARED_LINE,
                 end,
-                held: false
+                held: false,
+                chosen: !end,
             })
         );
         assert!(take_events(&mut s.e).is_empty());

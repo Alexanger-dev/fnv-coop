@@ -105,6 +105,10 @@ pub enum DialogueMsg {
         step: u32,
         /// Choice id (topic info).
         choice: u32,
+        /// A player chose it from the options (its prompt is shown to the others); false for a
+        /// line the NPC began itself (a greeting, a line chained to the last, one a script has it
+        /// say: the owner, 2026-11-22, "Host: VCG02LastObjective").
+        chosen: bool,
     },
     /// Host: step accepted, everyone plays the lines.
     Picked {
@@ -116,6 +120,8 @@ pub enum DialogueMsg {
         choice: u32,
         /// The player who picked it (its subtitle names that player).
         by: PlayerId,
+        /// See [`DialogueMsg::Pick`]: a player chose it (its prompt is shown).
+        chosen: bool,
     },
     /// The game that said a step's line, then the host to the others: the NPC began response
     /// `n` (from 0; the line's start is response 0) of it, so the others show that response now

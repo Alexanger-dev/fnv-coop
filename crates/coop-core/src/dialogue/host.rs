@@ -244,7 +244,8 @@ impl DialogueHost {
                 session,
                 step,
                 choice,
-            } => self.pick(from, session, step, choice, now_ms, members),
+                chosen,
+            } => self.pick(from, session, step, choice, chosen, now_ms, members),
             // The game that said the step's line began its next response: to everyone else.
             DialogueMsg::Response { session, step, n } => {
                 let Some(s) = self.sessions.get_mut(&session) else {
@@ -397,6 +398,7 @@ impl DialogueHost {
         session: u32,
         step: u32,
         choice: u32,
+        chosen: bool,
         now_ms: u64,
         members: &[PlayerId],
     ) -> Vec<DOut> {
@@ -447,6 +449,7 @@ impl DialogueHost {
                 step,
                 choice,
                 by: from,
+                chosen,
             },
         )]
     }
@@ -986,6 +989,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 9,
+                chosen: true,
             },
             5,
             &ALL,
@@ -1020,6 +1024,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 9,
+                chosen: true,
             },
             5,
             &ALL,
@@ -1039,7 +1044,8 @@ mod tests {
                 DialogueMsg::Pick {
                     session: s,
                     step: 1,
-                    choice: 9
+                    choice: 9,
+                    chosen: true,
                 },
                 6,
                 &ALL
@@ -1105,7 +1111,8 @@ mod tests {
                 DialogueMsg::Pick {
                     session: s,
                     step: 1,
-                    choice: 1
+                    choice: 1,
+                    chosen: true,
                 },
                 0,
                 &ALL
@@ -1117,7 +1124,8 @@ mod tests {
                 DialogueMsg::Pick {
                     session: s,
                     step: 2,
-                    choice: 1
+                    choice: 1,
+                    chosen: true,
                 },
                 0,
                 &ALL
@@ -1131,6 +1139,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 1,
+                chosen: true,
             },
             0,
             &ALL,
@@ -1141,7 +1150,8 @@ mod tests {
                 DialogueMsg::Pick {
                     session: s,
                     step: 2,
-                    choice: 1
+                    choice: 1,
+                    chosen: true,
                 },
                 0,
                 &ALL
@@ -1156,7 +1166,8 @@ mod tests {
                 DialogueMsg::Pick {
                     session: s,
                     step: 2,
-                    choice: 4
+                    choice: 4,
+                    chosen: true,
                 },
                 20,
                 &ALL
@@ -1168,7 +1179,8 @@ mod tests {
                 DialogueMsg::Pick {
                     session: s,
                     step: 1,
-                    choice: 4
+                    choice: 4,
+                    chosen: true,
                 },
                 30,
                 &ALL
@@ -1216,6 +1228,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 3,
+                chosen: true,
             },
             1,
             &ALL,
@@ -1246,6 +1259,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 3,
+                chosen: true,
             },
             1,
             &ALL,
@@ -1287,6 +1301,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 3,
+                chosen: true,
             },
             0,
             &ALL,
@@ -1377,6 +1392,7 @@ mod tests {
             session: s,
             step: 1,
             choice: 8,
+            chosen: true,
         };
         assert!(matches!(
             h.on_msg(A, pick, 5, &ALL)[0].msg,
@@ -1491,6 +1507,7 @@ mod tests {
                     session: s,
                     step,
                     choice,
+                    chosen: true,
                 },
                 5,
                 &ALL,
@@ -1505,7 +1522,8 @@ mod tests {
                 DialogueMsg::Pick {
                     session: s,
                     step: 1,
-                    choice: 3
+                    choice: 3,
+                    chosen: true,
                 },
                 5,
                 &[H, A]
@@ -1519,6 +1537,7 @@ mod tests {
                 step: 1,
                 choice: 3,
                 by: B,
+                chosen: true,
             }
         );
         assert!(matches!(
@@ -1629,6 +1648,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 33,
+                chosen: true,
             },
             2,
             &ALL,
@@ -1651,6 +1671,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 9,
+                chosen: true,
             },
             5,
             &ALL,
@@ -1736,6 +1757,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 3,
+                chosen: true,
             },
             5,
             &ALL,
@@ -1796,7 +1818,8 @@ mod tests {
             DialogueMsg::Pick {
                 session: s,
                 step: 1,
-                choice: 3
+                choice: 3,
+                chosen: true,
             }
         )
         .is_empty());
@@ -1809,6 +1832,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 9,
+                chosen: true,
             },
         );
         let o = msg(
@@ -1856,6 +1880,7 @@ mod tests {
                 session: s,
                 step: 2,
                 choice: 3,
+                chosen: true,
             },
         );
         assert!(msg(
@@ -1935,6 +1960,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 5,
+                chosen: true,
             },
         );
         assert!(
@@ -1963,7 +1989,8 @@ mod tests {
             DialogueMsg::Pick {
                 session: s,
                 step: 2,
-                choice: 1
+                choice: 1,
+                chosen: true,
             }
         )
         .is_empty());
@@ -2026,6 +2053,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 9,
+                chosen: true,
             },
         );
         msg(
@@ -2211,6 +2239,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 3,
+                chosen: true,
             },
         );
         assert!(matches!(o[0].msg, DialogueMsg::Picked { choice: 3, .. }));
@@ -2292,6 +2321,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 3,
+                chosen: true,
             },
         );
         msg(
@@ -2355,6 +2385,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice: 3,
+                chosen: true,
             },
         );
         offer(&mut h, H, s, 2, &[4]);

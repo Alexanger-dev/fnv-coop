@@ -390,7 +390,7 @@ fn dialogue_session_runs_every_step_once_under_every_profile() {
                 .g(0)
                 .live
                 .dialogue
-                .pick(step * 10)
+                .pick(step * 10, true)
                 .expect("initiator may pick");
             r.guest_send(0, Msg::Dialogue(m));
             let playing = |c: &DialogueClient| {
@@ -448,7 +448,7 @@ fn dialogue_with_a_dropped_initiator_flushes_and_unlocks() {
         let mut r = Rig::new(profile, 400 + n as u64);
         let npc = FormId(0x77);
         let s = open_session(&mut r, 0, npc);
-        let m = r.g(0).live.dialogue.pick(5).unwrap();
+        let m = r.g(0).live.dialogue.pick(5, true).unwrap();
         r.guest_send(0, Msg::Dialogue(m));
         assert!(
             r.run_until(60_000, |r| r.g(1).live.dialogue.ui_blocked()

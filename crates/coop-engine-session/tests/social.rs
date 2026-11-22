@@ -636,6 +636,32 @@ fn a_far_player_gets_the_lines_as_subtitles_one_at_a_time() {
     assert_eq!(w.hd.social.talker.subtitles_cut, 0);
 }
 
+/// The owner, 2026-11-22: "Host: VCG02LastObjective" (the topic's editor name) showed for a line
+/// Sunny began herself. A line the NPC begins (no player chose it) shows only the NPC's words;
+/// one a player chose shows its prompt first, named.
+#[test]
+fn a_line_the_npc_begins_shows_no_prompt() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.subtitles_on();
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    // Sunny begins the line herself: her words only, though the line has a prompt.
+    w.guests[0].game.npc_begins(SHARED_LINE);
+    w.run(10);
+    assert_eq!(w.host.subtitles(), ["Head on up to the saloon."]);
+    w.host.subtitle_ends();
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.run(10);
+    // The guest chooses it: its prompt first, named.
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    assert_eq!(
+        w.host.subtitles(),
+        ["Head on up to the saloon.", "Guest: Where is Sunny?"]
+    );
+}
+
 /// The owner, 2026-11-22: the guest's Sunny was a response ahead of the host's subtitles within
 /// one line. Each response of a line shows when the game saying it begins it: what is still up or
 /// waiting of the response before is ended (council 3-0, the owner's go-ahead: exact timing).

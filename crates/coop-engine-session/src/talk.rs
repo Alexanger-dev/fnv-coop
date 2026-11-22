@@ -34,6 +34,8 @@ struct Said {
     npc: u32,
     info: u32,
     end: bool,
+    /// A player chose it (its prompt is shown to the others).
+    chosen: bool,
 }
 
 /// One machine's part in the dialogue protocol.
@@ -216,8 +218,14 @@ fn player_name(p: PlayerId) -> String {
 /// Line `choice`'s response text and the option the player chose: its prompt, or without one its
 /// topic's name, as the option list shows it (the owner, 2026-11-22: "I wanted to ask you some
 /// questions." is a topic's name, and its subtitle was missing).
-fn line_text(e: &mut Engine, choice: u32) -> Option<(String, String)> {
+/// A line the NPC began itself (`chosen` false: a greeting, a line chained to the last, one a
+/// script had it say) has no prompt: no player chose it (the owner, 2026-11-22: "Host:
+/// VCG02LastObjective", the topic's editor name, shown for Sunny's own line).
+fn line_text(e: &mut Engine, choice: u32, chosen: bool) -> Option<(String, String)> {
     let (text, prompt) = talk::line(e, choice)?;
+    if !chosen {
+        return Some((text, String::new()));
+    }
     let prompt = coop_engine::choices::option_text(e, choice).unwrap_or(prompt);
     Some((text, prompt))
 }
@@ -409,11 +417,17 @@ impl Talker {
                     info,
                     end,
                     held,
+                    chosen,
                 } => {
                     if opening {
                         self.opening_lines += 1;
                     } else if share(e, info, held) {
-                        self.queue.push_back(Said { npc, info, end });
+                        self.queue.push_back(Said {
+                            npc,
+                            info,
+                            end,
+                            chosen,
+                        });
                     }
                 }
                 Event::NotGreeted { npc } => {
@@ -931,7 +945,7 @@ impl Talker {
                 self.watched = Some((v.session, 0));
                 self.lines_windowed += 1;
             } else if joined && near {
-                if let Some((text, prompt)) = line_text(e, choice) {
+                if let Some((text, prompt)) = line_text(e, choice, v.chosen) {
                     let name = talk::name_of(e, v.npc.0);
                     self.show_line_text(
                         v,
@@ -973,7 +987,7 @@ impl Talker {
                         ..f
                     }
                 } else {
-                    if let Some((text, prompt)) = line_text(e, choice) {
+                    if let Some((text, prompt)) = line_text(e, choice, v.chosen) {
                         let name = talk::name_of(e, v.npc.0);
                         self.show_line_text(
                             v,
@@ -1093,7 +1107,7 @@ impl Talker {
                     return false;
                 }
                 (false, None) => {
-                    let Some(msg) = client.pick(next.info) else {
+                    let Some(msg) = client.pick(next.info, next.chosen) else {
                         return false;
                     };
                     self.queue.pop_front();

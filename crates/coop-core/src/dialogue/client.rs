@@ -22,6 +22,9 @@ pub struct View {
     pub reported: bool,
     /// The response of the step's line the game that said it began last (0 at its start).
     pub response: u32,
+    /// A player chose the step's line from the options (its prompt is shown); false for a line
+    /// the NPC began itself.
+    pub chosen: bool,
 }
 
 /// The table asks this player's game to say one of its options, picked by another player.
@@ -306,12 +309,13 @@ impl DialogueClient {
 
     /// Picks the next choice (the info this game said), between steps: the initiator, or since
     /// S42 step 2 any player in the conversation who offered options (the table decides).
-    pub fn pick(&mut self, choice: u32) -> Option<DialogueMsg> {
+    pub fn pick(&mut self, choice: u32, chosen: bool) -> Option<DialogueMsg> {
         let v = self.view().filter(|v| v.playing.is_none())?;
         Some(DialogueMsg::Pick {
             session: v.session,
             step: v.step + 1,
             choice,
+            chosen,
         })
     }
 
@@ -393,6 +397,7 @@ impl DialogueClient {
                             picker: None,
                             reported: false,
                             response: 0,
+                            chosen: false,
                         },
                         joined: vec![initiator],
                         menu: None,
@@ -442,6 +447,7 @@ impl DialogueClient {
                 step,
                 choice,
                 by,
+                chosen,
             } => {
                 if let Some(k) = self
                     .sessions
@@ -453,6 +459,7 @@ impl DialogueClient {
                     k.view.picker = Some(by);
                     k.view.reported = false;
                     k.view.response = 0;
+                    k.view.chosen = chosen;
                     k.menu = None;
                     k.votes = None;
                     k.last = Some(choice);
@@ -551,6 +558,7 @@ mod tests {
             step,
             choice: 7,
             by: PlayerId(1),
+            chosen: true,
         };
         for c in [&mut talker, &mut watcher] {
             start(c, 1);
@@ -599,7 +607,7 @@ mod tests {
         let mut c = DialogueClient::new(PlayerId(1));
         start(&mut c, 1);
         assert!(c.is_initiator());
-        let Some(DialogueMsg::Pick { step: 1, .. }) = c.pick(7) else {
+        let Some(DialogueMsg::Pick { step: 1, .. }) = c.pick(7, true) else {
             panic!()
         };
         c.on_msg(
@@ -608,11 +616,12 @@ mod tests {
                 step: 1,
                 choice: 7,
                 by: PlayerId(1),
+                chosen: true,
             },
             1,
         );
         assert!(c.ui_blocked());
-        assert!(c.pick(8).is_none(), "blocked until the end script");
+        assert!(c.pick(8, true).is_none(), "blocked until the end script");
         assert!(c.line_done().is_some());
         assert!(c.line_done().is_none(), "reported once");
         c.on_msg(
@@ -623,7 +632,7 @@ mod tests {
             2,
         );
         assert!(!c.ui_blocked());
-        let Some(DialogueMsg::Pick { step: 2, .. }) = c.pick(8) else {
+        let Some(DialogueMsg::Pick { step: 2, .. }) = c.pick(8, true) else {
             panic!()
         };
     }
@@ -637,11 +646,12 @@ mod tests {
         // S42 step 2: a spectator's pick goes to the table, which takes it from a player who
         // offered options for the step.
         assert!(matches!(
-            c.pick(1),
+            c.pick(1, true),
             Some(DialogueMsg::Pick {
                 session: 4,
                 step: 1,
-                choice: 1
+                choice: 1,
+                chosen: true,
             })
         ));
         c.on_msg(
@@ -650,6 +660,7 @@ mod tests {
                 step: 1,
                 choice: 5,
                 by: PlayerId(1),
+                chosen: true,
             },
             1,
         );
@@ -666,6 +677,7 @@ mod tests {
                 step: 1,
                 choice: 5,
                 by: PlayerId(1),
+                chosen: true,
             },
             1,
         );
@@ -676,6 +688,7 @@ mod tests {
                 step: 1,
                 choice: 5,
                 by: PlayerId(1),
+                chosen: true,
             },
             1,
         );
@@ -685,6 +698,7 @@ mod tests {
                 step: 1,
                 choice: 6,
                 by: PlayerId(1),
+                chosen: true,
             },
             1,
         );
@@ -852,11 +866,12 @@ mod tests {
                 step: 1,
                 choice: 9,
                 by: PlayerId(1),
+                chosen: true,
             },
             2,
         );
         assert!(c.menu().is_none() && c.take_asked().is_none());
-        assert!(c.options(vec![1]).is_none() && c.want(1).is_none() && c.pick(1).is_none());
+        assert!(c.options(vec![1]).is_none() && c.want(1).is_none() && c.pick(1, true).is_none());
         // Closed: gone too.
         c.on_msg(
             DialogueMsg::StepEnd {
@@ -942,6 +957,7 @@ mod tests {
                 step: 1,
                 choice: 7,
                 by: PlayerId(1),
+                chosen: true,
             },
             2,
         );
@@ -951,6 +967,7 @@ mod tests {
                 step: 1,
                 choice: 8,
                 by: PlayerId(1),
+                chosen: true,
             },
             2,
         );
@@ -1124,6 +1141,7 @@ mod tests {
                 step: 1,
                 choice: 3,
                 by: PlayerId(1),
+                chosen: true,
             },
             3_000,
         );

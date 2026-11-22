@@ -1843,6 +1843,14 @@ every other game shows it, holds, and lists its own options when the step is ove
   00105cc3: response 1 begun at once (the talker's 1)"). Left as it was: the chosen option's
   subtitle shows before the first response's on a player following as text (the HUD shows one
   subtitle at a time).
+- A line's prompt only for a line a player chose (the owner, 2026-11-22: "Host:
+  VCG02LastObjective", a topic's editor name, showed for a line Sunny began herself; council 3-0,
+  A, the owner's go-ahead). A line said while a click on one of the window's own rows runs
+  (`choices::clicking`; the clicked line's result runs within `DoClick`, through
+  `MenuTopicManager::ProcessCurrentTopic`) is chosen (`Event::Said::chosen`,
+  `DialogueMsg::Pick`/`Picked` `chosen`); a greeting, a line chained to the last or one a script
+  has the NPC say is not, and the others are shown only its responses. Unit and session tests,
+  mutation checks (all killed; a redundant check removed).
 - Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
   they are not shown to a watcher.
 
