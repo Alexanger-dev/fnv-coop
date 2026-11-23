@@ -150,6 +150,15 @@ impl HostLive {
         out
     }
 
+    /// A reward for player `to` alone (see [`RulesHost::reward_to`]).
+    pub fn reward_to(&mut self, to: PlayerId, gift: crate::rules::Gift) -> Outs {
+        let mut out = Vec::new();
+        for m in self.rules.reward_to(to, gift) {
+            self.route(m.aud, Msg::Rules(m.msg), &mut out);
+        }
+        out
+    }
+
     /// A player left; every open rule stops waiting for them.
     pub fn leave(&mut self, p: PlayerId, now_ms: u64) -> Outs {
         let mut out = Vec::new();

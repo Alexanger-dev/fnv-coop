@@ -387,6 +387,12 @@ impl Story {
             .set_u32(script + crate::testkit::SCRIPT_ADD_ITEM + 4, count);
     }
 
+    /// The address of info `id`'s result script (said, or `end`), for the kits' script commands
+    /// (`Story::script_karma`, ...).
+    pub fn info_script(&mut self, id: u32, end: bool) -> u32 {
+        self.info_at(id) + INFO_SCRIPTS + 0x80 * u32::from(end)
+    }
+
     /// Gives info `id`'s result (said, or `end`) a `Player.RemoveItem item count [silent]` too.
     pub fn set_info_remove_item(
         &mut self,

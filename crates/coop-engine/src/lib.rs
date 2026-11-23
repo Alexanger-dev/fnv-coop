@@ -145,6 +145,16 @@ pub fn install(e: &mut Engine) {
     if e.is_registered(addr::CONTAINER_GIVE) {
         e.wrap(reward::ITEMS, reward::items);
     }
+    // Karma and perks the story gives: every player's too (S30).
+    for (slot, wrap) in [
+        (reward::KARMA, reward::karma as engine_core::abi::AbiFn),
+        (reward::ADD_PERK, reward::add_perk),
+        (reward::REMOVE_PERK, reward::remove_perk),
+    ] {
+        if e.is_registered(slot.addr()) {
+            e.wrap(slot, wrap);
+        }
+    }
     let _ = e.ext_free::<commands::Commands>();
     // The gate's slot too, before the threads start.
     let _ = e.ext_free::<gate::Gate>();

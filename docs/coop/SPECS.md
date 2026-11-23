@@ -920,6 +920,30 @@ experience and items a quest gives).
   through `RewardExperience`, items through a container of its own handed to its player, as
   `AddItem` does. One that cannot be given yet (no player) waits; an item its data lacks is not
   given.
+- Karma and perks (the owner, 2026-11-23: "makes no sense for the host to get a lot more
+  benefits"; implemented that day, protocol 14). The host's game wraps
+  `PlayerCharacter::RewardKarma` (`0094fd30`, what `RewardKarma` calls, step C-10) and the
+  `AddPerk` and `RemovePerk` commands' bodies (`005d4d90`, `005d4f00`, step C-11, on the
+  player only, the parameters read with the offset left where it was). While a story script
+  runs (as above) each is noted and sent like experience (`Gift::Karma`, `Gift::Perk`,
+  `Gift::PerkRemoved`); a guest's game gives its player the same the game's own way: the karma
+  through `RewardKarma` (within its limits, with its message and sound), a perk as the command
+  does (the rank of slot `0x4a0` up by one through `0x498` while below the perk's highest at
+  `+0x3a`), a removal through slot `0x49c`. The game's data: 140 scripts and lines give karma,
+  97 add a perk, 124 remove one.
+  - A perk that is one player's own is not shared: the rules' perks for the initiator or the
+    recruiter (the eight companions' perks, Spotting and the others, which go with the companion
+    to the player who hired it, S33; the implants), resolved in the load order by the viewer
+    (`set_personal_perks`). In another player's line the host's game runs, the host's player is
+    not given or stripped of one; it is sent to that player alone (`RulesHost::reward_to`). In
+    the host's own line the host's game gives it as ever and sends nothing.
+  - A faction's fame and infamy need nothing here: a reputation is a form of the world, and the
+    host's records of it reach every game (S14). The rules model now keeps karma per player (the
+    story's changes to every player present) and a reputation as one value for the party.
+  - Not shared: karma the game gives outside a story script (a kill, a theft in a player's own
+    game), challenge perks (each player's own progress; their scripts name no quest), a companion
+    system script's removal of a companion's perk outside a line (its owner is not yet known
+    there).
 - What a line's result takes from the player (`Player.RemoveItem`: a payment, a bribe, a
   hand-in) is the player's whose line it is (the rules' `Payment`, to the line's initiator;
   implemented 2026-11-23, S42 step 4). The game's data has 337 lines that take caps from the
@@ -1897,8 +1921,8 @@ every other game shows it, holds, and lists its own options when the step is ove
   of the story after the line, another one, before the line's own; council 2-1, B). Unit and
   session tests (the line ending at each point of the sweep round), mutation checks (all
   killed).
-- Step 4, rewards (2026-11-23): what a line a guest picked gives (experience, caps, items)
-  reaches every player once through the reward path (S30; session test
+- Step 4, rewards (2026-11-23): what a line a guest picked gives (experience, caps, items, karma,
+  perks) reaches every player once through the reward path (S30; session test
   `a_reward_of_a_line_a_guest_picked_goes_to_every_player`); what it takes from the player (a
   payment, a hand-in) is taken from that guest's player alone, the host's untouched (S30).
 - Lines of no shared quest are not sent between players yet (S16), so they are not shown to a

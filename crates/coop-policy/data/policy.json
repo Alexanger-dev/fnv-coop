@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "policy": {"death":{"mode":"downed","revive_s":60,"all_down":"reload-host-save"},"late_join":{"during_scene":"wait","after_scene":"warp-to-zone"},"barrier_timeout_s":120,"tether_timeout_s":120,"follower_cap":{"humanoid":1,"critter":1},"party_cap":4},
- "shadow_classes": {"skills":"per_player","perks":"per_player","followers":"per_player","organs":"per_player","implants":"per_player","collar":"per_player","casino":"per_player","storage":"per_player","quest_stage":"per_player","quest_var":"per_player","journal_focus":"per_player","achievements":"per_player","karma":"shared","reputation":"shared","faction":"shared","quest_item":"shared","world":"shared"},
+ "shadow_classes": {"skills":"per_player","perks":"per_player","followers":"per_player","organs":"per_player","implants":"per_player","collar":"per_player","casino":"per_player","storage":"per_player","quest_stage":"per_player","quest_var":"per_player","journal_focus":"per_player","achievements":"per_player","karma":"per_player","reputation":"shared","faction":"shared","quest_item":"shared","world":"shared"},
  "groups": [{"name":"final_battle","members":["VHDLegionBattle","VHDHouseBattle","VHDIndependentBattle"],"note":"Caesar, House and Yes Man endings are mutually exclusive; first committed wins, host breaks races."}],
  "quests": [
   {"edid":"AchievementQuest","id":"0x0007691F","local":"0x0007691F","plugin":"FalloutNV.esm","tier":"T3","line":"Systems: achievement","status":"confirmed","advance":"any","scope":"per_player","guest_local":["FalloutNV.esm:07691E"]},

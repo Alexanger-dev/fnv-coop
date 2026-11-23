@@ -261,22 +261,27 @@ pub fn hello(plugins: Vec<String>) -> Hello {
     }
 }
 
-/// Encodes and sends `msg`; a message too large to encode, or a peer the transport does not have,
-/// is counted and dropped (coop-core's sync splits what it sends to fit; a refused send ends the
-/// session through the transport's own liveness check).
 /// A reward as the rules carry it (S30).
-fn gift_of(what: coop_engine::reward::What) -> Gift {
+pub(crate) fn gift_of(what: coop_engine::reward::What) -> Gift {
+    use coop_engine::reward::What;
     match what {
-        coop_engine::reward::What::Xp(xp) => Gift::Xp(xp),
-        coop_engine::reward::What::Item { form, count } => Gift::Item { form, count },
+        What::Xp(xp) => Gift::Xp(xp),
+        What::Item { form, count } => Gift::Item { form, count },
+        What::Karma(change) => Gift::Karma(change),
+        What::Perk { perk, teammate } => Gift::Perk { perk, teammate },
+        What::PerkRemoved { perk, teammate } => Gift::PerkRemoved { perk, teammate },
     }
 }
 
 /// A reward as the game gives it (S30).
 fn what_of(gift: Gift) -> coop_engine::reward::What {
+    use coop_engine::reward::What;
     match gift {
-        Gift::Xp(xp) => coop_engine::reward::What::Xp(xp),
-        Gift::Item { form, count } => coop_engine::reward::What::Item { form, count },
+        Gift::Xp(xp) => What::Xp(xp),
+        Gift::Item { form, count } => What::Item { form, count },
+        Gift::Karma(change) => What::Karma(change),
+        Gift::Perk { perk, teammate } => What::Perk { perk, teammate },
+        Gift::PerkRemoved { perk, teammate } => What::PerkRemoved { perk, teammate },
     }
 }
 
@@ -285,9 +290,17 @@ fn describe(gift: Gift) -> String {
     match gift {
         Gift::Xp(xp) => format!("{xp} experience"),
         Gift::Item { form, count } => format!("{count} of item {form:08x}"),
+        Gift::Karma(change) => format!("karma {change:+}"),
+        Gift::Perk { perk, teammate } => format!("perk {perk:08x} (teammate {teammate})"),
+        Gift::PerkRemoved { perk, teammate } => {
+            format!("perk {perk:08x} taken away (teammate {teammate})")
+        }
     }
 }
 
+/// Encodes and sends `msg`; a message too large to encode, or a peer the transport does not have,
+/// is counted and dropped (coop-core's sync splits what it sends to fit; a refused send ends the
+/// session through the transport's own liveness check).
 fn send(net: &mut dyn Transport, to: PlayerId, msg: &Msg, failures: &mut u32) {
     match proto::encode(msg) {
         Ok(bytes) => {
@@ -1275,6 +1288,8 @@ pub struct GuestDriver {
     pub xp_given: u64,
     /// The story's item rewards given to this game's player through the host (S30).
     pub items_given: u32,
+    /// The story's karma and perk changes given to this game's player through the host (S30).
+    pub standing_given: u32,
     healed_seen: BTreeSet<(u32, u8)>,
     /// The live ladder (players in the world); `None` leaves the session story-only.
     pub ladder: Option<ladder::Ladder>,
@@ -1355,6 +1370,7 @@ impl GuestDriver {
             healed_notes: Vec::new(),
             xp_given: 0,
             items_given: 0,
+            standing_given: 0,
             healed_seen: BTreeSet::new(),
             ladder: None,
             fight: None, // fights
@@ -1408,6 +1424,9 @@ impl GuestDriver {
                             if let Some(i) = self.items.as_mut() {
                                 i.story_gave(form, count);
                             }
+                        }
+                        Gift::Karma(_) | Gift::Perk { .. } | Gift::PerkRemoved { .. } => {
+                            self.standing_given += 1
                         }
                     }
                     self.healed_notes.push(format!(

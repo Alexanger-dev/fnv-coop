@@ -43,7 +43,8 @@ fn global_policy_matches_owner_decisions() {
     assert_eq!(p.barrier_timeout_s, 120);
     assert_eq!(p.tether_timeout_s, 120);
     assert_eq!(p.party_cap, 4);
-    assert_eq!(t.residence(ShadowClass::Karma), Residence::Shared);
+    assert_eq!(t.residence(ShadowClass::Karma), Residence::PerPlayer);
+    assert_eq!(t.residence(ShadowClass::Reputation), Residence::Shared);
     assert_eq!(t.residence(ShadowClass::Skills), Residence::PerPlayer);
     assert_eq!(t.residence(ShadowClass::Followers), Residence::PerPlayer);
 }

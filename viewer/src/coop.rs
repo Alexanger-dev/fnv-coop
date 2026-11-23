@@ -180,6 +180,8 @@ struct GameData {
     own_quests: Vec<u32>,
     /// Scripts a guest runs itself whatever their quest (the rules' guest-local scripts).
     own_scripts: Vec<u32>,
+    /// Perks that are one player's own (the rules' perks for the initiator or the recruiter).
+    personal_perks: Vec<u32>,
     globals: Vec<u32>,
     /// The game clock's globals: shared as the clock (the host's, about once a second).
     clock: Vec<u32>,
@@ -276,6 +278,66 @@ fn own_script_ids(plugins: &[String]) -> Vec<u32> {
         .collect()
 }
 
+/// The form ids, in the load order, of the perks the rules give one player alone: a row's perks
+/// for the initiator or the recruiter (a companion's perk, an implant), written `plugin:hex id`
+/// or as an editor id. An entry whose plugin is not loaded, or no perk of the load order has its
+/// editor id, is skipped.
+fn personal_perk_ids(order: &esm::LoadOrder, plugins: &[String]) -> Vec<u32> {
+    let Ok(table) = coop_policy::PolicyTable::bundled() else {
+        return Vec::new();
+    };
+    let entries = personal_perk_entries(&table);
+    let named: std::collections::BTreeMap<String, u32> = if entries.iter().any(|e| !e.contains(':'))
+    {
+        order
+            .records_of_type(esm::FourCC::new(b"PERK"))
+            .filter_map(|r| {
+                let id = r.editor_id().ok().flatten()?;
+                Some((id.to_ascii_lowercase(), r.form_id.0))
+            })
+            .collect()
+    } else {
+        Default::default()
+    };
+    resolve_perks(&entries, plugins, &named)
+}
+
+/// The rules' perks for the initiator or the recruiter, as the table writes them.
+fn personal_perk_entries(table: &coop_policy::PolicyTable) -> Vec<String> {
+    table
+        .rows()
+        .iter()
+        .filter_map(|r| r.perks.as_ref())
+        .flat_map(|p| p.initiator.iter().chain(p.recruiter.iter()))
+        .cloned()
+        .collect()
+}
+
+/// `entries` (`plugin:hex id`, or an editor id looked up in `named`, lower case) as form ids in
+/// the load order `plugins`, sorted, each once.
+fn resolve_perks(
+    entries: &[String],
+    plugins: &[String],
+    named: &std::collections::BTreeMap<String, u32>,
+) -> Vec<u32> {
+    let mut ids: Vec<u32> = entries
+        .iter()
+        .filter_map(|s| match s.rsplit_once(':') {
+            Some((plugin, local)) => {
+                let index = plugins
+                    .iter()
+                    .position(|p| p.eq_ignore_ascii_case(plugin))?;
+                let local = u32::from_str_radix(local, 16).ok()?;
+                Some(((index as u32) << 24) | (local & 0x00ff_ffff))
+            }
+            None => named.get(&s.to_ascii_lowercase()).copied(),
+        })
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 fn game_data(data: &Path) -> Result<GameData, String> {
     let active = match esm::load_order::default_plugins_txt().and_then(|p| std::fs::read(p).ok()) {
         Some(bytes) => esm::ActivePlugins::List(esm::load_order::parse_plugins_txt(&bytes)),
@@ -286,6 +348,7 @@ fn game_data(data: &Path) -> Result<GameData, String> {
     let plugins: Vec<String> = order.plugins().iter().map(|p| p.name.clone()).collect();
     let own_quests = own_quest_ids(&plugins);
     let own_scripts = own_script_ids(&plugins);
+    let personal_perks = personal_perk_ids(&order, &plugins);
     let quests = order
         .records_of_type(esm::FourCC::new(b"QUST"))
         .map(|r| r.form_id.0)
@@ -313,6 +376,7 @@ fn game_data(data: &Path) -> Result<GameData, String> {
         quests,
         own_quests,
         own_scripts,
+        personal_perks,
         globals,
         clock,
     })
@@ -359,6 +423,8 @@ pub struct Coop {
     plugins: Vec<String>,
     own_quests: Vec<u32>,
     own_scripts: Vec<u32>,
+    /// Perks that are one player's own, handed to the game on the first frame.
+    personal_perks: Option<Vec<u32>>,
     object_script_quests: std::collections::BTreeMap<u32, Vec<u32>>,
     /// The dialogue lines voted on and each player's own, handed to the game on the first frame.
     vote_lines: Option<coop_votelist::LineSets>,
@@ -599,6 +665,7 @@ impl Coop {
             quests,
             own_quests,
             own_scripts,
+            personal_perks,
             globals,
             clock,
             object_script_quests,
@@ -721,6 +788,7 @@ impl Coop {
                 plugins,
                 own_quests: own_quests.clone(),
                 own_scripts,
+                personal_perks: Some(personal_perks),
                 object_script_quests,
                 vote_lines: Some(vote_lines),
                 scenes_set: false,
@@ -843,6 +911,9 @@ impl Coop {
         if let Some(lines) = self.vote_lines.take() {
             coop_engine::choices::set_vote_lines(e, lines.vote);
             coop_engine::choices::set_personal_lines(e, lines.personal);
+        }
+        if let Some(perks) = self.personal_perks.take() {
+            coop_engine::reward::set_personal_perks(e, perks);
         }
         if let Role::Guest(_) = self.role {
             // Gated from the first frame of a join, before the host answers; its own quests (the
@@ -1179,6 +1250,29 @@ mod tests {
         assert_eq!(address_from(Some("my-pc")), None);
         assert_eq!(address_from(Some("0.0.0.0")), None);
         assert_eq!(address_from(None), None);
+    }
+
+    /// The rules' companion perks (Boone's Spotting, `FalloutNV.esm:15C60B`, ...) and implants
+    /// (by editor id) are one player's own; a DLC's whose plugin is not loaded is left out.
+    #[test]
+    fn the_rules_personal_perks_resolve_in_the_load_order() {
+        let table = coop_policy::PolicyTable::bundled().unwrap();
+        let entries = personal_perk_entries(&table);
+        assert!(entries.iter().any(|e| e == "FalloutNV.esm:15C60B"));
+        assert!(entries.iter().any(|e| e == "ImplantLuckPerk"));
+        let plugins = vec!["FalloutNV.esm".to_string(), "DeadMoney.esm".to_string()];
+        let named = [("implantluckperk".to_string(), 0x0014_0001)]
+            .into_iter()
+            .collect();
+        let ids = resolve_perks(&entries, &plugins, &named);
+        assert!(ids.contains(&0x0015_c60b));
+        assert!(ids.contains(&0x0014_0001));
+        assert!(
+            ids.contains(&0x0101_3b26),
+            "Dead Money's, its plugin second"
+        );
+        assert!(!ids.iter().any(|id| id >> 24 > 1), "no plugin not loaded");
+        assert!(ids.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]

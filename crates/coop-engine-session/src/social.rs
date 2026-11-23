@@ -166,6 +166,11 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
         }
         h.social.enactor.on_event(e, ev, &h.quests);
     }
+    for (to, w) in std::mem::take(&mut h.social.enactor.personal) {
+        for (p, m) in h.sync.live.reward_to(to, crate::gift_of(w)) {
+            send(net, p, &m, &mut h.send_failures);
+        }
+    }
     for (to, p) in std::mem::take(&mut h.social.enactor.pays) {
         let msg = Msg::Dialogue(coop_core::dialogue::DialogueMsg::Pay {
             item: coop_core::ids::FormId(p.item),

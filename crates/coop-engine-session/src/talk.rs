@@ -1156,6 +1156,9 @@ pub struct Enactor {
     /// What a guest's line's result takes from the player, for that guest's game (taken by the
     /// caller).
     pub pays: Vec<(PlayerId, coop_engine::pay::Payment)>,
+    /// Perks a guest's line's result gives or takes that are that guest's own (a companion's),
+    /// for that guest alone (taken by the caller).
+    pub personal: Vec<(PlayerId, coop_engine::reward::What)>,
 }
 
 impl Enactor {
@@ -1208,6 +1211,14 @@ impl Enactor {
                 from.0, m.menu, m.npc
             ));
             self.menus.push((from, m));
+        }
+        // A perk of the picker's own (a companion's) is the picker's alone (S30).
+        for w in coop_engine::reward::drain_personal(e) {
+            self.notes.push(format!(
+                "player {}'s line {choice:08x} gives {w:?}: that player's own",
+                from.0
+            ));
+            self.personal.push((from, w));
         }
         // What the result takes from the player is the picker's (S30: a payment, a hand-in).
         for p in coop_engine::pay::drain(e) {

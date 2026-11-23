@@ -938,6 +938,28 @@ pub const CMD_SHOW_REPAIR_MENU: u32 = 0x005d_5200;
 pub const CMD_OPEN_TEAMMATE_CONTAINER: u32 = 0x005d_9430;
 /// The `ShowRecipeMenu [category]` script command's body.
 pub const CMD_SHOW_RECIPE_MENU: u32 = 0x005d_eb10;
+// Karma and perks the story gives (docs/coop/SPECS.md S30, `reward`).
+
+/// `PlayerCharacter::RewardKarma` (`thiscall` on the player: the change; `playercharacter_p2.rs`,
+/// `player_character_reward_karma`): the karma changed within the game's limits, with its message
+/// and sound. What `RewardKarma` calls.
+pub const PLAYER_REWARD_KARMA: u32 = 0x0094_fd30;
+/// The `AddPerk perk [teammate]` script command's body (`tesscriptfunctions_p6.rs`,
+/// `script_add_perk_function`).
+pub const CMD_ADD_PERK: u32 = 0x005d_4d90;
+/// The `RemovePerk perk [teammate]` script command's body (`fn_005d4f00`).
+pub const CMD_REMOVE_PERK: u32 = 0x005d_4f00;
+/// An actor's virtual slots for perks: its rank of one (`0x4a0`: the perk, the teammate flag; a
+/// byte), set a rank (`0x498`: the perk, the rank, the flag), remove one (`0x49c`: the perk, the
+/// flag).
+pub const ACTOR_PERK_RANK_SLOT: u32 = 0x4a0;
+/// See [`ACTOR_PERK_RANK_SLOT`].
+pub const ACTOR_SET_PERK_RANK_SLOT: u32 = 0x498;
+/// See [`ACTOR_PERK_RANK_SLOT`].
+pub const ACTOR_REMOVE_PERK_SLOT: u32 = 0x49c;
+/// A perk's highest rank: the byte at `+0x3a`.
+pub const PERK_HIGHEST_RANK_OFFSET: u32 = 0x3a;
+
 // What a line's result takes from the player (docs/coop/SPECS.md S30, `pay`), from
 // `tesscriptfunctions.rs` (`fn_005b4e90`, `player_removed_message`).
 

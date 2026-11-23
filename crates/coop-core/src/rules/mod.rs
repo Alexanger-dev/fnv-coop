@@ -182,4 +182,21 @@ pub enum Gift {
         /// How many.
         count: u32,
     },
+    /// Karma (`RewardKarma`): the change, as the script gave it (each game keeps its player's
+    /// karma within the game's limits).
+    Karma(i32),
+    /// A perk's next rank (`Player.AddPerk perk [teammate]`, as the command gives it).
+    Perk {
+        /// The perk's form id.
+        perk: u32,
+        /// The command's second parameter (the perk for the player's teammates).
+        teammate: bool,
+    },
+    /// A perk taken away (`Player.RemovePerk perk [teammate]`).
+    PerkRemoved {
+        /// The perk's form id.
+        perk: u32,
+        /// The command's second parameter.
+        teammate: bool,
+    },
 }

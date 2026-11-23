@@ -489,8 +489,11 @@ impl PolicyTable {
             .map(PlayerMask::of)
             .unwrap_or(PlayerMask::NONE);
         let (mut recipients, mode) = match what {
-            // Karma and reputation are one value for the party.
-            RewardKind::Karma | RewardKind::Reputation => return Decision::Apply,
+            // A reputation is one value for the party (a form of the world, the host's).
+            RewardKind::Reputation => return Decision::Apply,
+            // Karma is each player's own; what the story changes changes for every player present
+            // (the owner, 2026-11-23: the host should not get more than the others).
+            RewardKind::Karma => (state.present, FanOut::Full),
             RewardKind::Payment => (initiator_mask, FanOut::Full),
             RewardKind::QuestItem => match row.quest_items {
                 ItemRoute::All => (state.present, FanOut::Full),

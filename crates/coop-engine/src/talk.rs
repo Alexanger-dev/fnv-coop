@@ -972,6 +972,101 @@ mod tests {
         assert_eq!((s.items(CAPS), s.remove_item_runs()), (20, 3));
     }
 
+    /// The owner, 2026-11-23: karma and perks the story gives are noted for every
+    /// player, as experience is; a perk on another reference is not; a personal perk is not, and
+    /// in another player's line it is kept for that player and not given here. Each is given in
+    /// another game as the game gives it.
+    #[test]
+    fn a_lines_karma_and_perks_are_noted_and_given_alike() {
+        use crate::reward::{give, take, What};
+        const PERK: u32 = 0x0010_8002;
+        const SPOTTING: u32 = 0x0010_8003;
+        let mut s = story();
+        set_sharing(&mut s.e, true);
+        s.add_perk_form(PERK, 2);
+        s.add_perk_form(SPOTTING, 1);
+        crate::reward::set_personal_perks(&mut s.e, [SPOTTING]);
+        let script = s.info_script(SHARED_LINE, true);
+        s.script_karma(script, -5);
+        // (No change, nothing to note.)
+        s.script_karma(script, 0);
+        s.script_perk(script, PERK, true, false, 0);
+        s.script_perk(script, PERK, false, false, NPC);
+        s.script_perk(script, SPOTTING, false, false, 0);
+        s.script_perk(script, SPOTTING, false, true, 0);
+        let shared = vec![
+            What::Karma(-5),
+            What::Perk {
+                perk: PERK,
+                teammate: true,
+            },
+        ];
+        // This game's own line: given here, the shared ones noted, the personal one here alone.
+        assert!(s.talk_to(NPC));
+        s.say(SHARED_LINE, true);
+        s.leave();
+        let noted: Vec<What> = take(&mut s.e).into_iter().map(|g| g.what).collect();
+        assert_eq!(noted, shared);
+        assert!(crate::reward::drain_personal(&mut s.e).is_empty());
+        assert_eq!(s.karma(), -5);
+        assert_eq!(
+            (s.perk_rank(PERK, true), s.perk_rank(SPOTTING, false)),
+            (1, 0)
+        );
+        // Another player's line: the same noted; the personal perk kept for that player.
+        enact(&mut s.e, NPC, SHARED_LINE, true).unwrap();
+        let noted: Vec<What> = take(&mut s.e).into_iter().map(|g| g.what).collect();
+        assert_eq!(noted, shared);
+        assert_eq!(
+            crate::reward::drain_personal(&mut s.e),
+            vec![
+                What::Perk {
+                    perk: SPOTTING,
+                    teammate: false
+                },
+                What::PerkRemoved {
+                    perk: SPOTTING,
+                    teammate: false
+                }
+            ]
+        );
+        assert_eq!((s.perk_rank(PERK, true), s.karma()), (2, -10));
+        // Given in another game, the game's own way.
+        let mut other = story();
+        other.add_perk_form(PERK, 2);
+        for w in shared {
+            assert!(give(&mut other.e, w));
+        }
+        assert_eq!(other.karma(), -5);
+        assert_eq!(other.perk_rank(PERK, true), 1);
+        // No more than the perk's highest rank.
+        for _ in 0..3 {
+            assert!(give(
+                &mut other.e,
+                What::Perk {
+                    perk: PERK,
+                    teammate: false
+                }
+            ));
+        }
+        assert_eq!(other.perk_rank(PERK, false), 2);
+        assert!(give(
+            &mut other.e,
+            What::PerkRemoved {
+                perk: PERK,
+                teammate: true
+            }
+        ));
+        assert_eq!(other.perk_rank(PERK, true), 0);
+        assert!(!give(
+            &mut other.e,
+            What::Perk {
+                perk: SPOTTING,
+                teammate: false
+            }
+        ));
+    }
+
     /// PC run 30: Sunny hands over her rifle at the bottles by speaking up, outside the guest's
     /// conversation; the line's result ran in the guest's game, whose player alone got the rifle.
     /// On a guest, a story line said outside its player's conversation is noted; its own

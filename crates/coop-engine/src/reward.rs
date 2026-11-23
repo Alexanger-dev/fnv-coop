@@ -11,6 +11,14 @@
 //! that player's. An object script with no quest runs in every game that has the object, so each
 //! game gives its own.
 //!
+//! Karma (`RewardKarma`) and perks (`Player.AddPerk`, `Player.RemovePerk`) go the same way (the
+//! owner, 2026-11-23: the host should not get more than the other players). A faction's fame and
+//! infamy need nothing here: a reputation is a form of the world, whose changes in the host's game
+//! reach every game as the host's records (S14). A perk that is one player's
+//! own ([`set_personal_perks`]: a companion's, which goes with the companion to the player who
+//! hired it, an implant) is not shared: in another player's line the host's game runs, it is
+//! kept for that player ([`drain_personal`]) and not given to the host's player.
+//!
 //! A guest's game runs the story's lines an NPC says outside its player's conversation (Sunny
 //! handing over her rifle at the bottles): their rewards are noted there too, and the host gives
 //! its own player and the other guests the same. Its player's own conversation's results are held
@@ -18,14 +26,21 @@
 
 use engine_core::extend::{Owner, WrapSlot};
 use engine_core::prelude::*;
-use std::sync::{Mutex, PoisonError};
+use std::collections::BTreeSet;
+use std::sync::{Mutex, PoisonError, RwLock};
 
-use crate::{addr, gate};
+use crate::{addr, commands, forms, gate, talk};
 
 /// The wrap at `0094fd10`, `PlayerCharacter::RewardExperience`.
 pub(crate) const EXPERIENCE: WrapSlot = WrapSlot::new(Owner::Coop, addr::PLAYER_REWARD_EXPERIENCE);
 /// The wrap at `004821a0`, a container's items handed to a reference.
 pub(crate) const ITEMS: WrapSlot = WrapSlot::new(Owner::Coop, addr::CONTAINER_GIVE);
+/// The wrap at `0094fd30`, `PlayerCharacter::RewardKarma`.
+pub(crate) const KARMA: WrapSlot = WrapSlot::new(Owner::Coop, addr::PLAYER_REWARD_KARMA);
+/// The wraps at `005d4d90` and `005d4f00`, the `AddPerk` and `RemovePerk` commands' bodies.
+pub(crate) const ADD_PERK: WrapSlot = WrapSlot::new(Owner::Coop, addr::CMD_ADD_PERK);
+/// See [`ADD_PERK`].
+pub(crate) const REMOVE_PERK: WrapSlot = WrapSlot::new(Owner::Coop, addr::CMD_REMOVE_PERK);
 
 /// What a reward is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +54,12 @@ pub enum What {
         /// How many.
         count: u32,
     },
+    /// Karma: the change the script gave.
+    Karma(i32),
+    /// A perk's next rank (the command's second parameter: for the teammates).
+    Perk { perk: u32, teammate: bool },
+    /// A perk taken away.
+    PerkRemoved { perk: u32, teammate: bool },
 }
 
 /// One reward the story gave in the host's game.
@@ -53,6 +74,40 @@ pub struct Given {
 #[derive(Default)]
 struct Rewards {
     given: Mutex<Vec<Given>>,
+    /// Perks that are one player's own (form ids).
+    personal: RwLock<BTreeSet<u32>>,
+    /// Personal perks another player's line gave or took here, kept for that player.
+    kept: Mutex<Vec<What>>,
+}
+
+/// Names the perks (form ids) that are one player's own: the rules' perks for the initiator or
+/// the recruiter (a companion's perk, an implant). The story's change of one is not shared; in
+/// another player's line it is that player's.
+pub fn set_personal_perks(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
+    *e.ext_free::<Rewards>()
+        .personal
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = ids.into_iter().collect();
+}
+
+fn is_personal(e: &mut Engine, perk: u32) -> bool {
+    e.ext_free::<Rewards>()
+        .personal
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(&perk)
+}
+
+/// The personal perks another player's line gave or took in this game since the last call, for
+/// that player (see the module).
+pub fn drain_personal(e: &mut Engine) -> Vec<What> {
+    std::mem::take(
+        &mut *e
+            .ext_free::<Rewards>()
+            .kept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    )
 }
 
 /// The story's rewards given in this game since the last call, in order: on the host, for the
@@ -78,6 +133,25 @@ pub fn give(e: &mut Engine, what: What) -> bool {
     match what {
         What::Xp(xp) => {
             e.call(addr::PLAYER_REWARD_EXPERIENCE, &args![player, xp]);
+        }
+        What::Karma(change) => {
+            e.call(addr::PLAYER_REWARD_KARMA, &args![player, change as u32]);
+        }
+        What::Perk { perk, teammate } => {
+            let Some(perk) = forms::form(e, perk) else {
+                return false;
+            };
+            add_perk_rank(e, player, perk, teammate);
+        }
+        What::PerkRemoved { perk, teammate } => {
+            let Some(perk) = forms::form(e, perk) else {
+                return false;
+            };
+            e.vcall(
+                player,
+                addr::ACTOR_REMOVE_PERK_SLOT,
+                &args![perk, u32::from(teammate)],
+            );
         }
         What::Item { form, count } => {
             let Some(item) = crate::forms::form(e, form) else {
@@ -160,6 +234,86 @@ pub(crate) fn items(e: &mut Engine, a: &[u32]) -> Ret {
         }
     }
     e.call_next(addr::CONTAINER_GIVE, a)
+}
+
+/// The `AddPerk` command's gift for an actor (`script_add_perk_function`): its rank of the perk
+/// (slot `0x4a0`) up by one (slot `0x498`) while below the perk's highest.
+fn add_perk_rank(e: &mut Engine, actor: u32, perk: u32, teammate: bool) {
+    let flag = u32::from(teammate);
+    let rank = e
+        .vcall(actor, addr::ACTOR_PERK_RANK_SLOT, &args![perk, flag])
+        .u32()
+        & 0xff;
+    let highest = u32::from(e.mem.u8(perk.wrapping_add(addr::PERK_HIGHEST_RANK_OFFSET)));
+    if highest > rank {
+        e.vcall(
+            actor,
+            addr::ACTOR_SET_PERK_RANK_SLOT,
+            &args![perk, rank + 1, flag],
+        );
+    }
+}
+
+/// `PlayerCharacter::RewardKarma` (player, change): the story's (see the module) noted; given here
+/// as ever.
+pub(crate) fn karma(e: &mut Engine, a: &[u32]) -> Ret {
+    let change = a.get(1).copied().unwrap_or(0) as i32;
+    if change != 0 {
+        if let Some(quest) = story_quest(e) {
+            note(e, quest, What::Karma(change));
+        }
+    }
+    e.call_next(addr::PLAYER_REWARD_KARMA, a)
+}
+
+fn perk_command(e: &mut Engine, a: &[u32], body: u32, removed: bool) -> Ret {
+    let this_obj = a.get(2).copied().unwrap_or(0);
+    if this_obj == 0 || this_obj != e.mem.u32(addr::PLAYER_SINGLETON) {
+        return e.call_next(body, a);
+    }
+    // Read without moving the offset on: the body reads them again when it runs.
+    let Some([perk, flag, ..]) = commands::parse(e, a, true) else {
+        return e.call_next(body, a);
+    };
+    if perk == 0 {
+        return e.call_next(body, a);
+    }
+    let id = e.mem.u32(perk.wrapping_add(addr::FORM_ID_OFFSET));
+    let teammate = flag != 0;
+    let what = if removed {
+        What::PerkRemoved { perk: id, teammate }
+    } else {
+        What::Perk { perk: id, teammate }
+    };
+    if is_personal(e, id) {
+        // Another player's line: that player's perk, not this player's.
+        if talk::enacting(e) {
+            e.ext_free::<Rewards>()
+                .kept
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(what);
+            return 1u32.into_ret();
+        }
+        return e.call_next(body, a);
+    }
+    let quest = story_quest(e);
+    let r = e.call_next(body, a);
+    if let Some(quest) = quest {
+        note(e, quest, what);
+    }
+    r
+}
+
+/// The `AddPerk perk [teammate]` command's body: on the player, the story's (see the module)
+/// noted, a personal perk in another player's line kept for that player.
+pub(crate) fn add_perk(e: &mut Engine, a: &[u32]) -> Ret {
+    perk_command(e, a, addr::CMD_ADD_PERK, false)
+}
+
+/// The `RemovePerk perk [teammate]` command's body, as [`add_perk`].
+pub(crate) fn remove_perk(e: &mut Engine, a: &[u32]) -> Ret {
+    perk_command(e, a, addr::CMD_REMOVE_PERK, true)
 }
 
 #[cfg(test)]

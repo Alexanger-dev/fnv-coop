@@ -168,6 +168,19 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-8",
     },
+    // The AddPerk and RemovePerk script commands' bodies: a perk the shared story gives the
+    // host's player goes to every player; a personal one (a companion's) in a guest's line goes
+    // to that guest alone (docs/coop/SPECS.md S30).
+    Entry {
+        addr: 0x005d_4d90,
+        owners: COOP,
+        step: "C-11",
+    },
+    Entry {
+        addr: 0x005d_4f00,
+        owners: COOP,
+        step: "C-11",
+    },
     Entry {
         addr: 0x005d_5200,
         owners: COOP,
@@ -381,6 +394,13 @@ pub const WRAPS: &[Entry] = &[
     // (docs/coop/SPECS.md S30).
     Entry {
         addr: 0x0094_fd10,
+        owners: COOP,
+        step: "C-10",
+    },
+    // PlayerCharacter::RewardKarma: the shared story's karma goes to every player
+    // (docs/coop/SPECS.md S30).
+    Entry {
+        addr: 0x0094_fd30,
         owners: COOP,
         step: "C-10",
     },

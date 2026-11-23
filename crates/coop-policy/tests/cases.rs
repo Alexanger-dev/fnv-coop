@@ -568,13 +568,22 @@ fn rewards_go_to_everyone_once() {
 }
 
 #[test]
-fn karma_is_one_value_and_payment_is_the_speakers() {
+fn karma_goes_to_every_player_and_payment_is_the_speakers() {
     let t = table();
     let q = id(&t, "VMQ01");
     let mut s = party(&[0, 1, 2]);
     s.initiator = Some(2);
     let r = |what| ev(q, Origin::Host, EventKind::Reward { reward_id: 1, what });
-    assert_eq!(t.decide(&r(RewardKind::Karma), &s), Decision::Apply);
+    // The owner, 2026-11-23: the karma the story gives goes to every player; a reputation is
+    // one value for the party.
+    assert_eq!(
+        t.decide(&r(RewardKind::Karma), &s),
+        Decision::Replicate {
+            recipients: mask(&[0, 1, 2]),
+            mode: FanOut::Full
+        }
+    );
+    assert_eq!(t.decide(&r(RewardKind::Reputation), &s), Decision::Apply);
     assert_eq!(
         t.decide(&r(RewardKind::Payment), &s),
         Decision::Replicate {
@@ -637,7 +646,13 @@ fn shadow_classes_decide_shared_versus_private() {
             },
         )
     };
-    assert_eq!(t.decide(&w(ShadowClass::Karma), &s), Decision::Apply);
+    assert_eq!(
+        t.decide(&w(ShadowClass::Karma), &s),
+        Decision::PerPlayerShadow {
+            slot: 1,
+            class: ShadowClass::Karma
+        }
+    );
     assert_eq!(
         t.decide(&w(ShadowClass::Skills), &s),
         Decision::PerPlayerShadow {

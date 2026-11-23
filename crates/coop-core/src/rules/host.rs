@@ -167,6 +167,25 @@ impl RulesHost {
         self.reward_but(PlayerId::HOST, gift)
     }
 
+    /// A reward for player `to` alone (a perk that is its own, as a companion's: the line that
+    /// gives it was that player's), once. The message to it; none for the host or a player not in
+    /// the party.
+    pub fn reward_to(&mut self, to: PlayerId, gift: Gift) -> Vec<ROut> {
+        if to.is_host() || !self.party.contains(&to) {
+            return Vec::new();
+        }
+        self.next_reward += 1;
+        let id = self.next_reward;
+        self.rewards
+            .grant(id, &[to])
+            .into_iter()
+            .map(|p| ROut {
+                aud: Audience::To(p),
+                msg: RulesMsg::Reward { id, gift },
+            })
+            .collect()
+    }
+
     /// A reward the player `has` has already: every other player but the host gets it (the host's
     /// game gives its own player what [`RulesHost::gifts_here`] holds).
     fn reward_but(&mut self, has: PlayerId, gift: Gift) -> Vec<ROut> {
@@ -558,6 +577,24 @@ mod tests {
     const H: PlayerId = PlayerId(0);
     const A: PlayerId = PlayerId(1);
     const B: PlayerId = PlayerId(2);
+
+    /// S30: a perk that is one player's own (a companion's) goes to that player alone; none to the
+    /// host (its game gave it itself) or to a player who left.
+    #[test]
+    fn a_personal_reward_goes_to_its_player_alone() {
+        let mut r = rules();
+        let perk = Gift::Perk {
+            perk: 0x0015_c60b,
+            teammate: false,
+        };
+        let o = r.reward_to(A, perk);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].aud, Audience::To(A));
+        assert!(matches!(o[0].msg, RulesMsg::Reward { gift, .. } if gift == perk));
+        assert!(r.reward_to(H, perk).is_empty());
+        r.on_leave(B, 0);
+        assert!(r.reward_to(B, perk).is_empty());
+    }
 
     /// S30: a reward the shared story gave in the host's game goes to every other player once;
     /// the host's player has it already, and a player who left is not sent it.
