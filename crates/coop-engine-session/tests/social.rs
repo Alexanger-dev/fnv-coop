@@ -2188,23 +2188,23 @@ fn a_payment_waits_for_the_guests_player() {
 
 /// The owner, 2026-11-23: karma and perks the story gives go to every player, as experience
 /// does ("makes no sense for the host to get a lot more"; a faction's reputation reaches every
-/// game as the host's records, S14). A perk that is one player's own (a companion's, given when
-/// that player hires it) goes to that player alone.
+/// game as the host's records, S14), a companion's perk too ("would be sweet"). A perk that is
+/// one player's own (an implant it bought) goes to that player alone.
 #[test]
 fn karma_and_perks_of_a_line_go_to_every_player() {
     const PERK: u32 = 0x0010_8002;
-    const SPOTTING: u32 = 0x0010_8003;
+    const IMPLANT: u32 = 0x0010_8003;
     let mut w = World::new(&["Sunny", "Chet"]);
     let games = std::iter::once(&mut w.host).chain(w.guests.iter_mut().map(|g| &mut g.game));
     for game in games {
         game.add_perk_form(PERK, 2);
-        game.add_perk_form(SPOTTING, 1);
-        coop_engine::reward::set_personal_perks(&mut game.e, [SPOTTING]);
+        game.add_perk_form(IMPLANT, 1);
+        coop_engine::reward::set_personal_perks(&mut game.e, [IMPLANT]);
     }
     let script = w.host.info_script(SHARED_LINE, true);
     w.host.script_karma(script, 25);
     w.host.script_perk(script, PERK, false, false, 0);
-    w.host.script_perk(script, SPOTTING, false, false, 0);
+    w.host.script_perk(script, IMPLANT, false, false, 0);
     w.run(20);
     w.host.move_player(STORE, [0.0; 3], 0.0);
     // Guest 1 picks the line: its result runs in the host's game.
@@ -2218,21 +2218,21 @@ fn karma_and_perks_of_a_line_go_to_every_player() {
         (
             g.karma(),
             g.perk_rank(PERK, false),
-            g.perk_rank(SPOTTING, false),
+            g.perk_rank(IMPLANT, false),
         )
     };
     assert_eq!(standing(&mut w.host), (25, 1, 0), "the host");
     assert_eq!(
         standing(&mut w.guests[0].game),
         (25, 1, 1),
-        "the guest who hired"
+        "the guest who bought"
     );
     assert_eq!(
         standing(&mut w.guests[1].game),
         (25, 1, 0),
         "the other guest"
     );
-    // The host's own line: the companion's perk is the host's alone; the rest everyone's again.
+    // The host's own line: the implant is the host's alone; the rest everyone's again.
     assert!(w.host.talk_to(SUNNY));
     w.host.say(SHARED_LINE, false);
     w.run(100);

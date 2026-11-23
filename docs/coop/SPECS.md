@@ -931,19 +931,22 @@ experience and items a quest gives).
   does (the rank of slot `0x4a0` up by one through `0x498` while below the perk's highest at
   `+0x3a`), a removal through slot `0x49c`. The game's data: 140 scripts and lines give karma,
   97 add a perk, 124 remove one.
-  - A perk that is one player's own is not shared: the rules' perks for the initiator or the
-    recruiter (the eight companions' perks, Spotting and the others, which go with the companion
-    to the player who hired it, S33; the implants), resolved in the load order by the viewer
-    (`set_personal_perks`). In another player's line the host's game runs, the host's player is
+  - A companion's perk (Spotting and the others, given on hiring and taken on dismissal) is the
+    whole party's like any other (the owner, 2026-11-23: "would be sweet"; the rules model's
+    recruiter perks now go to everyone present). Whether its effect works for a player who is
+    not the companion's keeper depends on the perk's own conditions in the game's data.
+  - A perk that is one player's own is not shared: the rules' perks for the initiator (the
+    implants, the perks Old World Blues gives the one who chose them, Ranger Takedown), resolved
+    in the load order by the viewer (`set_personal_perks`). In another player's line the host's game runs, the host's player is
     not given or stripped of one; it is sent to that player alone (`RulesHost::reward_to`). In
     the host's own line the host's game gives it as ever and sends nothing.
   - A faction's fame and infamy need nothing here: a reputation is a form of the world, and the
     host's records of it reach every game (S14). The rules model now keeps karma per player (the
     story's changes to every player present) and a reputation as one value for the party.
-  - Not shared: karma the game gives outside a story script (a kill, a theft in a player's own
-    game), challenge perks (each player's own progress; their scripts name no quest), a companion
-    system script's removal of a companion's perk outside a line (its owner is not yet known
-    there).
+  - Not shared (the owner, 2026-11-23: each player's own): karma the game gives outside a story
+    script (a kill, a theft: the player who did it), challenge perks (each player's own progress;
+    their scripts name no quest). A guest's kill of an actor the host's game runs is credited in
+    the host's game to the guest's avatar, so the host's player gets no karma for it.
 - What a line's result takes from the player (`Player.RemoveItem`: a payment, a bribe, a
   hand-in) is the player's whose line it is (the rules' `Payment`, to the line's initiator;
   implemented 2026-11-23, S42 step 4). The game's data has 337 lines that take caps from the

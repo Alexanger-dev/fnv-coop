@@ -279,7 +279,8 @@ fn own_script_ids(plugins: &[String]) -> Vec<u32> {
 }
 
 /// The form ids, in the load order, of the perks the rules give one player alone: a row's perks
-/// for the initiator or the recruiter (a companion's perk, an implant), written `plugin:hex id`
+/// for the initiator (an implant, a perk taught; a companion's perk is the whole party's, the
+/// owner, 2026-11-23), written `plugin:hex id`
 /// or as an editor id. An entry whose plugin is not loaded, or no perk of the load order has its
 /// editor id, is skipped.
 fn personal_perk_ids(order: &esm::LoadOrder, plugins: &[String]) -> Vec<u32> {
@@ -302,13 +303,13 @@ fn personal_perk_ids(order: &esm::LoadOrder, plugins: &[String]) -> Vec<u32> {
     resolve_perks(&entries, plugins, &named)
 }
 
-/// The rules' perks for the initiator or the recruiter, as the table writes them.
+/// The rules' perks for the initiator, as the table writes them.
 fn personal_perk_entries(table: &coop_policy::PolicyTable) -> Vec<String> {
     table
         .rows()
         .iter()
         .filter_map(|r| r.perks.as_ref())
-        .flat_map(|p| p.initiator.iter().chain(p.recruiter.iter()))
+        .flat_map(|p| p.initiator.iter())
         .cloned()
         .collect()
 }
@@ -1252,24 +1253,26 @@ mod tests {
         assert_eq!(address_from(None), None);
     }
 
-    /// The rules' companion perks (Boone's Spotting, `FalloutNV.esm:15C60B`, ...) and implants
-    /// (by editor id) are one player's own; a DLC's whose plugin is not loaded is left out.
+    /// The rules' implants (by editor id) and the perks Old World Blues gives the one who chose
+    /// them are one player's own; a companion's perk (Boone's Spotting, `FalloutNV.esm:15C60B`)
+    /// is the whole party's (the owner, 2026-11-23). A DLC's whose plugin is not loaded is left
+    /// out.
     #[test]
     fn the_rules_personal_perks_resolve_in_the_load_order() {
         let table = coop_policy::PolicyTable::bundled().unwrap();
         let entries = personal_perk_entries(&table);
-        assert!(entries.iter().any(|e| e == "FalloutNV.esm:15C60B"));
+        assert!(!entries.iter().any(|e| e == "FalloutNV.esm:15C60B"));
         assert!(entries.iter().any(|e| e == "ImplantLuckPerk"));
-        let plugins = vec!["FalloutNV.esm".to_string(), "DeadMoney.esm".to_string()];
+        assert!(entries.iter().any(|e| e == "OldWorldBlues.esm:0098BE"));
+        let plugins = vec!["FalloutNV.esm".to_string(), "OldWorldBlues.esm".to_string()];
         let named = [("implantluckperk".to_string(), 0x0014_0001)]
             .into_iter()
             .collect();
         let ids = resolve_perks(&entries, &plugins, &named);
-        assert!(ids.contains(&0x0015_c60b));
         assert!(ids.contains(&0x0014_0001));
         assert!(
-            ids.contains(&0x0101_3b26),
-            "Dead Money's, its plugin second"
+            ids.contains(&0x0100_98be),
+            "Old World Blues's, its plugin second"
         );
         assert!(!ids.iter().any(|id| id >> 24 > 1), "no plugin not loaded");
         assert!(ids.windows(2).all(|w| w[0] < w[1]));

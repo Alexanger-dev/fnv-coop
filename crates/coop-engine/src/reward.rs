@@ -12,12 +12,12 @@
 //! game gives its own.
 //!
 //! Karma (`RewardKarma`) and perks (`Player.AddPerk`, `Player.RemovePerk`) go the same way (the
-//! owner, 2026-11-23: the host should not get more than the other players). A faction's fame and
-//! infamy need nothing here: a reputation is a form of the world, whose changes in the host's game
-//! reach every game as the host's records (S14). A perk that is one player's
-//! own ([`set_personal_perks`]: a companion's, which goes with the companion to the player who
-//! hired it, an implant) is not shared: in another player's line the host's game runs, it is
-//! kept for that player ([`drain_personal`]) and not given to the host's player.
+//! owner, 2026-11-23: the host should not get more than the other players), a companion's perk
+//! too (the owner: the whole party's). A faction's fame and infamy need nothing here: a
+//! reputation is a form of the world, whose changes in the host's game reach every game as the
+//! host's records (S14). A perk that is one player's own ([`set_personal_perks`]: an implant, a
+//! perk taught) is not shared: in another player's line the host's game runs, it is kept for
+//! that player ([`drain_personal`]) and not given to the host's player.
 //!
 //! A guest's game runs the story's lines an NPC says outside its player's conversation (Sunny
 //! handing over her rifle at the bottles): their rewards are noted there too, and the host gives
@@ -80,9 +80,9 @@ struct Rewards {
     kept: Mutex<Vec<What>>,
 }
 
-/// Names the perks (form ids) that are one player's own: the rules' perks for the initiator or
-/// the recruiter (a companion's perk, an implant). The story's change of one is not shared; in
-/// another player's line it is that player's.
+/// Names the perks (form ids) that are one player's own: the rules' perks for the initiator (an
+/// implant, a perk taught). The story's change of one is not shared; in another player's line it
+/// is that player's.
 pub fn set_personal_perks(e: &mut Engine, ids: impl IntoIterator<Item = u32>) {
     *e.ext_free::<Rewards>()
         .personal

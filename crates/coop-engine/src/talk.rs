@@ -980,20 +980,20 @@ mod tests {
     fn a_lines_karma_and_perks_are_noted_and_given_alike() {
         use crate::reward::{give, take, What};
         const PERK: u32 = 0x0010_8002;
-        const SPOTTING: u32 = 0x0010_8003;
+        const IMPLANT: u32 = 0x0010_8003;
         let mut s = story();
         set_sharing(&mut s.e, true);
         s.add_perk_form(PERK, 2);
-        s.add_perk_form(SPOTTING, 1);
-        crate::reward::set_personal_perks(&mut s.e, [SPOTTING]);
+        s.add_perk_form(IMPLANT, 1);
+        crate::reward::set_personal_perks(&mut s.e, [IMPLANT]);
         let script = s.info_script(SHARED_LINE, true);
         s.script_karma(script, -5);
         // (No change, nothing to note.)
         s.script_karma(script, 0);
         s.script_perk(script, PERK, true, false, 0);
         s.script_perk(script, PERK, false, false, NPC);
-        s.script_perk(script, SPOTTING, false, false, 0);
-        s.script_perk(script, SPOTTING, false, true, 0);
+        s.script_perk(script, IMPLANT, false, false, 0);
+        s.script_perk(script, IMPLANT, false, true, 0);
         let shared = vec![
             What::Karma(-5),
             What::Perk {
@@ -1010,7 +1010,7 @@ mod tests {
         assert!(crate::reward::drain_personal(&mut s.e).is_empty());
         assert_eq!(s.karma(), -5);
         assert_eq!(
-            (s.perk_rank(PERK, true), s.perk_rank(SPOTTING, false)),
+            (s.perk_rank(PERK, true), s.perk_rank(IMPLANT, false)),
             (1, 0)
         );
         // Another player's line: the same noted; the personal perk kept for that player.
@@ -1021,11 +1021,11 @@ mod tests {
             crate::reward::drain_personal(&mut s.e),
             vec![
                 What::Perk {
-                    perk: SPOTTING,
+                    perk: IMPLANT,
                     teammate: false
                 },
                 What::PerkRemoved {
-                    perk: SPOTTING,
+                    perk: IMPLANT,
                     teammate: false
                 }
             ]
@@ -1061,7 +1061,7 @@ mod tests {
         assert!(!give(
             &mut other.e,
             What::Perk {
-                perk: SPOTTING,
+                perk: IMPLANT,
                 teammate: false
             }
         ));

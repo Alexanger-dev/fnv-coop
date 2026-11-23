@@ -27,21 +27,14 @@ fn perk_rewards_match_plugin_form_strings() {
         .rows()
         .iter()
         .find(|r| {
-            r.perks.as_ref().is_some_and(|p| {
-                p.initiator
-                    .iter()
-                    .chain(&p.recruiter)
-                    .any(|x| x.contains(':'))
-            })
+            // (an initiator's: a companion's perk is the whole party's, the owner 2026-11-23)
+            r.perks
+                .as_ref()
+                .is_some_and(|p| p.initiator.iter().any(|x| x.contains(':')))
         })
         .expect("a row with an initiator perk");
     let p = row.perks.as_ref().unwrap();
-    let listed = p
-        .initiator
-        .iter()
-        .chain(&p.recruiter)
-        .find(|x| x.contains(':'))
-        .unwrap();
+    let listed = p.initiator.iter().find(|x| x.contains(':')).unwrap();
     let hex = listed.rsplit(':').next().unwrap();
     let mut s = party(&[0, 1, 2]);
     s.initiator = Some(1);

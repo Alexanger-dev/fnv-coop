@@ -506,10 +506,10 @@ impl PolicyTable {
                         .any(|x| p.split('|').any(|alias| same_form(x, alias)))
                 };
                 match perks {
-                    // The recruiter is the player who ran the recruit conversation.
-                    Some(pk) if hit(&pk.initiator) || hit(&pk.recruiter) => {
-                        (initiator_mask, FanOut::Full)
-                    }
+                    // An implant, a perk taught: the player who ran the conversation. A
+                    // companion's perk (the recruiter's list) goes to the whole party (the owner,
+                    // 2026-11-23).
+                    Some(pk) if hit(&pk.initiator) => (initiator_mask, FanOut::Full),
                     _ => (state.present, FanOut::Full),
                 }
             }

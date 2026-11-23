@@ -599,7 +599,7 @@ fn karma_goes_to_every_player_and_payment_is_the_speakers() {
 }
 
 #[test]
-fn recruit_perk_goes_to_the_recruiter_only() {
+fn a_companions_perk_goes_to_the_whole_party_an_implant_to_the_buyer() {
     let t = table();
     let q = id(&t, "vDialogueEDE");
     let mut s = party(&[0, 1, 2]);
@@ -614,10 +614,11 @@ fn recruit_perk_goes_to_the_recruiter_only() {
             },
         )
     };
+    // The owner, 2026-11-23: a companion's perk is the whole party's.
     assert_eq!(
         t.decide(&perk("FalloutNV.esm:15C571"), &s),
         Decision::Replicate {
-            recipients: mask(&[1]),
+            recipients: mask(&[0, 1, 2]),
             mode: FanOut::Full
         }
     );
@@ -625,6 +626,22 @@ fn recruit_perk_goes_to_the_recruiter_only() {
         t.decide(&perk("SomeQuestPerk"), &s),
         Decision::Replicate {
             recipients: mask(&[0, 1, 2]),
+            mode: FanOut::Full
+        }
+    );
+    let q = id(&t, "vDialogueMedicalClinic");
+    let implant = ev(
+        q,
+        Origin::Host,
+        EventKind::Reward {
+            reward_id: 4,
+            what: RewardKind::Perk("ImplantLuckPerk".into()),
+        },
+    );
+    assert_eq!(
+        t.decide(&implant, &s),
+        Decision::Replicate {
+            recipients: mask(&[1]),
             mode: FanOut::Full
         }
     );
