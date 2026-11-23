@@ -920,11 +920,26 @@ experience and items a quest gives).
   through `RewardExperience`, items through a container of its own handed to its player, as
   `AddItem` does. One that cannot be given yet (no player) waits; an item its data lacks is not
   given.
+- What a line's result takes from the player (`Player.RemoveItem`: a payment, a bribe, a
+  hand-in) is the player's whose line it is (the rules' `Payment`, to the line's initiator;
+  implemented 2026-11-23, S42 step 4). The game's data has 337 lines that take caps from the
+  player and 257 that take another item. The host's game wraps the `RemoveItem` command's body
+  (`005b4e90`, step C-11): while it runs another player's line (`talk::enacting`) and the
+  reference is the host's player, the command is not run; its item, count and silent flag
+  (`ParseParameters`, the offset left where it was) go to that player as
+  `DialogueMsg::Pay` (protocol 13). That player's game takes them from its own player as the
+  command's body does for an actor: no more than it carries (`GetItemCountConditionFunction`),
+  a worn one marked wearable again, the removal (virtual slot `0x17c`), the "removed" message
+  unless silent, the interface's refresh. A payment that comes before the game has a player
+  waits for one. With items shared (S20) the loss is counted out of the player's known items
+  (`GuestItems::story_took`), so it is never read as a put into a holder. Left to the host's game
+  as before: a form that is not an item itself (2 lines take a form list,
+  `NVCompanionWeapons` and `CassItems`), and `RemoveItem` on any other reference. A line said
+  in the host's game takes from the host's player as ever. Unit and session tests, mutation
+  checks (all killed).
 - Open: a player who joins after a reward does not get it (the ledger can name what it misses;
-  claiming needs the player's identity across sessions). Not mirrored: what a story script takes
-  from the player (`Player.RemoveItem`: a payment, a hand-in) is taken from the host's player only,
-  even when the guest said the line (the rules' `Payment` goes to the line's initiator: to do);
-  items moved to the player from a container or an NPC (`RemoveAllItems player`) are not copied.
+  claiming needs the player's identity across sessions). Items moved to the player from a
+  container or an NPC (`RemoveAllItems player`: 3 lines, 10 object scripts) are not copied.
 - With items shared (S20, `NV_COOP_ITEMS=on`) the reward path alone gives a quest's items. S20 never
   gives a player anything on the host's word (it moves holders' contents and takes back what the host
   refused), so the two cannot give a reward twice; but a reward reaching a guest's player in a step in
@@ -1882,8 +1897,12 @@ every other game shows it, holds, and lists its own options when the step is ove
   of the story after the line, another one, before the line's own; council 2-1, B). Unit and
   session tests (the line ending at each point of the sweep round), mutation checks (all
   killed).
-- Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
-  they are not shown to a watcher.
+- Step 4, rewards (2026-11-23): what a line a guest picked gives (experience, caps, items)
+  reaches every player once through the reward path (S30; session test
+  `a_reward_of_a_line_a_guest_picked_goes_to_every_player`); what it takes from the player (a
+  payment, a hand-in) is taken from that guest's player alone, the host's untouched (S30).
+- Lines of no shared quest are not sent between players yet (S16), so they are not shown to a
+  watcher.
 
 ## S43: menus a line opens are the picker's (implemented, run in two headless games)
 

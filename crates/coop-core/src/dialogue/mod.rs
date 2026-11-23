@@ -317,6 +317,18 @@ pub enum DialogueMsg {
         /// The command's value (a trade's discount, a recipe category's form id, ...).
         value: u32,
     },
+    /// Host, to the player who said a line: the line's result takes `count` of `item` from the
+    /// player (a payment, a hand-in: `Player.RemoveItem`). That player's game takes it from its own
+    /// player; the host's game, which ran the rest of the result, took nothing from its own
+    /// (docs/coop/SPECS.md S30: a payment is the line's initiator's).
+    Pay {
+        /// The item.
+        item: FormId,
+        /// How many (no more than the player carries is taken).
+        count: u32,
+        /// The command was silent: no "removed" message.
+        silent: bool,
+    },
 }
 
 /// What a player is doing, for a conversation that would take it in (D13).

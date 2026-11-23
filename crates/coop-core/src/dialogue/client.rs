@@ -91,6 +91,8 @@ pub struct DialogueClient {
     chosen: Vec<(u32, u32)>,
     /// Menus the host asked this game to open (npc, menu, value).
     menus: Vec<(FormId, u8, u32)>,
+    /// What the host asked this game to take from its player (item, count, silent).
+    pays: Vec<(FormId, u32, bool)>,
     /// By conversation: its last step whose changes the host said are in the story, and the
     /// story's revision holding them ([`DialogueMsg::Settled`]).
     settled: BTreeMap<u32, (u32, u64)>,
@@ -114,6 +116,7 @@ impl DialogueClient {
             waiting: Vec::new(),
             chosen: Vec::new(),
             menus: Vec::new(),
+            pays: Vec::new(),
             settled: BTreeMap::new(),
         }
     }
@@ -148,6 +151,12 @@ impl DialogueClient {
     /// The menus the host asked this game to open since the last call (npc, menu, value).
     pub fn take_menus(&mut self) -> Vec<(FormId, u8, u32)> {
         std::mem::take(&mut self.menus)
+    }
+
+    /// What the host asked this game to take from its player since the last call (item, count,
+    /// silent).
+    pub fn take_pays(&mut self) -> Vec<(FormId, u32, bool)> {
+        std::mem::take(&mut self.pays)
     }
 
     /// The options chosen by a vote since the last call, of the shown conversation (taken once).
@@ -523,6 +532,13 @@ impl DialogueClient {
             }
             DialogueMsg::OpenMenu { npc, menu, value } => {
                 self.menus.push((npc, menu, value));
+            }
+            DialogueMsg::Pay {
+                item,
+                count,
+                silent,
+            } => {
+                self.pays.push((item, count, silent));
             }
             DialogueMsg::Settled { session, step, rev } => {
                 self.settled.insert(session, (step, rev));

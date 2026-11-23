@@ -896,8 +896,9 @@ impl Coop {
                     lines.push(format!("co-op guest items: {note}"));
                 }
                 // social
-                for note in
-                    (g.social.party.notes.drain(..)).chain(g.social.menus_not_opened.drain(..))
+                for note in (g.social.party.notes.drain(..))
+                    .chain(g.social.menus_not_opened.drain(..))
+                    .chain(g.social.pay_notes.drain(..))
                 {
                     lines.push(format!("co-op guest: {note}"));
                 }

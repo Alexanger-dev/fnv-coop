@@ -938,6 +938,41 @@ pub const CMD_SHOW_REPAIR_MENU: u32 = 0x005d_5200;
 pub const CMD_OPEN_TEAMMATE_CONTAINER: u32 = 0x005d_9430;
 /// The `ShowRecipeMenu [category]` script command's body.
 pub const CMD_SHOW_RECIPE_MENU: u32 = 0x005d_eb10;
+// What a line's result takes from the player (docs/coop/SPECS.md S30, `pay`), from
+// `tesscriptfunctions.rs` (`fn_005b4e90`, `player_removed_message`).
+
+/// The `RemoveItem item count [silent]` script command's body (the eight script-command words).
+pub const CMD_REMOVE_ITEM: u32 = 0x005b_4e90;
+/// `Script::GetItemCountConditionFunction` (`cdecl`: the actor, the item, 0, a `double*` that
+/// gets the count), as `RemoveItem` reads what an actor carries.
+pub const GET_ITEM_COUNT_CONDITION: u32 = 0x0059_d8e0;
+/// `0057_5400` (`thiscall` on an actor: the item): whether the actor has the item, as
+/// `RemoveItem` asks before it looks for a worn one.
+pub const ACTOR_HAS_ITEM: u32 = 0x0057_5400;
+/// `ExtraDataList::SetCanNotWear` (`thiscall`: 0).
+pub const EXTRA_SET_CAN_NOT_WEAR: u32 = 0x0041_ab70;
+/// `0082_48e0` (`thiscall` on the actor's member at [`ACTOR_ITEMS_MEMBER_OFFSET`]: the item, 1),
+/// as `RemoveItem` calls it for an item the actor has.
+pub const ACTOR_ITEMS_MEMBER_REMOVE: u32 = 0x0082_48e0;
+/// See [`ACTOR_ITEMS_MEMBER_REMOVE`].
+pub const ACTOR_ITEMS_MEMBER_OFFSET: u32 = 0x94;
+/// The interface function the item commands call after the player's inventory changed (`cdecl`,
+/// no arguments).
+pub const INTERFACE_INVENTORY_CHANGED: u32 = 0x0070_4af0;
+/// `*(this + 4)` of a string global: its text.
+pub const BS_STRING_TEXT: u32 = 0x0040_3df0;
+/// The string globals pasted into the player's "removed" message (part a: the word, part b: the
+/// plural's ending).
+pub const REMOVED_MESSAGE_PART_A: u32 = 0x011d_3db4;
+/// See [`REMOVED_MESSAGE_PART_A`].
+pub const REMOVED_MESSAGE_PART_B: u32 = 0x011d_3114;
+/// `Actor::GetPickUpSoundName` (`thiscall` on the player: the item, 0, 0).
+pub const ACTOR_PICK_UP_SOUND_NAME: u32 = 0x008a_dcf0;
+/// The `float` the item commands pass with their message.
+pub const PICK_UP_MESSAGE_VOLUME: u32 = 0x0101_62c0;
+/// `"Interface\Icons\Message Icons\glow_message_vaultboy_neutral.dds"`.
+pub const MESSAGE_ICON_VAULT_BOY: u32 = 0x0102_08e0;
+
 /// `BarterMenu` create (`cdecl`: the actor, the discount), as `ShowBarterMenu` calls it.
 pub const SHOW_BARTER: u32 = 0x0070_4f80;
 /// The repair services menu (`cdecl`: the actor), as `ShowRepairMenu` calls it.

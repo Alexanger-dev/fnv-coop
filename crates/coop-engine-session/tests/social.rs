@@ -2032,3 +2032,156 @@ fn a_host_alone_rests_as_the_game_does() {
     assert_eq!(w.hd.social.talker.opened, 0);
     assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(10));
 }
+
+/// S42 step 4: a line a guest picks in its own conversation runs its result in the host's game;
+/// the experience and the caps it gives reach every player once.
+#[test]
+fn a_reward_of_a_line_a_guest_picked_goes_to_every_player() {
+    const CAPS: u32 = 0x0000_000f;
+    let mut w = World::new(&["Sunny", "Chet"]);
+    w.host.add_item_form(CAPS);
+    w.host.set_info_reward_xp(SHARED_LINE, true, 10);
+    w.host.set_info_item(SHARED_LINE, true, CAPS, 25);
+    for g in &mut w.guests {
+        g.game.add_item_form(CAPS);
+    }
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.guests[0].game.leave();
+    w.run(200);
+    assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(20));
+    assert_eq!((w.host.xp(), w.host.items(CAPS)), (10, 25));
+    for (i, g) in w.guests.iter_mut().enumerate() {
+        assert_eq!((g.game.xp(), g.game.items(CAPS)), (10, 25), "guest {i}");
+    }
+}
+
+/// S30, S42 step 4: a line's payment is the player's whose line it is. A guest picks a line whose
+/// result takes 30 caps (`Player.RemoveItem Caps001 30`): the host's game runs the result and
+/// takes nothing from its own player; the guest's game takes the 30 from the guest's, with the
+/// game's message. The other guest pays nothing.
+#[test]
+fn a_payment_in_a_line_a_guest_picked_is_taken_from_that_guest() {
+    const CAPS: u32 = 0x0000_000f;
+    let mut w = World::new(&["Sunny", "Chet"]);
+    w.host.add_item_form(CAPS);
+    w.host.set_player_items(CAPS, 50);
+    w.host
+        .set_info_remove_item(SHARED_LINE, true, CAPS, 30, false);
+    for g in &mut w.guests {
+        g.game.add_item_form(CAPS);
+        g.game.name_item(CAPS, "Caps");
+        g.game.set_player_items(CAPS, 100);
+    }
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.guests[0].game.leave();
+    w.run(200);
+    assert_eq!(
+        forms::quest_stage(&mut w.host.e, MQ),
+        Some(20),
+        "the rest ran"
+    );
+    assert_eq!(w.host.items(CAPS), 50, "the host's player pays nothing");
+    assert_eq!(
+        w.guests[0].game.items(CAPS),
+        70,
+        "the guest who said it pays"
+    );
+    assert_eq!(w.guests[1].game.items(CAPS), 100);
+    assert_eq!(w.guests[0].driver.social.paid, 1);
+    assert!(
+        w.guests[0]
+            .game
+            .messages()
+            .contains(&"30 Caps(s) removed".to_string()),
+        "{:?}",
+        w.guests[0].game.messages()
+    );
+}
+
+/// The game takes no more than the player carries; a silent `RemoveItem` shows no message. The
+/// host's own line takes from the host's player as ever.
+#[test]
+fn a_payment_takes_what_the_guest_carries_and_the_hosts_own_line_pays_itself() {
+    const CAPS: u32 = 0x0000_000f;
+    let mut w = World::new(&["Sunny"]);
+    w.host.add_item_form(CAPS);
+    w.host.set_player_items(CAPS, 50);
+    w.host
+        .set_info_remove_item(SHARED_LINE, true, CAPS, 30, true);
+    w.guests[0].game.add_item_form(CAPS);
+    w.guests[0].game.name_item(CAPS, "Caps");
+    w.guests[0].game.set_player_items(CAPS, 20);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.guests[0].game.leave();
+    w.run(200);
+    assert_eq!(w.host.items(CAPS), 50);
+    assert_eq!(w.guests[0].game.items(CAPS), 0);
+    assert!(!w.guests[0]
+        .game
+        .messages()
+        .iter()
+        .any(|m| m.contains("removed")));
+    // The host's own line: its result ran in the host's game, which pays.
+    assert!(w.host.talk_to(SUNNY));
+    w.host.say(SHARED_LINE, false);
+    w.run(100);
+    w.host.say(SHARED_LINE, true);
+    w.host.leave();
+    w.run(200);
+    assert_eq!(w.host.items(CAPS), 20);
+    assert_eq!(w.guests[0].game.items(CAPS), 0);
+    assert_eq!(w.guests[0].driver.social.paid, 1);
+}
+
+/// A payment that comes while the guest's game has no player (a load) waits for one.
+#[test]
+fn a_payment_waits_for_the_guests_player() {
+    const CAPS: u32 = 0x0000_000f;
+    let mut w = World::new(&["Sunny"]);
+    w.host.add_item_form(CAPS);
+    w.host
+        .set_info_remove_item(SHARED_LINE, true, CAPS, 30, true);
+    w.guests[0].game.add_item_form(CAPS);
+    w.guests[0].game.set_player_items(CAPS, 100);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    let player = w.guests[0]
+        .game
+        .e
+        .mem
+        .u32(coop_engine::addr::PLAYER_SINGLETON);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.guests[0]
+        .game
+        .e
+        .mem
+        .set_u32(coop_engine::addr::PLAYER_SINGLETON, 0);
+    w.run(20);
+    assert_eq!(w.guests[0].driver.social.pays.len(), 1, "kept");
+    w.guests[0]
+        .game
+        .e
+        .mem
+        .set_u32(coop_engine::addr::PLAYER_SINGLETON, player);
+    w.run(2);
+    assert!(w.guests[0].driver.social.pays.is_empty());
+    assert_eq!(w.guests[0].game.items(CAPS), 70);
+}

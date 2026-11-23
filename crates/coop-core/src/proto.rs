@@ -23,7 +23,8 @@ use crate::social::SocialMsg;
 // 10 adds `ActorMsg::Greet`.
 // 11 adds `DialogueMsg::OpenMenu` (S43) and `DialogueMsg::Response` (S42).
 // 12 adds `chosen` to `DialogueMsg::Pick`/`Picked` and `DialogueMsg::Settled` (S42).
-pub const PROTOCOL_VERSION: u16 = 12;
+// 13 adds `DialogueMsg::Pay` (S30).
+pub const PROTOCOL_VERSION: u16 = 13;
 /// Largest datagram on the unreliable channel (fits a typical MTU).
 pub const MAX_UNRELIABLE_BYTES: usize = 1200;
 /// Largest single message on the reliable channel.

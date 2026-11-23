@@ -48,6 +48,13 @@ pub struct GuestSocial {
     /// Menus the host asked this game to open that it could not, for the log (taken by the
     /// caller).
     pub menus_not_opened: Vec<String>,
+    /// What the host's run of this player's lines takes from its player, not taken yet (no
+    /// player yet).
+    pub pays: Vec<coop_engine::pay::Payment>,
+    /// Payments taken from this game's player (S30).
+    pub paid: u32,
+    /// What was taken, for the log (taken by the caller).
+    pub pay_notes: Vec<String>,
 }
 
 /// Feeds a message of the host player's own game to the host's live layer and sends what it
@@ -159,6 +166,14 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
         }
         h.social.enactor.on_event(e, ev, &h.quests);
     }
+    for (to, p) in std::mem::take(&mut h.social.enactor.pays) {
+        let msg = Msg::Dialogue(coop_core::dialogue::DialogueMsg::Pay {
+            item: coop_core::ids::FormId(p.item),
+            count: p.count,
+            silent: p.silent,
+        });
+        send(net, to, &msg, &mut h.send_failures);
+    }
     for (to, m) in std::mem::take(&mut h.social.enactor.menus) {
         let msg = Msg::Dialogue(coop_core::dialogue::DialogueMsg::OpenMenu {
             npc: coop_core::ids::FormId(m.npc),
@@ -228,6 +243,38 @@ pub(crate) fn guest_step(
                 npc.0
             ));
         }
+    }
+    // What the host's run of this player's lines takes from it (a payment, a hand-in): taken
+    // from this game's own player (S30), once there is one.
+    g.social
+        .pays
+        .extend(
+            g.sync
+                .live
+                .dialogue
+                .take_pays()
+                .into_iter()
+                .map(|(item, count, silent)| coop_engine::pay::Payment {
+                    item: item.0,
+                    count,
+                    silent,
+                }),
+        );
+    let pays = std::mem::take(&mut g.social.pays);
+    for (i, p) in pays.iter().enumerate() {
+        let Some(taken) = coop_engine::pay::take(e, *p) else {
+            g.social.pays.extend_from_slice(&pays[i..]);
+            break;
+        };
+        g.social.paid += 1;
+        // items: what the story takes is not a put into a holder (see `story_took`).
+        if let Some(items) = g.items.as_mut() {
+            items.story_took(p.item, taken);
+        }
+        g.social.pay_notes.push(format!(
+            "the host's run of this player's line took {taken} of {:08x} (asked {})",
+            p.item, p.count
+        ));
     }
     for npc in std::mem::take(&mut g.social.talker.greet_asks) {
         let m = Msg::Actor(coop_core::actors::ActorMsg::Greet {

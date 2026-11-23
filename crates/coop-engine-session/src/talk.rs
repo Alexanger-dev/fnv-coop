@@ -1153,6 +1153,9 @@ pub struct Enactor {
     pub notes: Vec<String>,
     /// Menus a guest's line's result opens, for that guest's game (taken by the caller).
     pub menus: Vec<(PlayerId, coop_engine::menus::MenuOpen)>,
+    /// What a guest's line's result takes from the player, for that guest's game (taken by the
+    /// caller).
+    pub pays: Vec<(PlayerId, coop_engine::pay::Payment)>,
 }
 
 impl Enactor {
@@ -1205,6 +1208,14 @@ impl Enactor {
                 from.0, m.menu, m.npc
             ));
             self.menus.push((from, m));
+        }
+        // What the result takes from the player is the picker's (S30: a payment, a hand-in).
+        for p in coop_engine::pay::drain(e) {
+            self.notes.push(format!(
+                "player {}'s line {choice:08x} takes {} of {:08x}: from that player",
+                from.0, p.count, p.item
+            ));
+            self.pays.push((from, p));
         }
         match enacted {
             Ok(()) => self.enacted += 1,

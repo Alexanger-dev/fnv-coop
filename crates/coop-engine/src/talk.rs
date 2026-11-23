@@ -931,6 +931,47 @@ mod tests {
         assert_eq!(result_quest(&mut s.e), None);
     }
 
+    /// S30: while this game runs another player's line, what it takes from this game's player is
+    /// kept for that player and not taken here; from any other reference, or a form that is not
+    /// an item itself (a form list), the command runs as ever. This game's own line pays itself.
+    #[test]
+    fn a_line_run_for_another_player_keeps_what_it_takes_from_the_player() {
+        const CAPS: u32 = 0xf;
+        const LIST: u32 = 0x0010_7000;
+        let mut s = story();
+        set_sharing(&mut s.e, true);
+        s.add_item_form(CAPS);
+        s.add_non_item_form(LIST);
+        s.set_player_items(CAPS, 50);
+        s.set_info_remove_item(SHARED_LINE, true, CAPS, 30, false);
+        enact(&mut s.e, NPC, SHARED_LINE, true).unwrap();
+        assert_eq!(
+            crate::pay::drain(&mut s.e),
+            vec![crate::pay::Payment {
+                item: CAPS,
+                count: 30,
+                silent: false
+            }]
+        );
+        assert_eq!((s.items(CAPS), s.remove_item_runs()), (50, 0));
+        // From the NPC: the command's own.
+        s.set_info_remove_item_from(SHARED_LINE, true, NPC, CAPS, 30, false);
+        enact(&mut s.e, NPC, SHARED_LINE, true).unwrap();
+        assert!(crate::pay::drain(&mut s.e).is_empty());
+        assert_eq!(s.remove_item_runs(), 1);
+        // A form list: the command's own.
+        s.set_info_remove_item(SHARED_LINE, true, LIST, 1, false);
+        enact(&mut s.e, NPC, SHARED_LINE, true).unwrap();
+        assert!(crate::pay::drain(&mut s.e).is_empty());
+        assert_eq!(s.remove_item_runs(), 2);
+        // This game's own line.
+        s.set_info_remove_item(SHARED_LINE, true, CAPS, 30, false);
+        assert!(s.talk_to(NPC));
+        s.say(SHARED_LINE, true);
+        assert!(crate::pay::drain(&mut s.e).is_empty());
+        assert_eq!((s.items(CAPS), s.remove_item_runs()), (20, 3));
+    }
+
     /// PC run 30: Sunny hands over her rifle at the bottles by speaking up, outside the guest's
     /// conversation; the line's result ran in the guest's game, whose player alone got the rifle.
     /// On a guest, a story line said outside its player's conversation is noted; its own

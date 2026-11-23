@@ -284,8 +284,9 @@ pub(crate) fn register(e: &mut Engine) {
     e.register(addr::TES_RUN_SCRIPTS, run_scripts);
     // A name's characters: in this kit right after the name's two words.
     e.register(addr::FULL_NAME_CHARS, |_, a| eax(a[0] + 8));
-    e.register(addr::FULL_NAME_TEXT, |_, a| Ret {
-        eax: a[0],
+    // (A bag's item form: its own name.)
+    e.register(addr::FULL_NAME_TEXT, |e, a| Ret {
+        eax: crate::testkit::pay_kit::item_name(e, a[0]).unwrap_or(a[0]),
         ..Ret::default()
     });
 }
@@ -384,6 +385,39 @@ impl Story {
         self.e
             .mem
             .set_u32(script + crate::testkit::SCRIPT_ADD_ITEM + 4, count);
+    }
+
+    /// Gives info `id`'s result (said, or `end`) a `Player.RemoveItem item count [silent]` too.
+    pub fn set_info_remove_item(
+        &mut self,
+        id: u32,
+        end: bool,
+        item: u32,
+        count: u32,
+        silent: bool,
+    ) {
+        self.set_info_remove_item_from(id, end, 0, item, count, silent);
+    }
+
+    /// As [`Story::set_info_remove_item`], on the reference `from` (a form id; 0 for the player).
+    pub fn set_info_remove_item_from(
+        &mut self,
+        id: u32,
+        end: bool,
+        from: u32,
+        item: u32,
+        count: u32,
+        silent: bool,
+    ) {
+        let info = self.info_at(id);
+        let script = info + INFO_SCRIPTS + 0x80 * u32::from(end);
+        let at = script + crate::testkit::pay_kit::SCRIPT_REMOVE_ITEM;
+        for (i, v) in [item, count, u32::from(silent), from]
+            .into_iter()
+            .enumerate()
+        {
+            self.e.mem.set_u32(at + 4 * i as u32, v);
+        }
     }
 
     /// Gives info `id`'s result (said, or `end`) a `set Quest.var to value` too (as the game's

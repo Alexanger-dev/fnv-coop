@@ -137,6 +137,14 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-4",
     },
+    // The RemoveItem script command's body: on a co-op host running a guest's line, what the
+    // line takes from the player is taken from that guest's player, in its game (a payment, a
+    // hand-in; docs/coop/SPECS.md S30).
+    Entry {
+        addr: 0x005b_4e90,
+        owners: COOP,
+        step: "C-11",
+    },
     // The StartConversation script command's body: co-op's host notes a conversation a script
     // starts between two actors, a guest drops its own and plays the host's
     // (docs/coop/SPECS.md S23).

@@ -33,6 +33,8 @@ pub mod companion_kit;
 pub mod look_kit;
 #[path = "menus_kit.rs"]
 pub mod menus_kit;
+#[path = "pay_kit.rs"]
+pub mod pay_kit;
 // anim: bodies that play groups, idles, jumps, sit and get knocked down (docs/coop/SPECS.md S41).
 #[path = "anim_kit.rs"]
 pub mod anim_kit;
@@ -436,6 +438,7 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
         forms::set_quest_stage(e, quest, stage);
     }
     menus_kit::run(e, a[1], a[2]);
+    pay_kit::run(e, a[1]);
     crate::social_kit::run_var_setters(e, a[1]);
     eax(0)
 }
@@ -910,6 +913,8 @@ impl Story {
         look_kit::register(&mut e);
         // menus a line's result opens
         menus_kit::register(&mut e);
+        // what a line's result takes from the player
+        pay_kit::register(&mut e, PLAYER_VTABLE);
         crate::install(&mut e);
         Story { e }
     }
@@ -1133,6 +1138,7 @@ impl Story {
         self.e.mem.set_u32(BAG + 4, n + 1);
         let form = BAG_FORMS + 0x20 * n;
         self.e.mem.set_u32(form + addr::FORM_ID_OFFSET, id);
+        pay_kit::make_item(&mut self.e, form);
         add_form(&mut self.e, id, form);
     }
 

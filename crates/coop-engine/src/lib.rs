@@ -38,6 +38,7 @@ pub mod live;
 pub mod choices;
 pub mod look;
 pub mod menus;
+pub mod pay;
 pub mod puppet;
 pub mod quest;
 pub mod reward;
@@ -130,6 +131,10 @@ pub fn install(e: &mut Engine) {
         if e.is_registered(slot.addr()) {
             e.wrap(slot, wrap);
         }
+    }
+    // What a guest's line's result takes from the player: that guest's (S30).
+    if e.is_registered(addr::CMD_REMOVE_ITEM) {
+        e.wrap(pay::REMOVE, pay::remove);
     }
     if e.is_registered(addr::OBJECTIVE_SET_STATE) {
         e.wrap(quest::OBJECTIVE_STATE, quest::objective_state);

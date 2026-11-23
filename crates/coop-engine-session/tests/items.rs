@@ -473,3 +473,40 @@ fn a_quest_reward_is_not_read_as_a_take() {
     let (asked, in_hosts_chest, _, gifts) = run_with(false);
     assert_eq!((asked, in_hosts_chest, gifts), (1, 0, 0));
 }
+
+/// What a line the guest said took from its player (a payment, a hand-in, S30) is the payment
+/// path's alone: when the guest's game takes it in the same step a holder it has open gains the
+/// same item, the loss is not read as a put and sent to the host (which would put it into the
+/// host's holder too). Twin: without the payment path's word the same change is a put.
+#[test]
+fn a_payment_is_not_read_as_a_put() {
+    let run_with = |told: bool| {
+        let mut run = Run::new(1, true);
+        run.open(0, CHEST);
+        run.frames(2);
+        let g = &mut run.guests[0];
+        let chest = items::holder(&mut g.0.e, CHEST).unwrap();
+        let player = items::holder(&mut g.0.e, PLAYER).unwrap();
+        // The chest gains a stimpak in this game, and the story takes one from the player.
+        assert!(items::add(&mut g.0.e, player, STIMPAK, 1, None));
+        g.1.items.as_mut().unwrap().story_gave(STIMPAK, 1);
+        run.frames(2);
+        let g = &mut run.guests[0];
+        assert!(items::add(&mut g.0.e, chest, STIMPAK, 1, None));
+        assert_eq!(items::remove(&mut g.0.e, player, STIMPAK, 1), 1);
+        if told {
+            g.1.items.as_mut().unwrap().story_took(STIMPAK, 1);
+        }
+        run.frames(10);
+        (
+            run.gi(0).asked_host,
+            kit::has(&mut run.host, CHEST, STIMPAK),
+            run.gi(0).story_takes,
+        )
+    };
+    let (asked, in_hosts_chest, takes) = run_with(true);
+    assert_eq!((asked, takes), (0, 1));
+    let (asked_untold, in_hosts_chest_untold, _) = run_with(false);
+    assert_eq!(asked_untold, 1);
+    assert_eq!(in_hosts_chest_untold, in_hosts_chest + 1);
+}

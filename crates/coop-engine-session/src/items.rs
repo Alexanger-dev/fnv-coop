@@ -464,6 +464,8 @@ pub struct GuestItems {
     pub notes: Vec<String>,
     /// The story's item rewards this player got, left to the reward path ([`Self::story_gave`]).
     pub story_gifts: u32,
+    /// What the story took from this player, left to the payment path ([`Self::story_took`]).
+    pub story_takes: u32,
 }
 
 fn difference(now: &Counts, before: &Counts) -> Counts {
@@ -510,6 +512,17 @@ impl GuestItems {
             *base.entry(item).or_insert(0) += i32::try_from(count).unwrap_or(i32::MAX);
         }
         self.story_gifts += 1;
+    }
+
+    /// The story took `count` of `item` from this game's player (a payment or a hand-in of a line
+    /// this player said, S30: the host asked this game to take it). Counted out of this player's
+    /// last known items as [`Self::story_gave`] counts a gift in, so the loss is never read as a
+    /// put into a holder it has open.
+    pub fn story_took(&mut self, item: u32, count: u32) {
+        if let Some(base) = self.player_base.as_mut() {
+            *base.entry(item).or_insert(0) -= i32::try_from(count).unwrap_or(i32::MAX);
+        }
+        self.story_takes += 1;
     }
 
     /// Reads what this guest's own player did since the last call (`changes` is this step's
