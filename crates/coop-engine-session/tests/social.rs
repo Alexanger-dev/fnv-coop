@@ -20,6 +20,8 @@ engine_core::assemble!();
 /// A quest of the shared story, and one each player runs for themself.
 const MQ: u32 = 0x0010_4c0c;
 const OWN: u32 = 0x0010_4c1c;
+/// Another quest of the shared story, with a variable.
+const SIDE: u32 = 0x0010_4c2c;
 /// The game clock's hour.
 const HOUR: u32 = 0x38;
 const SUNNY: u32 = 0x0010_4e85;
@@ -53,9 +55,13 @@ fn hello() -> Hello {
 /// A game: everyone in the saloon with Sunny; Chet in the store.
 fn story() -> Story {
     let mut s = Story::new(&StorySpec {
-        quests: vec![(MQ, vec![5, 10, 20, 30]), (OWN, vec![5, 9])],
+        quests: vec![
+            (MQ, vec![5, 10, 20, 30]),
+            (OWN, vec![5, 9]),
+            (SIDE, vec![5]),
+        ],
         globals: vec![(HOUR, 8.0)],
-        vars: vec![(OWN, vec![1])],
+        vars: vec![(OWN, vec![1]), (SIDE, vec![1])],
         cells: vec![SALOON, STORE],
         actors: vec![SUNNY, CHET],
         ..StorySpec::default()
@@ -105,7 +111,7 @@ impl World {
         let net = LoopbackNet::new();
         let hostnet = net.endpoint(PlayerId::HOST);
         let mut host = story();
-        let mut hd = HostDriver::new(HostConfig::new(hello(), 1), [MQ], []);
+        let mut hd = HostDriver::new(HostConfig::new(hello(), 1), [MQ, SIDE], []);
         hd.set_clock([HOUR]);
         hd.start(&mut host.e);
         let mut w = World {
@@ -575,6 +581,92 @@ fn a_vote_is_shown_waited_for_twenty_seconds_and_chosen() {
     let far = w.guests[1].game.messages();
     assert_eq!(far.iter().filter(|m| *m == told).count(), 1, "{far:?}");
     assert!(!far.iter().any(|m| m.starts_with("Chosen")), "{far:?}");
+}
+
+/// The owner, 2026-11-23: a reply the guest's own game would list came only as the host's: the
+/// guest's list was made on the first change of the story after the line (another's), before the
+/// line's own. The host says which revision of the story holds everything a line changed, once
+/// its end result ran and the changes were collected (council 2-1, B).
+#[test]
+fn the_host_says_when_a_lines_changes_are_in_the_story() {
+    // Quest variables are swept every few collects: the line may end at any point of that round.
+    for lead in 0..coop_engine_session::VAR_SWEEP_EVERY {
+        a_lines_changes_are_in_the_story_it_says(20 + lead);
+    }
+}
+
+fn a_lines_changes_are_in_the_story_it_says(lead: u32) {
+    let mut w = World::new(&["Sunny"]);
+    // The line's end result also sets a variable of another quest, whose stage stays (as Trudy's
+    // `bTrudyExplainedReputation`): only the sweep of quest variables finds it.
+    let var = coop_engine::vars::quest_vars(&mut w.host.e, SIDE).expect("the quest")[0].0;
+    w.host.set_info_var(SHARED_LINE, true, SIDE, var, 1);
+    w.run(lead);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    let v = *w.guests[0].driver.sync.live.dialogue.view().expect("in it");
+    assert_eq!(
+        w.guests[0]
+            .driver
+            .sync
+            .live
+            .dialogue
+            .settled_rev(v.session, v.step),
+        None,
+        "not before its end"
+    );
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.run(10);
+    let rev = w.guests[0]
+        .driver
+        .sync
+        .live
+        .dialogue
+        .settled_rev(v.session, v.step)
+        .expect("told");
+    // The line's end result (stage 20) is in the story at that revision, on both sides.
+    assert_eq!(forms::quest_stage(&mut w.host.e, MQ), Some(20));
+    assert!(w.guests[0].driver.sync.store.base().0 >= rev);
+    let stage_rev =
+        w.hd.sync
+            .store
+            .get(
+                coop_core::ids::FormId(MQ),
+                &coop_engine_session::record::encode(
+                    &coop_engine::quest::record(&mut w.host.e, MQ).expect("the quest"),
+                )
+                .expect("encodable"),
+            )
+            .map(|en| en.rev.0)
+            .expect("the quest's stage in the story");
+    assert!(rev >= stage_rev, "{rev} holds the stage's {stage_rev}");
+    let bits = 1f64.to_bits();
+    let var_rev =
+        w.hd.sync
+            .store
+            .get(
+                coop_core::ids::FormId(SIDE),
+                &coop_core::schema::Field::ScriptVar {
+                    index: var as u16,
+                    bits,
+                },
+            )
+            .filter(|en| {
+                en.field
+                    == coop_core::schema::Field::ScriptVar {
+                        index: var as u16,
+                        bits,
+                    }
+            })
+            .map(|en| en.rev.0)
+            .expect("the variable the line set, in the story");
+    assert!(
+        rev >= var_rev,
+        "{rev} holds the variable's {var_rev} (lead {lead})"
+    );
+    assert_eq!(w.hd.social.settles_told, 1);
 }
 
 /// The owner, 2026-11-22: the guest saw "Show me what you have for sale (Host)", which opened the

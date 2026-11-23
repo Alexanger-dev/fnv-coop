@@ -221,7 +221,8 @@ fn real_path(path: &[u8]) -> std::path::PathBuf {
         [d, b':', ..] if d.is_ascii_alphabetic() => {
             let drives = std::env::var("NV_RS_DRIVES").unwrap_or_else(|_| "/".into());
             (
-                std::path::PathBuf::from(drives).join((*d as char).to_ascii_lowercase().to_string()),
+                std::path::PathBuf::from(drives)
+                    .join((*d as char).to_ascii_lowercase().to_string()),
                 text[2..].to_string(),
             )
         }

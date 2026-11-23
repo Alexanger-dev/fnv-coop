@@ -436,6 +436,7 @@ fn runner(e: &mut Engine, a: &[u32]) -> Ret {
         forms::set_quest_stage(e, quest, stage);
     }
     menus_kit::run(e, a[1], a[2]);
+    crate::social_kit::run_var_setters(e, a[1]);
     eax(0)
 }
 

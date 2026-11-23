@@ -2,6 +2,7 @@
 
 use super::{Busy, CloseReason, Deny, DialogueMsg, MenuItem, HEARTBEAT_MS};
 use crate::ids::{FormId, PlayerId};
+use std::collections::BTreeMap;
 
 /// The session this machine currently sees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +91,9 @@ pub struct DialogueClient {
     chosen: Vec<(u32, u32)>,
     /// Menus the host asked this game to open (npc, menu, value).
     menus: Vec<(FormId, u8, u32)>,
+    /// By conversation: its last step whose changes the host said are in the story, and the
+    /// story's revision holding them ([`DialogueMsg::Settled`]).
+    settled: BTreeMap<u32, (u32, u64)>,
 }
 
 impl DialogueClient {
@@ -110,6 +114,7 @@ impl DialogueClient {
             waiting: Vec::new(),
             chosen: Vec::new(),
             menus: Vec::new(),
+            settled: BTreeMap::new(),
         }
     }
 
@@ -129,6 +134,15 @@ impl DialogueClient {
         // (Gone once its step is picked.)
         let (_, votes, of, ends) = self.current()?.votes.as_ref()?;
         Some((votes.as_slice(), *of, ends.saturating_sub(now_ms)))
+    }
+
+    /// The story's revision holding everything step `step` of conversation `session` changed,
+    /// once the host said it ([`DialogueMsg::Settled`]).
+    pub fn settled_rev(&self, session: u32, step: u32) -> Option<u64> {
+        self.settled
+            .get(&session)
+            .filter(|(s, _)| *s == step)
+            .map(|(_, rev)| *rev)
     }
 
     /// The menus the host asked this game to open since the last call (npc, menu, value).
@@ -509,6 +523,9 @@ impl DialogueClient {
             }
             DialogueMsg::OpenMenu { npc, menu, value } => {
                 self.menus.push((npc, menu, value));
+            }
+            DialogueMsg::Settled { session, step, rev } => {
+                self.settled.insert(session, (step, rev));
             }
             DialogueMsg::PlayerBusy { player, busy } => {
                 if player != self.me {

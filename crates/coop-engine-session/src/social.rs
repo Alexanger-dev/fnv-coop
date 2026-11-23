@@ -29,6 +29,11 @@ pub struct HostSocial {
     pub party: PartyHost,
     /// The rest vote.
     pub rester: Rester,
+    /// Steps whose end result ran this step (session, step): told to the guests as settled the
+    /// next step, once the game's changes were collected.
+    settles: Vec<(u32, u32)>,
+    /// Steps told to the guests as settled, for the log.
+    pub settles_told: u32,
 }
 
 /// A guest's state.
@@ -130,7 +135,21 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
             f.greet_asked(npc, p, talking, now_ms);
         }
     }
+    // The steps whose end result ran last step: their changes are in the story now (collected
+    // after that step's social part, the quest variables read again then).
+    let rev = h.sync.store.rev().0;
+    for (session, step) in std::mem::take(&mut h.social.settles) {
+        let msg = Msg::Dialogue(coop_core::dialogue::DialogueMsg::Settled { session, step, rev });
+        for p in h.sync.players() {
+            send(net, p, &msg, &mut h.send_failures);
+        }
+        h.social.settles_told += 1;
+    }
     for ev in h.sync.live.dialogue.take_events() {
+        if let coop_core::dialogue::DialogueEvent::RunEnd { session, step, .. } = &ev {
+            h.social.settles.push((*session, *step));
+            h.sweep_vars_now = true;
+        }
         if let coop_core::dialogue::DialogueEvent::RunBegin { npc, initiator, .. } = &ev {
             if let Some(f) = h.fight.as_mut() {
                 f.engage(npc.0, *initiator);
@@ -177,7 +196,7 @@ pub(crate) fn guest_step(
     }
     let me = g.sync.player;
     let share = |_: &mut Engine, _info: u32, held: bool| held;
-    g.social.talker.story_rev = g.sync.store.rev().0;
+    g.social.talker.story_base = g.sync.store.base().0;
     g.social.talker.now_ms = now_ms;
     g.social.talker.avatars = g
         .ladder

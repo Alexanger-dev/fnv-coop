@@ -134,6 +134,18 @@ pub enum DialogueMsg {
         /// The response begun (1 for the second).
         n: u32,
     },
+    /// Host to the guests: the story's revision holding everything a step's line changed (its
+    /// end result run, the quest variables read again): a guest's window lists its options after
+    /// the line once its story holds it (the owner, 2026-11-23: an option its own game would list
+    /// came only as the host's, the guest's list made before the line's quest variable came).
+    Settled {
+        /// Session.
+        session: u32,
+        /// Step.
+        step: u32,
+        /// The story's revision.
+        rev: u64,
+    },
     /// A peer finished playing a step's lines.
     LineDone {
         /// Session.

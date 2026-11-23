@@ -45,6 +45,10 @@ const MENU_TOPIC: u32 = KIT + 0xc240;
 const TOPICS_MADE: u32 = KIT + 0xd000;
 const TOPIC_FORMS: u32 = KIT + 0xd040;
 const TOPIC_SLOT: u32 = 0x40;
+/// Result scripts that set a quest variable (`set Quest.var to n`, which flags no change): how
+/// many, then each (script, quest, variable, value).
+const VAR_SETTERS: u32 = KIT + 0xd800;
+const VAR_SETTER_SLOT: u32 = 0x10;
 const SLEEP_MENU: u32 = KIT + 0x200;
 const HOURS_TILE: u32 = KIT + 0x300;
 const SAVE_NAME: u32 = KIT + 0x400;
@@ -382,6 +386,20 @@ impl Story {
             .set_u32(script + crate::testkit::SCRIPT_ADD_ITEM + 4, count);
     }
 
+    /// Gives info `id`'s result (said, or `end`) a `set Quest.var to value` too (as the game's
+    /// `set`, no change flagged: only the host's sweep of the quests' variables finds it).
+    pub fn set_info_var(&mut self, id: u32, end: bool, quest: u32, var: u32, value: u32) {
+        let info = self.info_at(id);
+        let script = info + INFO_SCRIPTS + 0x80 * u32::from(end);
+        let n = self.e.mem.u32(VAR_SETTERS);
+        assert!(n < 16, "a test story's setters fit");
+        self.e.mem.set_u32(VAR_SETTERS, n + 1);
+        let at = VAR_SETTERS + VAR_SETTER_SLOT * (n + 1);
+        for (i, v) in [script, quest, var, value].into_iter().enumerate() {
+            self.e.mem.set_u32(at + 4 * i as u32, v);
+        }
+    }
+
     /// Gives info `id`'s result (said, or `end`) a command opening `menu` with the reference it
     /// runs on (`ShowBarterMenu value`, ...) too.
     pub fn set_info_menu(&mut self, id: u32, end: bool, menu: crate::menus::Menu, value: u32) {
@@ -702,5 +720,19 @@ impl Story {
             self.e.mem.u32(p + PLAYER_WAIT_HOURS),
             self.e.mem.u8(p + PLAYER_WAIT_IN_BED) != 0,
         )
+    }
+}
+
+/// The kit's script runner: the quest variables script `script` sets ([`Story::set_info_var`]).
+pub(crate) fn run_var_setters(e: &mut Engine, script: u32) {
+    if !e.mem.is_mapped(VAR_SETTERS) {
+        return;
+    }
+    for n in 1..=e.mem.u32(VAR_SETTERS) {
+        let at = VAR_SETTERS + VAR_SETTER_SLOT * n;
+        if e.mem.u32(at) == script {
+            let (quest, var, value) = (e.mem.u32(at + 4), e.mem.u32(at + 8), e.mem.u32(at + 12));
+            crate::vars::set_quest_var(e, quest, var, f64::from(value).to_bits());
+        }
     }
 }

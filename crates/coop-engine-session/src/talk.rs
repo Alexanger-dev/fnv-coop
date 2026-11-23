@@ -179,9 +179,8 @@ pub struct Talker {
     pub asks_said: u32,
     /// Options of this player's another player picked that this game could not say.
     pub asks_failed: u32,
-    /// The story's revision in this game (a guest's: the host's changes it has), set by the
-    /// caller each step.
-    pub story_rev: u64,
+    /// The story's revision up to which this game holds every change (a guest's contiguous one).
+    pub story_base: u64,
     /// The step after which this player's window waits to list its options (session, step, the
     /// story's revision then, steps waited).
     settle: Option<(u32, u32, u64, u32)>,
@@ -672,19 +671,26 @@ impl Talker {
 
     /// Whether the story is settled after step `v`'s line, for this player's window to list its
     /// options: on the host, a step later (the host's game ran the line's result for a guest by
-    /// then); on a guest, once a change of the host's story came after the step ended, or after
-    /// [`SETTLE_STEPS`].
-    fn settled(&mut self, me: PlayerId, v: coop_core::dialogue::View) -> bool {
+    /// then); on a guest, once its story holds the revision the host said holds everything the
+    /// line changed (`settled`, [`DialogueMsg::Settled`]; the owner, 2026-11-23: a list made on
+    /// the first change of the story, another's, lacked an option the line's quest variable
+    /// allowed; council 2-1, B), or after [`SETTLE_STEPS`] (the host's word lost).
+    fn settled(
+        &mut self,
+        me: PlayerId,
+        v: coop_core::dialogue::View,
+        settled: Option<u64>,
+    ) -> bool {
         let key = (v.session, v.step);
-        let (rev, waited) = match self.settle {
-            Some((s, step, rev, n)) if (s, step) == key => (rev, n + 1),
-            _ => (self.story_rev, 0),
+        let waited = match self.settle {
+            Some((s, step, _, n)) if (s, step) == key => n + 1,
+            _ => 0,
         };
-        self.settle = Some((key.0, key.1, rev, waited));
+        self.settle = Some((key.0, key.1, self.story_base, waited));
         if me.is_host() {
             waited >= 1
         } else {
-            self.story_rev > rev || waited >= SETTLE_STEPS
+            settled.is_some_and(|rev| self.story_base >= rev) || waited >= SETTLE_STEPS
         }
     }
 
@@ -807,7 +813,8 @@ impl Talker {
         } else {
             client.menu().is_some()
         };
-        if list && self.settled(me, v) && coop_engine::watch::show_topics(e) {
+        let settled = client.settled_rev(v.session, v.step);
+        if list && self.settled(me, v, settled) && coop_engine::watch::show_topics(e) {
             self.windows_listed += 1;
         }
         let lists = coop_engine::choices::counts(e).0;
@@ -1215,6 +1222,47 @@ impl Enactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner, 2026-11-23 (council 2-1, B): a guest's window lists its options after another
+    /// player's line once its story holds the revision the host said holds the line's changes, not
+    /// on the first change of the story (another's); without the host's word, after a while. The
+    /// host's window lists a step later.
+    #[test]
+    fn a_guests_window_lists_once_its_story_holds_the_lines_changes() {
+        let v = coop_core::dialogue::View {
+            session: 3,
+            npc: coop_core::ids::FormId(1),
+            initiator: PlayerId::HOST,
+            step: 4,
+            playing: None,
+            picker: Some(PlayerId::HOST),
+            reported: true,
+            response: 0,
+            chosen: true,
+        };
+        let guest = PlayerId(1);
+        let mut t = Talker {
+            story_base: 10,
+            ..Talker::default()
+        };
+        assert!(!t.settled(guest, v, None));
+        // Another change comes first: still waiting for the line's.
+        t.story_base = 11;
+        assert!(!t.settled(guest, v, Some(14)));
+        t.story_base = 14;
+        assert!(t.settled(guest, v, Some(14)));
+        // No word from the host: after a while.
+        let mut t = Talker::default();
+        let v = coop_core::dialogue::View { step: 5, ..v };
+        for _ in 0..SETTLE_STEPS {
+            assert!(!t.settled(guest, v, None));
+        }
+        assert!(t.settled(guest, v, None));
+        // The host's own window: a step later.
+        let mut t = Talker::default();
+        assert!(!t.settled(PlayerId::HOST, v, None));
+        assert!(t.settled(PlayerId::HOST, v, None));
+    }
 
     #[test]
     fn a_watched_line_is_the_prompt_then_each_response() {

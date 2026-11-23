@@ -22,7 +22,8 @@ use crate::social::SocialMsg;
 // anim: 9 adds the animation action events (`avatar::ActionKind::Group` and on).
 // 10 adds `ActorMsg::Greet`.
 // 11 adds `DialogueMsg::OpenMenu` (S43) and `DialogueMsg::Response` (S42).
-pub const PROTOCOL_VERSION: u16 = 11;
+// 12 adds `chosen` to `DialogueMsg::Pick`/`Picked` and `DialogueMsg::Settled` (S42).
+pub const PROTOCOL_VERSION: u16 = 12;
 /// Largest datagram on the unreliable channel (fits a typical MTU).
 pub const MAX_UNRELIABLE_BYTES: usize = 1200;
 /// Largest single message on the reliable channel.

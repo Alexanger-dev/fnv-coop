@@ -1872,6 +1872,16 @@ every other game shows it, holds, and lists its own options when the step is ove
   "That's all I wanted to know.", picked by each player in turn: both games listed the same
   options after each line; before, the watching game kept "That's all..." and lost "Doc
   Mitchell said you could teach me...").
+- The host says which revision of the story holds everything a line changed
+  (`DialogueMsg::Settled { session, step, rev }`, protocol 12): once the line's end result ran
+  (`RunEnd`), it sweeps every shared quest's variables in that step's collect (a result that
+  sets a variable of a quest whose stage stays leaves nothing in the journal), and sends the
+  revision at the start of the next step. A guest's window lists its options once its story
+  holds that revision, else after `SETTLE_STEPS` as before (the owner, 2026-11-23: a reply the
+  guest's own game would list came only as "... (Host)": its list was made on the first change
+  of the story after the line, another one, before the line's own; council 2-1, B). Unit and
+  session tests (the line ending at each point of the sweep round), mutation checks (all
+  killed).
 - Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
   they are not shown to a watcher.
 

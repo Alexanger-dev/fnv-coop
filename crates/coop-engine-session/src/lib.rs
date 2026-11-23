@@ -318,6 +318,9 @@ pub struct HostDriver {
     quests: BTreeSet<u32>,
     /// Host: collect passes so far (the variable sweep's clock).
     collects: u32,
+    /// Host: the quest variables are read again at the next collect, whatever the sweep's clock
+    /// says (a dialogue line's end result ran: its changes are told to the guests as settled).
+    sweep_vars_now: bool,
     /// Host: the game's loads seen so far ([`coop_engine::saves::loads`]).
     loads_seen: u64,
     /// Host: [`quest::guest_completions_kept`] at the last step.
@@ -441,6 +444,7 @@ impl HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
             collects: 0,
+            sweep_vars_now: false,
             loads_seen: 0,
             kept_seen: 0,
             scene_started: Vec::new(),
@@ -886,7 +890,7 @@ impl HostDriver {
         // guest's own greeting was refused as already done, and its game was put back to 0, so
         // its Sunny walked up to its player again and again).
         self.collects = self.collects.wrapping_add(1);
-        if self.collects % VAR_SWEEP_EVERY == 0 {
+        if self.collects % VAR_SWEEP_EVERY == 0 || std::mem::take(&mut self.sweep_vars_now) {
             for id in self.quests.clone() {
                 for (var, bits) in vars::quest_vars(e, id).unwrap_or_default() {
                     if let Ok(index) = u16::try_from(var) {
