@@ -747,6 +747,16 @@ PC run 13 (2026-11-11), from the two logs and the game's data.
   reaches the host's player only (Sunny's Varmint Rifle). An actor that leaves without a package both games
   have (fleeing) stays where this game has it. A body lies where each game dropped it. A led actor has no
   walk animation.
+- **Hidden while away (2026-11-23).** The host's game walked Sunny, Cheyenne and Ringo out of the gas
+  station to fight; the guest, inside, still saw them there (the outside not loaded in her game, nothing was
+  brought). A guest's copy of an actor the host runs is disabled while the host's actor is in a space the
+  guest's game has not loaded (another space, or this one outside its loaded cells): a copy in the player's
+  own space is first given `HIDE_AFTER_MS` to walk out, and one in a conversation here is left to it. It is
+  enabled again, and brought to the host's place, once that place is loaded. A hidden copy's story entry is
+  neither healed nor applied over it (`Fight::hides`); a copy the story disables meanwhile stays disabled;
+  after a load, a copy disabled here that the host has in the world and the story does not disable is shown
+  again (one hidden when the game saved). Council 3-0, A. Session tests, mutation checks (all killed but
+  the enable before a bring, which the end of the frame does too); not yet run on a PC.
 
 ## S26: proposals (D5, rung 2; implemented; not yet run on a PC)
 
@@ -1930,6 +1940,26 @@ every other game shows it, holds, and lists its own options when the step is ove
   payment, a hand-in) is taken from that guest's player alone, the host's untouched (S30).
 - Lines of no shared quest are not sent between players yet (S16), so they are not shown to a
   watcher.
+- Fixes after the PC run of 2026-11-23 (council each, the owner's go-ahead):
+  - A guest's window lists its options again whenever its story changes while it shows the same
+    step, and the host's settled word waits for the line's end result (council: both, C): a reply
+    the guest's own game lists no longer comes only as "... (Host)".
+  - Another player's row is shown only when its line checks a SPECIAL or a skill (the game's
+    bracketed check lines; `coop-votelist` lists them): "Goodbye (Guest)" is not shown.
+  - A watching window's quiet timer starts again on every line said and every list shown (Trudy's
+    long talk no longer closed it).
+  - Votes are counted and shown per row (topic and line): two rows that lead to the same line
+    are two choices (protocol 15).
+  - A player in any game menu (level-up, Pip-Boy, inventory) is not a voter; the others decide.
+  - A line an NPC says on its own near a guest is the line the host's game picked for the topic
+    (protocol 16; `TOPIC_MATCHING_INFO` wrap): the guest heard Sunny's bottles line while the
+    host heard the gecko line.
+  - A force greet that began in one player's game (`GREETED` on the actor: package, player; a
+    guest's is claimed) is refused in every other game with the same package, and that player is
+    told who had it; a game's own greetings are its own (Ringo thanked the host, then ran to the
+    guest and thanked her again).
+  Unit and session tests, mutation checks (killed, or recorded where a check is defensive); not
+  yet run on a PC.
 
 ## S43: menus a line opens are the picker's (implemented, run in two headless games)
 
