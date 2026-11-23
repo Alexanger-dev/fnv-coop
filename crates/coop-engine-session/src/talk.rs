@@ -117,6 +117,10 @@ pub struct Talker {
     pub windows_closed: u32,
     /// The conversation the window shows: (session, the steps since its last new line).
     watched: Option<(u32, u32)>,
+    /// The watched conversation's step and line when last seen: any change is a new line or
+    /// list, whatever the path (PC run, 2026-11-23: lines said from the window's own row never
+    /// counted, and a long talk with Trudy closed the window).
+    watched_at: Option<(u32, u32, Option<u32>)>,
     /// Another player's conversation this player is far from (S42: shown as text, held back
     /// while this player is busy).
     far: Option<Far>,
@@ -227,6 +231,22 @@ fn line_text(e: &mut Engine, choice: u32, chosen: bool) -> Option<(String, Strin
     }
     let prompt = coop_engine::choices::option_text(e, choice).unwrap_or(prompt);
     Some((text, prompt))
+}
+
+/// The watching window's quiet steps after this one: back to 0 when the conversation's step or
+/// line moved since the last (`at`, kept in `last`), whatever said it.
+fn quiet_after(
+    last: &mut Option<(u32, u32, Option<u32>)>,
+    at: Option<(u32, u32, Option<u32>)>,
+    quiet: u32,
+) -> u32 {
+    let moved = at != *last;
+    *last = at;
+    if moved {
+        0
+    } else {
+        quiet + 1
+    }
 }
 
 /// A watching window whose conversation has said nothing new for this many steps (frames) is
@@ -496,8 +516,8 @@ impl Talker {
     /// after the rows' text ("(1/2 Votes, 18s)"), the choice is told; a player not in the
     /// conversation is told once that a vote is open and how to take part.
     fn vote(&mut self, e: &mut Engine, client: &mut DialogueClient, out: &mut Vec<DialogueMsg>) {
-        if let Some(info) = coop_engine::choices::take_voted(e) {
-            if let Some(msg) = client.vote(info) {
+        if let Some((info, row)) = coop_engine::choices::take_voted(e) {
+            if let Some(msg) = client.vote(info, row) {
                 out.push(msg);
                 self.votes_cast += 1;
             }
@@ -517,12 +537,20 @@ impl Talker {
         if let (Some(v), Some((votes, of, left))) = (view, votes) {
             let secs = left.div_ceil(1000);
             if client.joined() {
-                for &(_, choice) in &votes {
-                    if marks.iter().any(|(c, _)| *c == choice) {
+                // Per row: the line and the topic of the row each voter clicked (two topics can
+                // lead to the same line).
+                let rows = client.vote_rows();
+                let row_of = |who| rows.iter().find(|(p, _)| *p == who).map_or(0, |(_, r)| *r);
+                for &(who, choice) in &votes {
+                    let row = row_of(who);
+                    if marks.iter().any(|(c, r, _)| *c == choice && *r == row) {
                         continue;
                     }
-                    let n = votes.iter().filter(|(_, c)| *c == choice).count();
-                    marks.push((choice, format!("({n}/{of} Votes, {secs}s)")));
+                    let n = votes
+                        .iter()
+                        .filter(|(p, c)| *c == choice && row_of(*p) == row)
+                        .count();
+                    marks.push((choice, row, format!("({n}/{of} Votes, {secs}s)")));
                 }
             } else if let Some(&(who, choice)) = votes
                 .first()
@@ -884,7 +912,8 @@ impl Talker {
         // The window's conversation is over, another began, or this player left the NPC.
         if let Some((session, quiet)) = self.watched {
             let over = view.map_or(true, |v| v.session != session || !talk::near(e, v.npc.0));
-            let quiet = quiet + 1;
+            let at = view.map(|v| (v.session, v.step, v.playing));
+            let quiet = quiet_after(&mut self.watched_at, at, quiet);
             if over || quiet >= WATCH_QUIET_STEPS {
                 if std::env::var_os("NV_COOP_TALK_LOG").is_some() {
                     let near = view.map(|v| talk::near(e, v.npc.0));
@@ -1244,6 +1273,33 @@ impl Enactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PC run, 2026-11-23: a long talk with Trudy closed the guest's watching window, its lines
+    /// said from the window's own row never counted as new. Any move of the step or the line
+    /// does, whatever the path; nothing new counts up.
+    #[test]
+    fn a_watching_windows_quiet_steps_start_again_on_any_new_line_or_step() {
+        let mut last = None;
+        assert_eq!(quiet_after(&mut last, Some((8, 3, Some(7))), 500), 0);
+        assert_eq!(quiet_after(&mut last, Some((8, 3, Some(7))), 0), 1);
+        assert_eq!(
+            quiet_after(&mut last, Some((8, 3, None)), 1),
+            0,
+            "the line ended"
+        );
+        assert_eq!(
+            quiet_after(&mut last, Some((8, 4, None)), 0),
+            0,
+            "the next step"
+        );
+        assert_eq!(
+            quiet_after(&mut last, Some((8, 4, Some(9))), 0),
+            0,
+            "its line"
+        );
+        assert_eq!(quiet_after(&mut last, Some((8, 4, Some(9))), 0), 1);
+        assert_eq!(quiet_after(&mut last, Some((8, 4, Some(9))), 1), 2);
+    }
 
     /// The owner, 2026-11-23 (council 2-1, B): a guest's window lists its options after another
     /// player's line once its story holds the revision the host said holds the line's changes, not

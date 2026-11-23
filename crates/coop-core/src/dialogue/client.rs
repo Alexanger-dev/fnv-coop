@@ -54,6 +54,8 @@ struct Known {
     /// Its open vote (S42 step 3b): (step, each voter's option, how many vote, when it closes in
     /// this machine's time).
     votes: Option<(u32, Vec<Ballot>, u8, u64)>,
+    /// The open vote's rows: each voter's (its topic; 0 for a row with none).
+    vote_rows: Vec<(PlayerId, u32)>,
 }
 
 /// One vote: the player and the option (its info) it voted for.
@@ -122,13 +124,22 @@ impl DialogueClient {
     }
 
     /// Votes for option `choice` of the next step, a line that matters (S42 step 3b).
-    pub fn vote(&self, choice: u32) -> Option<DialogueMsg> {
+    pub fn vote(&self, choice: u32, row: u32) -> Option<DialogueMsg> {
         let v = self.view().filter(|v| v.playing.is_none())?;
         Some(DialogueMsg::Vote {
             session: v.session,
             step: v.step + 1,
             choice,
+            row,
         })
+    }
+
+    /// The shown conversation's open vote's rows: each voter's (the topic of the row it clicked;
+    /// 0 for a row with none).
+    pub fn vote_rows(&self) -> &[(PlayerId, u32)] {
+        self.current()
+            .filter(|c| c.votes.is_some())
+            .map_or(&[], |c| c.vote_rows.as_slice())
     }
 
     /// The shown conversation's open vote for its next step: each voter's option, how many
@@ -426,6 +437,7 @@ impl DialogueClient {
                         menu: None,
                         last: None,
                         votes: None,
+                        vote_rows: Vec::new(),
                     },
                 );
                 if initiator == self.me {
@@ -515,11 +527,13 @@ impl DialogueClient {
                 session,
                 step,
                 votes,
+                rows,
                 of,
                 left_ms,
             } => {
                 if let Some(k) = self.sessions.get_mut(&session) {
                     k.votes = Some((step, votes, of, now_ms + left_ms));
+                    k.vote_rows = rows;
                 }
             }
             DialogueMsg::Chosen {
@@ -1096,14 +1110,15 @@ mod tests {
     #[test]
     fn a_vote_is_sent_and_the_votes_and_the_choice_are_kept_for_the_shown_one() {
         let mut c = DialogueClient::new(PlayerId(2));
-        assert!(c.vote(3).is_none() && c.votes(0).is_none());
+        assert!(c.vote(3, 0x30).is_none() && c.votes(0).is_none());
         start(&mut c, 1);
         assert_eq!(
-            c.vote(3),
+            c.vote(3, 0x30),
             Some(DialogueMsg::Vote {
                 session: 4,
                 step: 1,
-                choice: 3
+                choice: 3,
+                row: 0x30
             })
         );
         c.on_msg(
@@ -1111,6 +1126,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 votes: vec![(PlayerId(1), 3)],
+                rows: vec![(PlayerId(1), 0x31)],
                 of: 2,
                 left_ms: 20_000,
             },
@@ -1118,6 +1134,7 @@ mod tests {
         );
         let (votes, of, left) = c.votes(6_000).unwrap();
         assert_eq!((votes, of, left), (&[(PlayerId(1), 3)][..], 2, 15_000));
+        assert_eq!(c.vote_rows(), [(PlayerId(1), 0x31)], "the row voted for");
         assert_eq!(c.votes(30_000).unwrap().2, 0);
         // Another conversation's, one this player follows but is not in: not this one's.
         c.on_msg(
@@ -1163,6 +1180,7 @@ mod tests {
                 session: 4,
                 step: 1,
                 votes: vec![(PlayerId(1), 3)],
+                rows: vec![(PlayerId(1), 0x31)],
                 of: 2,
                 left_ms: 20_000,
             },
@@ -1178,6 +1196,7 @@ mod tests {
             },
             3_000,
         );
-        assert!(c.votes(3_000).is_none() && c.vote(3).is_none());
+        assert!(c.votes(3_000).is_none() && c.vote(3, 0).is_none());
+        assert!(c.vote_rows().is_empty(), "gone with the votes");
     }
 }

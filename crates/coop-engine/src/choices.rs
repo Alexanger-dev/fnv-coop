@@ -57,6 +57,10 @@ struct State {
     menu: u32,
     /// The game's own rows: each one's info (its form id; 0 for a topic without one), by index.
     own: Vec<u32>,
+    /// The topics (form ids) of this game's own rows, as `own`: two topics can lead to the same
+    /// line, and a vote is for the row clicked (PC run, 2026-11-23: "Let's go." and "I'm ready.
+    /// You'd better be, too." both showed one vote).
+    own_rows: Vec<u32>,
     /// The other players' options: (info, the owner's name).
     foreign: Vec<(u32, String)>,
     /// The added rows' infos, by index after the game's own.
@@ -73,14 +77,16 @@ struct State {
     vote_lines: Arc<HashSet<u32>>,
     /// The lines each player has for itself (form ids): another player's copy is never shown.
     personal_lines: Arc<HashSet<u32>>,
-    /// A row of a line voted on clicked: its info.
-    voted: Option<u32>,
+    /// A row of a line voted on clicked: its info and its topic (0 for another player's row).
+    voted: Option<(u32, u32)>,
     /// [`say`] runs: its click is said, not voted.
     saying: bool,
-    /// What is shown after the rows of these infos (the votes so far).
-    marks: Vec<(u32, String)>,
-    /// The rows of the window's list: (index, info, the text it was listed with).
-    bases: Vec<(u32, u32, String)>,
+    /// What is shown after the rows of these lines (info, topic: 0 for any row of the line; the
+    /// votes so far).
+    marks: Vec<(u32, u32, String)>,
+    /// The rows of the window's list: (index, info, topic: 0 for another player's row, the text
+    /// it was listed with).
+    bases: Vec<(u32, u32, u32, String)>,
     /// The menu's `uiIgnoreInputStartTime` when its list was last taken.
     stamp: u32,
     /// A click on one of this game's own rows runs now (its line's said result runs within).
@@ -196,7 +202,7 @@ pub fn leave_offered(e: &mut Engine) -> bool {
 }
 
 /// What is shown after the rows of each info now (the votes so far).
-pub fn marks(e: &mut Engine) -> Vec<(u32, String)> {
+pub fn marks(e: &mut Engine) -> Vec<(u32, u32, String)> {
     state(e, |s| s.marks.clone())
 }
 
@@ -214,6 +220,7 @@ pub(crate) fn note_list(e: &mut Engine, infos: Vec<u32>) {
     let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
     state(e, |s| {
         s.menu = menu;
+        s.own_rows = vec![0; infos.len()];
         s.own = infos;
     });
     e.ext_free::<Choices>().lists.fetch_add(1, Ordering::SeqCst);
@@ -222,7 +229,14 @@ pub(crate) fn note_list(e: &mut Engine, infos: Vec<u32>) {
 /// The player's click on the row of line `info`, voted on, for the test games.
 #[cfg(any(test, feature = "testkit"))]
 pub(crate) fn note_vote_click(e: &mut Engine, info: u32) {
-    state(e, |s| s.voted = Some(info));
+    note_vote_click_row(e, info, 0);
+}
+
+/// The player's click on the row of line `info` listed for topic `topic`, voted on, for the test
+/// games.
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn note_vote_click_row(e: &mut Engine, info: u32, topic: u32) {
+    state(e, |s| s.voted = Some((info, topic)));
 }
 
 /// Whether the `[Leave conversation]` row was clicked since the last call.
@@ -248,14 +262,17 @@ pub fn is_personal(e: &mut Engine, info: u32) -> bool {
     state(e, |s| s.personal_lines.contains(&info))
 }
 
-/// A row of a line voted on clicked since the last call: its info (taken once).
-pub fn take_voted(e: &mut Engine) -> Option<u32> {
+/// A row of a line voted on clicked since the last call: its info and its topic (0 for another
+/// player's row) (taken once).
+pub fn take_voted(e: &mut Engine) -> Option<(u32, u32)> {
     state(e, |s| s.voted.take())
 }
 
 /// What is shown after the rows of these infos (the votes so far), the others' rows as listed.
 /// Whether it changed (the open window's rows then show it).
-pub fn set_marks(e: &mut Engine, marks: Vec<(u32, String)>) -> bool {
+/// A mark is for the rows of its info and topic (a topic of 0, or a row without one: any row of
+/// the info).
+pub fn set_marks(e: &mut Engine, marks: Vec<(u32, u32, String)>) -> bool {
     if state(e, |s| s.marks == marks) {
         return false;
     }
@@ -270,9 +287,12 @@ pub fn set_marks(e: &mut Engine, marks: Vec<(u32, String)>) -> bool {
 /// The rows' texts with the marks after them.
 fn apply_marks(e: &mut Engine, menu: u32) {
     let (bases, marks) = state(e, |s| (s.bases.clone(), s.marks.clone()));
-    for (index, info, base) in bases {
-        let text = match marks.iter().find(|(i, _)| *i == info) {
-            Some((_, mark)) => format!("{base} {mark}"),
+    for (index, info, topic, base) in bases {
+        let text = match marks
+            .iter()
+            .find(|(i, t, _)| *i == info && (*t == 0 || topic == 0 || *t == topic))
+        {
+            Some((_, _, mark)) => format!("{base} {mark}"),
             None => base,
         };
         let Some(tile) = row_tile(e, menu, index) else {
@@ -358,8 +378,9 @@ fn row_tile(e: &mut Engine, menu: u32, index: u32) -> Option<u32> {
     None
 }
 
-/// The infos of the topic manager's list, by index (0 for a topic without an info).
-fn listed(e: &mut Engine, menu: u32) -> Vec<u32> {
+/// The infos of the topic manager's list and their rows' topics, by index (0 for a topic without
+/// an info, or a row without a topic).
+fn listed(e: &mut Engine, menu: u32) -> Vec<(u32, u32)> {
     let topics = e.mem.u32(menu + addr::DIALOG_MENU_TOPICS_OFFSET);
     let mut out = Vec::new();
     if topics == 0 || !e.is_registered(addr::TOPICS_NEXT_TOPIC) {
@@ -370,16 +391,22 @@ fn listed(e: &mut Engine, menu: u32) -> Vec<u32> {
         .bool();
     while more && out.len() < ROWS_MAX {
         let topic = e.call(addr::TOPICS_CURRENT_TOPIC, &args![topics]).u32();
-        let info = if topic == 0 {
-            0
+        let (info, row) = if topic == 0 {
+            (0, 0)
         } else {
-            e.mem.u32(topic + addr::MENU_TOPIC_INFO_OFFSET)
+            (
+                e.mem.u32(topic + addr::MENU_TOPIC_INFO_OFFSET),
+                e.mem.u32(topic + addr::MENU_TOPIC_ORIG_TOPIC_OFFSET),
+            )
         };
-        out.push(if info == 0 {
-            0
-        } else {
-            e.mem.u32(info + addr::FORM_ID_OFFSET)
-        });
+        let id = |e: &mut Engine, f: u32| {
+            if f == 0 {
+                0
+            } else {
+                e.mem.u32(f + addr::FORM_ID_OFFSET)
+            }
+        };
+        out.push((id(e, info), id(e, row)));
         more = e.call(addr::TOPICS_NEXT_TOPIC, &args![topics]).bool();
     }
     out
@@ -490,10 +517,11 @@ pub(crate) fn after_game(e: &mut Engine) {
 /// A list the game just built in `menu`: its own options noted, the other players' added.
 fn take_list(e: &mut Engine, menu: u32) {
     crate::watch::clear_injected(e);
-    let own = listed(e, menu);
+    let (own, own_rows): (Vec<u32>, Vec<u32>) = listed(e, menu).into_iter().unzip();
     let (foreign, leave): (Vec<(u32, String)>, bool) = state(e, |s| {
         s.menu = menu;
         s.own = own.clone();
+        s.own_rows = own_rows.clone();
         s.rows.clear();
         s.leave_row = None;
         let foreign = s
@@ -539,13 +567,13 @@ fn take_list(e: &mut Engine, menu: u32) {
     let mut bases = Vec::new();
     for (index, info) in own.iter().copied().enumerate() {
         if let Some(text) = row_tile(e, menu, index as u32).and_then(|t| row_text(e, t)) {
-            bases.push((index as u32, info, text));
+            bases.push((index as u32, info, own_rows[index], text));
         }
     }
     for (k, info) in rows.iter().copied().enumerate() {
         let index = (own.len() + k) as u32;
         if let Some(text) = row_tile(e, menu, index).and_then(|t| row_text(e, t)) {
-            bases.push((index, info, text));
+            bases.push((index, info, 0, text));
         }
     }
     state(e, |s| {
@@ -604,13 +632,16 @@ pub(crate) fn do_click(e: &mut Engine, a: &[u32]) -> Ret {
         if s.menu != menu || s.saying {
             return None;
         }
-        let info = if index < s.own.len() {
-            s.own.get(index).copied()
+        let (info, row) = if index < s.own.len() {
+            (
+                s.own.get(index).copied()?,
+                s.own_rows.get(index).copied().unwrap_or(0),
+            )
         } else {
-            s.rows.get(index - s.own.len()).copied()
-        }?;
+            (s.rows.get(index - s.own.len()).copied()?, 0)
+        };
         s.vote_lines.contains(&info).then(|| {
-            s.voted = Some(info);
+            s.voted = Some((info, row));
             info
         })
     });
@@ -918,6 +949,16 @@ mod tests {
         }
     }
 
+    /// Gives the listed rows topics (form ids, by row), as the game's rows have.
+    fn set_row_topics(e: &mut Engine, topics: &[u32]) {
+        for (k, id) in topics.iter().enumerate() {
+            let form = BASE + 0x7800 + 0x20 * k as u32;
+            e.mem.set_u32(form + addr::FORM_ID_OFFSET, *id);
+            let t = MENU_TOPICS + 0x40 * k as u32;
+            e.mem.set_u32(t + addr::MENU_TOPIC_ORIG_TOPIC_OFFSET, form);
+        }
+    }
+
     fn list(e: &mut Engine) {
         e.call(addr::DIALOG_MENU_LOAD_TOPICS_LIST, &args![MENU]);
     }
@@ -998,6 +1039,38 @@ mod tests {
         assert_eq!(e.mem.u32(CHOSEN), 0, "no row: no line chosen");
     }
 
+    /// PC run, 2026-11-23: "Let's go." and "I'm ready. You'd better be, too." are two topics of
+    /// one line; a vote for one showed on both. A vote is for the row clicked, and its mark shows
+    /// after that row only; a mark of no row (another player's row here) shows after every row
+    /// of the line.
+    #[test]
+    fn a_vote_is_for_the_row_clicked_when_two_topics_lead_to_one_line() {
+        let mut e = world(&[1, 1, 2]);
+        set_row_topics(&mut e, &[0x20_0001, 0x20_0002, 0x20_0003]);
+        set_vote_lines(&mut e, HashSet::from([IDS[1]]));
+        list(&mut e);
+        click(&mut e, 1);
+        assert_eq!(take_voted(&mut e), Some((IDS[1], 0x20_0002)));
+        click(&mut e, 0);
+        assert_eq!(take_voted(&mut e), Some((IDS[1], 0x20_0001)));
+        assert!(set_marks(
+            &mut e,
+            vec![(IDS[1], 0x20_0002, "(1/2 Votes)".into())]
+        ));
+        assert_eq!(
+            rows(&e),
+            [
+                (0, "Prompt 1".into()),
+                (1, "Prompt 1 (1/2 Votes)".into()),
+                (2, "Prompt 2".into()),
+            ]
+        );
+        assert!(set_marks(&mut e, vec![(IDS[1], 0, "(1/2 Votes)".into())]));
+        assert_eq!(rows(&e)[0].1, "Prompt 1 (1/2 Votes)");
+        assert_eq!(rows(&e)[1].1, "Prompt 1 (1/2 Votes)");
+        assert_eq!(rows(&e)[2].1, "Prompt 2");
+    }
+
     #[test]
     fn a_click_on_a_line_voted_on_is_a_vote_and_the_votes_show_after_its_text() {
         let mut e = world(&[0, 1]);
@@ -1007,11 +1080,11 @@ mod tests {
         // This game's own line voted on: not said, a vote.
         click(&mut e, 1);
         assert_eq!(e.mem.u32(SAID), 0);
-        assert_eq!(take_voted(&mut e), Some(IDS[1]));
+        assert_eq!(take_voted(&mut e), Some((IDS[1], 0)));
         assert_eq!(take_voted(&mut e), None, "taken once");
         // Another player's: a vote, not a pick of its option.
         click(&mut e, 2);
-        assert_eq!(take_voted(&mut e), Some(IDS[3]));
+        assert_eq!(take_voted(&mut e), Some((IDS[3], 0)));
         assert_eq!(take_clicked(&mut e), None);
         assert_eq!(counts(&mut e).2, 2);
         // A line not voted on: said as before.
@@ -1026,8 +1099,8 @@ mod tests {
         assert!(set_marks(
             &mut e,
             vec![
-                (IDS[1], "(1/2 Votes)".into()),
-                (IDS[3], "(1/2 Votes)".into())
+                (IDS[1], 0, "(1/2 Votes)".into()),
+                (IDS[3], 0, "(1/2 Votes)".into())
             ]
         ));
         assert_eq!(
@@ -1041,13 +1114,13 @@ mod tests {
         assert!(!set_marks(
             &mut e,
             vec![
-                (IDS[1], "(1/2 Votes)".into()),
-                (IDS[3], "(1/2 Votes)".into())
+                (IDS[1], 0, "(1/2 Votes)".into()),
+                (IDS[3], 0, "(1/2 Votes)".into())
             ]
         ));
         // Only the rows whose text changes are written.
         let written = e.mem.u32(SET_STRINGS);
-        assert!(set_marks(&mut e, vec![(IDS[1], "(2/2 Votes)".into())]));
+        assert!(set_marks(&mut e, vec![(IDS[1], 0, "(2/2 Votes)".into())]));
         assert_eq!(rows(&e)[1].1, "Prompt 1 (2/2 Votes)");
         assert_eq!(e.mem.u32(SET_STRINGS), written + 2, "rows 1 and 2");
         assert_eq!(rows(&e)[2].1, "Prompt 3 (Guest)");
@@ -1060,7 +1133,7 @@ mod tests {
         // A window this did not list (a new one, not yet listed): its rows are the game's own,
         // neither marked nor voted from.
         state(&mut e, |s| s.menu = 0);
-        assert!(set_marks(&mut e, vec![(IDS[1], "(1/2 Votes)".into())]));
+        assert!(set_marks(&mut e, vec![(IDS[1], 0, "(1/2 Votes)".into())]));
         assert_eq!(rows(&e)[1].1, "Prompt 1");
         click(&mut e, 1);
         assert_eq!(e.mem.u32(SAID), 2, "said");
@@ -1073,7 +1146,10 @@ mod tests {
         e.mem.set_cstr(PROMPTS + 0x40, b"Caf\xe9?");
         set_vote_lines(&mut e, HashSet::from([IDS[1]]));
         list(&mut e);
-        assert!(set_marks(&mut e, vec![(IDS[1], "(1/2 Votes, 9s)".into())]));
+        assert!(set_marks(
+            &mut e,
+            vec![(IDS[1], 0, "(1/2 Votes, 9s)".into())]
+        ));
         assert_eq!(rows(&e)[1].1, "Caf\u{e9}? (1/2 Votes, 9s)");
     }
 

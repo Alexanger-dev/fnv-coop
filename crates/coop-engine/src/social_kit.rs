@@ -578,6 +578,12 @@ impl Story {
         crate::choices::note_vote_click(&mut self.e, id);
     }
 
+    /// The player clicks the row of line `id` listed for topic `topic` (two topics can lead to
+    /// one line).
+    pub fn click_vote_row(&mut self, id: u32, topic: u32) {
+        crate::choices::note_vote_click_row(&mut self.e, id, topic);
+    }
+
     /// The player clicks `[Leave conversation]` (S42, D12).
     pub fn click_leave(&mut self) {
         crate::choices::note_leave_click(&mut self.e);

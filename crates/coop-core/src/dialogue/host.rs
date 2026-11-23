@@ -66,6 +66,8 @@ struct Session {
     left: BTreeSet<PlayerId>,
     /// The votes for the next step's line (S42 step 3b), in the order the players first voted.
     votes: Vec<(PlayerId, u32)>,
+    /// Each voter's row (`DialogueMsg::Vote::row`), for the marks after the rows.
+    vote_rows: Vec<(PlayerId, u32)>,
     /// When the open vote closes.
     vote_ends_ms: Option<u64>,
 }
@@ -312,7 +314,8 @@ impl DialogueHost {
                 session,
                 step,
                 choice,
-            } => self.vote(from, session, step, choice, now_ms, members),
+                row,
+            } => self.vote(from, session, step, (choice, row), now_ms, members),
             // D13: what a player is doing, told to everyone when it changes.
             DialogueMsg::Busy { busy } => {
                 if self.busy.get(&from).copied().unwrap_or_default() == busy {
@@ -376,6 +379,7 @@ impl DialogueHost {
                 joined: vec![from],
                 left: BTreeSet::new(),
                 votes: Vec::new(),
+                vote_rows: Vec::new(),
                 vote_ends_ms: None,
             },
         );
@@ -423,6 +427,7 @@ impl DialogueHost {
         s.menu.clear();
         s.asking = None;
         s.votes.clear();
+        s.vote_rows.clear();
         s.vote_ends_ms = None;
         s.last_pick_ms = now_ms;
         s.last_beat_ms = now_ms;
@@ -703,7 +708,7 @@ impl DialogueHost {
         from: PlayerId,
         session: u32,
         step: u32,
-        choice: u32,
+        (choice, row): (u32, u32),
         now_ms: u64,
         members: &[PlayerId],
     ) -> Vec<DOut> {
@@ -722,6 +727,10 @@ impl DialogueHost {
             Some(v) => v.1 = choice,
             None => s.votes.push((from, choice)),
         }
+        match s.vote_rows.iter_mut().find(|(p, _)| *p == from) {
+            Some(v) => v.1 = row,
+            None => s.vote_rows.push((from, row)),
+        }
         s.vote_ends_ms.get_or_insert(now_ms + VOTE_MS);
         let mut res = vec![self.votes_out(session, now_ms, members)];
         res.extend(self.decide(session, now_ms, members, false));
@@ -737,6 +746,7 @@ impl DialogueHost {
                 session,
                 step: s.step + 1,
                 votes: s.votes.clone(),
+                rows: s.vote_rows.clone(),
                 of: voters(s, members).len() as u8,
                 left_ms: s.vote_ends_ms.map_or(0, |end| end.saturating_sub(now_ms)),
             },
@@ -796,6 +806,7 @@ impl DialogueHost {
             .filter(|l| s.votes.iter().any(|(p, _)| p == l))
             .unwrap_or(first);
         s.votes.clear();
+        s.vote_rows.clear();
         s.vote_ends_ms = None;
         let owners = s
             .menu
@@ -854,6 +865,7 @@ impl DialogueHost {
         s.joined.retain(|j| *j != p);
         s.left.insert(p);
         s.votes.retain(|(v, _)| *v != p);
+        s.vote_rows.retain(|(v, _)| *v != p);
         self.talking.remove(&p);
         if s.joined.is_empty() {
             return self.close(session, reason);
@@ -2160,6 +2172,7 @@ mod tests {
                 session: s,
                 step: 1,
                 choice,
+                row: 0x100 + choice,
             },
             now,
             &ALL,
@@ -2193,6 +2206,7 @@ mod tests {
                 session: s,
                 step: 1,
                 votes: vec![(A, 3)],
+                rows: vec![(A, 0x103)],
                 of: 3,
                 left_ms: VOTE_MS,
             }
@@ -2358,7 +2372,8 @@ mod tests {
                 DialogueMsg::Vote {
                     session: s,
                     step: 1,
-                    choice: 3
+                    choice: 3,
+                    row: 0
                 },
                 0,
                 &[H, B]
@@ -2373,6 +2388,7 @@ mod tests {
                     session: s,
                     step,
                     choice: 3,
+                    row: 0,
                 },
             );
             assert!(o.is_empty(), "step {step}");
@@ -2396,6 +2412,7 @@ mod tests {
                 session: s,
                 step: 2,
                 choice: 4,
+                row: 0,
             },
         );
         assert!(o.is_empty(), "{o:?}");
@@ -2433,6 +2450,7 @@ mod tests {
                 session: s,
                 step: 1,
                 votes: vec![(A, 3)],
+                rows: vec![(A, 0x103)],
                 of: 2,
                 left_ms: VOTE_MS - 5_000,
             }
@@ -2524,6 +2542,7 @@ mod tests {
                 session: s,
                 step: 1,
                 votes: vec![(H, 4)],
+                rows: vec![(H, 0x104)],
                 of: 2,
                 left_ms: VOTE_MS,
             }

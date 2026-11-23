@@ -281,6 +281,9 @@ pub enum DialogueMsg {
         step: u32,
         /// The option voted for (an info of the merged list).
         choice: u32,
+        /// The row clicked: its topic's form id (two topics can lead to the same line; 0 for a
+        /// row of another player's option, which has none here). Shown on that row only.
+        row: u32,
     },
     /// Host: the votes so far for step `step`, in the order the players first voted, and how
     /// many players vote; the vote closes `left_ms` from now.
@@ -291,6 +294,8 @@ pub enum DialogueMsg {
         step: u32,
         /// Each voter's option.
         votes: Vec<(PlayerId, u32)>,
+        /// Each voter's row (its topic, as `Vote::row`).
+        rows: Vec<(PlayerId, u32)>,
         /// How many players vote (the players in the game, but those who left the
         /// conversation).
         of: u8,

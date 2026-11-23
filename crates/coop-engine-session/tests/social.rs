@@ -543,7 +543,7 @@ fn a_vote_is_shown_waited_for_twenty_seconds_and_chosen() {
     // (The seconds left rounded up: under 20 s gone by, still 20.)
     assert_eq!(
         coop_engine::choices::marks(&mut w.guests[0].game.e),
-        [(SHARED_LINE, "(1/3 Votes, 20s)".to_string())]
+        [(SHARED_LINE, 0, "(1/3 Votes, 20s)".to_string())]
     );
     let told = "Host voted for \"Where is Sunny?\". Talk to Sunny Smiles to vote (20s).";
     // The guest (the starter) votes for it too: 2 of 3, one row.
@@ -551,14 +551,14 @@ fn a_vote_is_shown_waited_for_twenty_seconds_and_chosen() {
     w.run(4);
     let marks = coop_engine::choices::marks(&mut w.host.e);
     assert_eq!(marks.len(), 1, "{marks:?}");
-    assert!(marks[0].1.starts_with("(2/3 Votes, "), "{marks:?}");
+    assert!(marks[0].2.starts_with("(2/3 Votes, "), "{marks:?}");
     // The host changes its mind: 1 of 3 each; guest 2 still waited for.
     w.host.click_vote(PLAIN_LINE);
     w.run(4);
     let marks = coop_engine::choices::marks(&mut w.host.e);
     assert_eq!(marks.len(), 2, "{marks:?}");
     assert!(
-        marks.iter().all(|(_, m)| m.starts_with("(1/3 Votes, ")),
+        marks.iter().all(|(_, _, m)| m.starts_with("(1/3 Votes, ")),
         "{marks:?}"
     );
     assert_eq!(w.hd.social.talker.votes_chosen, 0);
@@ -2242,4 +2242,38 @@ fn karma_and_perks_of_a_line_go_to_every_player() {
     assert_eq!(standing(&mut w.host), (50, 2, 1));
     assert_eq!(standing(&mut w.guests[0].game), (50, 2, 1));
     assert_eq!(standing(&mut w.guests[1].game), (50, 2, 0));
+}
+
+/// PC run, 2026-11-23: "Let's go." and "I'm ready. You'd better be, too." are two topics of one
+/// line; one player's vote showed on both rows. Each vote is for the row clicked: a row's mark
+/// counts the votes for it; votes for two rows of one line are one choice for the table.
+#[test]
+fn votes_show_on_the_row_clicked_when_two_topics_lead_to_one_line() {
+    const LETS_GO: u32 = 0x0001_d523;
+    const READY: u32 = 0x0015_ff49;
+    let mut w = World::new(&["Sunny"]);
+    for e in std::iter::once(&mut w.host.e).chain(w.guests.iter_mut().map(|g| &mut g.game.e)) {
+        coop_engine::choices::set_vote_lines(e, std::collections::HashSet::from([SHARED_LINE]));
+    }
+    w.run(20);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.guests[0].game.say(PLAIN_LINE, true);
+    w.run(10);
+    w.guests[0].game.list_options(&[SHARED_LINE, SHARED_LINE]);
+    w.run(4);
+    w.host.click_vote_row(SHARED_LINE, LETS_GO);
+    w.run(4);
+    let marks = coop_engine::choices::marks(&mut w.guests[0].game.e);
+    assert_eq!(marks.len(), 1, "{marks:?}");
+    assert_eq!(
+        (marks[0].0, marks[0].1),
+        (SHARED_LINE, LETS_GO),
+        "that row only"
+    );
+    assert!(marks[0].2.starts_with("(1/2 Votes, "));
+    // The guest votes for the other row of the same line: one choice, decided.
+    w.guests[0].game.click_vote_row(SHARED_LINE, READY);
+    w.run(4);
+    assert_eq!(w.hd.social.talker.votes_chosen, 1);
 }
