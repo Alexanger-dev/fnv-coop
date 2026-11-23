@@ -1667,6 +1667,8 @@ pub const SIMPLE_LIST_ADD: u32 = 0x0090_5820;
 pub const GAME_MS: u32 = 0x011f_63a8;
 /// `MenuTopic::pInfo` (+0x18).
 pub const MENU_TOPIC_INFO_OFFSET: u32 = 0x18;
+/// A `MenuTopic`'s byte `DialogMenu::DoClick` clears on the row clicked (`+0x25`).
+pub const MENU_TOPIC_SAID_OFFSET: u32 = 0x25;
 /// `DialogMenu`'s goodbye state (+0x2c): 2 or 3 has `Close` run the stored line's end result and
 /// add its topics.
 pub const DIALOG_MENU_GOODBYE_OFFSET: u32 = 0x2c;

@@ -117,6 +117,8 @@ pub struct Watch {
     results_skipped: AtomicU64,
     /// Windows the player closed.
     left: AtomicU64,
+    /// Other players' lines said from this window's own row of the same line.
+    said_from_rows: AtomicU64,
     /// Responses the window skipped as on a click, the talker's game a whole response past.
     responses_caught_up: AtomicU64,
     /// Times the window waited on a response for the talker's game.
@@ -142,6 +144,11 @@ pub fn set_response(e: &mut Engine, info: u32, n: u32) {
 /// The talker's game's response last set ([`set_response`]): the line and the response.
 pub fn talker_response(e: &mut Engine) -> Option<(u32, u32)> {
     state(e, |s| s.talker)
+}
+
+/// Other players' lines this game's window said from its own row of the same line.
+pub fn said_from_rows(e: &mut Engine) -> u64 {
+    e.ext_free::<Watch>().said_from_rows.load(Ordering::SeqCst)
 }
 
 /// `(responses skipped as on a click, waits on the talker's game)` since the game started.
@@ -815,6 +822,32 @@ pub(crate) fn do_idle(e: &mut Engine, a: &[u32]) -> Ret {
     r
 }
 
+/// The row of the open window's shown topic list whose line is `info` (a pointer), made the
+/// current topic as a click on it makes it (`0083e430`): its `MenuTopic`. `None`, the current
+/// topic left as `FirstTopic` made it, when the list has no such row.
+fn listed(e: &mut Engine, menu: u32, info: u32) -> Option<u32> {
+    if !e.is_registered(addr::TOPICS_NEXT_TOPIC) {
+        return None;
+    }
+    let topics = e.mem.u32(menu + addr::DIALOG_MENU_TOPICS_OFFSET);
+    if topics == 0
+        || !e
+            .call(addr::TOPICS_FIRST_TOPIC, &args![topics, 0u32])
+            .bool()
+    {
+        return None;
+    }
+    loop {
+        let t = e.call(addr::TOPICS_CURRENT_TOPIC, &args![topics]).u32();
+        if t != 0 && e.mem.u32(t + addr::MENU_TOPIC_INFO_OFFSET) == info {
+            return Some(t);
+        }
+        if !e.call(addr::TOPICS_NEXT_TOPIC, &args![topics]).bool() {
+            return None;
+        }
+    }
+}
+
 /// Puts line `info` (a form id) to the open window on `speaker`, as `LoadNextScreen` puts the
 /// next line of a chain; false when the data or the game's memory did not allow it.
 fn show(e: &mut Engine, menu: u32, speaker: u32, info: u32) -> bool {
@@ -825,6 +858,26 @@ fn show(e: &mut Engine, menu: u32, speaker: u32, info: u32) -> bool {
         s.driving = false;
         s.own_line = None;
     });
+    // A line this window lists itself (the other player clicked the same option): said from its
+    // row, as `DoClick` says it, so the game's topic lists go on after it as the talker's game's
+    // do (the owner, 2026-11-23: after "Never mind" the watching game kept the sub-list's rows
+    // and lost some of the main list's; a line put in a list of its own, the game took its way
+    // back to the main list from that list). Its result is not run (the talker's game runs it).
+    if let Some(topic) = listed(e, menu, f) {
+        e.mem.set_u8(topic + addr::MENU_TOPIC_SAID_OFFSET, 0);
+        e.mem
+            .set_u8(menu + addr::DIALOG_MENU_RESPONSE_SHOWN_OFFSET, 0);
+        e.mem.set_u32(addr::DIALOG_LAST_INFO, f);
+        let next = e
+            .call(addr::DIALOG_MENU_LOAD_NEXT_SCREEN, &args![menu, 0u32])
+            .u32();
+        e.mem.set_u32(menu + addr::DIALOG_MENU_STATE_OFFSET, next);
+        e.ext_free::<Watch>()
+            .said_from_rows
+            .fetch_add(1, Ordering::SeqCst);
+        log(|| format!("line {info:08x} said from this window's own row"));
+        return true;
+    }
     let topic = e.call(addr::TOPIC_GET_OWNER_TOPIC, &args![f]).u32();
     if topic == 0 {
         return false;
@@ -892,6 +945,7 @@ mod tests {
     const SAID_COUNT: u32 = BASE + 0x4f10;
     const SAID: u32 = BASE + 0x4e00;
     const STOPS: u32 = BASE + 0x4f14;
+    const LISTS_SET: u32 = BASE + 0x4f18;
     const RESPONSES: u32 = 2;
 
     fn eax(v: u32) -> Ret {
@@ -1013,13 +1067,20 @@ mod tests {
         });
         e.register(addr::TOPICS_SET_LIST, |e, a| {
             e.mem.set_u32(a[0] + 4, a[1]);
+            e.mem.set_u32(LISTS_SET, e.mem.u32(LISTS_SET) + 1);
             Ret::default()
+        });
+        // These lists hold one topic: none after it.
+        e.register(addr::TOPICS_NEXT_TOPIC, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            eax(0)
         });
         // The game's FirstTopic: the shown list's first topic, its second with the flag (these
         // lists hold one).
         e.register(addr::TOPICS_FIRST_TOPIC, |e, a| {
-            let first = if a[1] == 0 {
-                e.mem.u32(e.mem.u32(a[0] + 4))
+            let list = e.mem.u32(a[0] + 4);
+            let first = if a[1] == 0 && list != 0 {
+                e.mem.u32(list)
             } else {
                 0
             };
@@ -1131,7 +1192,8 @@ mod tests {
             if a[1] == 1 {
                 return eax(e.mem.u32(NEXT_LISTS + 8) * e.mem.u32(NEXT_LISTS));
             }
-            let first = e.mem.u32(e.mem.u32(a[0] + 4));
+            let list = e.mem.u32(a[0] + 4);
+            let first = if list == 0 { 0 } else { e.mem.u32(list) };
             e.mem.set_u32(a[0], first);
             eax(u32::from(first != 0))
         });
@@ -1580,6 +1642,47 @@ mod tests {
             before + 1,
             "no word for this line: it goes on by itself"
         );
+    }
+
+    /// The owner, 2026-11-23: after "Never mind" the watching game kept the sub-list's rows. A
+    /// line the window lists itself is said from its row, as a click says it: no list of its own.
+    #[test]
+    fn a_line_the_window_lists_is_said_from_its_row() {
+        let mut e = world();
+        e.mem.set_u32(GREETING, INFOS[2]);
+        watch_line(&mut e, NPC, IDS[0]);
+        idle(&mut e, 1);
+        line_done(&mut e);
+        idle(&mut e, 2);
+        assert_eq!(said_from_rows(&mut e), 0);
+        // The window's shown list holds a row of line 1 (its own options).
+        let row = BASE + 0x4f40;
+        let list = BASE + 0x4f80;
+        e.mem.set_u32(row + addr::MENU_TOPIC_INFO_OFFSET, INFOS[1]);
+        e.mem.set_u32(row + 0x20, RESPONSES);
+        e.mem.set_u32(list, row);
+        let topics = e.mem.u32(MENU + addr::DIALOG_MENU_TOPICS_OFFSET);
+        e.mem.set_u32(topics + 4, list);
+        e.mem.set_u8(row + addr::MENU_TOPIC_SAID_OFFSET, 1);
+        let sets = e.mem.u32(LISTS_SET);
+        // The other player said line 1: said from that row, no list of its own.
+        watch_line(&mut e, NPC, IDS[1]);
+        line_done(&mut e);
+        idle(&mut e, 1);
+        assert_eq!(said_from_rows(&mut e), 1);
+        assert_eq!(e.mem.u32(LISTS_SET), sets, "no list of its own");
+        assert_eq!(e.mem.u32(topics), row, "the row made current");
+        assert_eq!(e.mem.u8(row + addr::MENU_TOPIC_SAID_OFFSET), 0);
+        assert_eq!(said(&e).last(), Some(&INFOS[1]));
+        // A line not listed: put in a list of its own, as before.
+        watch_line(&mut e, NPC, IDS[0]);
+        for _ in 0..40 {
+            line_done(&mut e);
+            idle(&mut e, 1);
+        }
+        assert_eq!(said(&e).last(), Some(&INFOS[0]));
+        assert_eq!(said_from_rows(&mut e), 1);
+        assert_eq!(e.mem.u32(LISTS_SET), sets + 1);
     }
 
     /// A talker's game that never says it began the next response (its line said outside a

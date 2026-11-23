@@ -1861,6 +1861,17 @@ every other game shows it, holds, and lists its own options when the step is ove
   `DialogueMsg::Pick`/`Picked` `chosen`); a greeting, a line chained to the last or one a script
   has the NPC say is not, and the others are shown only its responses. Unit and session tests,
   mutation checks (all killed; a redundant check removed).
+- A watching window says another player's line from its own row of that line when it lists it
+  (the owner, 2026-11-23: after "Never mind" with Trudy the watching game kept the sub-list's
+  rows and lost some of the main list's, and its leftover "Never mind" bounced the two games
+  back and forth; council 3-0, A). The row is made current as a click makes it, `+0x25`
+  cleared, `bResponseShown` cleared and `LoadNextScreen` run, its result not run here; the game
+  then goes back to the main list from the same lists as the talker's game. A line the window
+  does not list is put in a list of its own as before. Unit test, mutation check (killed), two
+  headless games (`/tmp/s_back.sh`, Sunny's "Let's talk about the areas around Goodsprings." and
+  "That's all I wanted to know.", picked by each player in turn: both games listed the same
+  options after each line; before, the watching game kept "That's all..." and lost "Doc
+  Mitchell said you could teach me...").
 - Not yet: rewards (step 4). Lines of no shared quest are not sent between players yet (S16), so
   they are not shown to a watcher.
 
