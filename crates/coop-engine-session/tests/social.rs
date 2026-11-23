@@ -22,6 +22,10 @@ const MQ: u32 = 0x0010_4c0c;
 const OWN: u32 = 0x0010_4c1c;
 /// Another quest of the shared story, with a variable.
 const SIDE: u32 = 0x0010_4c2c;
+/// A Dialogue package: the actor comes to the player to talk (as Ringo's thanks).
+const THANKS: u32 = 0x0010_a300;
+/// A package of no talk (she stands around).
+const AROUND: u32 = 0x0010_a301;
 /// The game clock's hour.
 const HOUR: u32 = 0x38;
 const SUNNY: u32 = 0x0010_4e85;
@@ -64,6 +68,7 @@ fn story() -> Story {
         vars: vec![(OWN, vec![1]), (SIDE, vec![1])],
         cells: vec![SALOON, STORE],
         actors: vec![SUNNY, CHET],
+        packages: vec![THANKS, AROUND],
         ..StorySpec::default()
     });
     s.add_info(
@@ -2414,4 +2419,63 @@ fn a_guest_says_the_line_the_hosts_game_picked_for_a_topic() {
     w.run(10);
     assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 2);
     assert_eq!(w.guests[0].game.said_line(SUNNY), SHARED_LINE);
+}
+
+/// PC run, 2026-11-23: Ringo thanked the host (the guest too far), then ran to the guest and
+/// thanked her again. A greeting given in one game is given in no other: refused there, and that
+/// player told who had it (council 3-0, A).
+#[test]
+fn a_greeting_the_host_had_is_not_given_again_to_a_guest() {
+    let mut w = World::new(&["Sunny"]);
+    w.guests[0].game.set_name(SUNNY, "Sunny Smiles");
+    for g in std::iter::once(&mut w.host).chain(w.guests.iter_mut().map(|g| &mut g.game)) {
+        g.set_package_type(THANKS, coop_engine::addr::PACKAGE_TYPE_DIALOGUE);
+        g.set_own_package(SUNNY, THANKS);
+    }
+    w.run(20);
+    // She comes to the host and talks: the greeting is given.
+    assert!(w.host.talk_to(SUNNY));
+    w.host.leave();
+    w.run(10);
+    // She comes to the guest on the same package: refused, told who had it.
+    assert!(!w.guests[0].game.talk_to(SUNNY));
+    w.run(4);
+    assert_eq!(w.guests[0].driver.social.talker.greets_refused, 1);
+    assert!(
+        w.guests[0]
+            .game
+            .messages()
+            .contains(&"Sunny Smiles already spoke with Host.".to_string()),
+        "{:?}",
+        w.guests[0].game.messages()
+    );
+    // The guest walking up to her on another package is had as ever.
+    w.guests[0].game.set_own_package(SUNNY, AROUND);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.leave();
+    // The host's own game gives its own greeting again as a game alone would.
+    assert!(w.host.talk_to(SUNNY));
+}
+
+/// The other way round: a guest's game gave the greeting; it is claimed, and the host's game
+/// does not give it.
+#[test]
+fn a_greeting_a_guest_had_is_not_given_again_to_the_host() {
+    let mut w = World::new(&["Sunny"]);
+    for g in std::iter::once(&mut w.host).chain(w.guests.iter_mut().map(|g| &mut g.game)) {
+        g.set_package_type(THANKS, coop_engine::addr::PACKAGE_TYPE_DIALOGUE);
+        g.set_own_package(SUNNY, THANKS);
+    }
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.leave();
+    w.run(20);
+    w.host.move_player(SALOON, [0.0; 3], 0.0);
+    w.run(4);
+    assert!(!w.host.talk_to(SUNNY));
+    w.run(4);
+    assert_eq!(w.hd.social.talker.greets_refused, 1);
+    // The guest's own game gives its own greeting again as a game alone would.
+    assert!(w.guests[0].game.talk_to(SUNNY));
 }

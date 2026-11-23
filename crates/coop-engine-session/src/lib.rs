@@ -112,6 +112,46 @@ pub const SAY_FAR: f32 = 1500.0;
 /// How near a guest's player a speaker must be for that guest's game to say the line.
 pub const SAY_NEAR: f32 = 2500.0;
 
+/// The tag of a greeting given (an actor came to a player to talk, a force greet), on the actor's
+/// form: the Dialogue package it greeted with, then the player it greeted. Every other game refuses
+/// the same greeting from then on (PC run, 2026-11-23: Ringo thanked the host, then ran to the guest
+/// and thanked her again; council 3-0, A). A guest's game claims one it gave.
+pub const GREETED_TAG: u16 = 0x4752;
+
+pub(crate) fn greeted_field(package: u32, player: PlayerId) -> Field {
+    let mut data = package.to_le_bytes().to_vec();
+    data.push(player.0);
+    Field::Custom {
+        tag: GREETED_TAG,
+        data,
+    }
+}
+
+/// Tells this player that actor `npc`'s greeting was given already, and to whom (the story's
+/// record of it).
+fn tell_greet_given(e: &mut Engine, store: &StateStore, npc: u32) {
+    let who = store
+        .get(FormId(npc), &greeted_field(0, PlayerId::HOST))
+        .and_then(|en| greeted_of(&en.field))
+        .map(|(_, p)| p);
+    let name = coop_engine::talk::name_of(e, npc).unwrap_or_else(|| "They".into());
+    let text = match who {
+        Some(p) => format!("{name} already spoke with {}.", talk::player_name(p)),
+        None => format!("{name} already spoke with the party."),
+    };
+    coop_engine::talk::show(e, &text);
+}
+
+fn greeted_of(field: &Field) -> Option<(u32, PlayerId)> {
+    match field {
+        Field::Custom { tag, data } if *tag == GREETED_TAG && data.len() == 5 => Some((
+            u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+            PlayerId(data[4]),
+        )),
+        _ => None,
+    }
+}
+
 fn say_of(field: &Field) -> Option<(u8, u32, bool, u32)> {
     match field {
         Field::Custom { tag, data } if *tag == SAY_TAG && data.len() == 10 => Some((
@@ -456,6 +496,7 @@ impl HostDriver {
         sync.claim_tags.insert(PROPOSE_TAG);
         sync.claim_tags.insert(SCENE_TAG);
         sync.claim_tags.insert(SAY_TAG);
+        sync.claim_tags.insert(GREETED_TAG);
         HostDriver {
             sync,
             quests: quest_ids.into_iter().collect(),
@@ -519,6 +560,12 @@ impl HostDriver {
     fn enact_claims(&mut self, e: &mut Engine) {
         for (from, form, field) in std::mem::take(&mut self.sync.claims) {
             let id = form.0;
+            // A greeting a guest's game gave: not given in the others.
+            if let Some((package, _)) = greeted_of(&field) {
+                coop_engine::talk::set_greeted(e, id, package);
+                self.sync.write(form, greeted_field(package, from));
+                continue;
+            }
             if let Some(p) = Proposal::read(&field) {
                 self.enact_proposal(e, from, id, p);
                 continue;
@@ -2037,6 +2084,13 @@ impl GuestDriver {
                 }
                 continue;
             }
+            // A greeting another player had: not given here. This game's own is its own.
+            if let Some((package, p)) = greeted_of(&field) {
+                if p != self.sync.live.rules.me() {
+                    coop_engine::talk::set_greeted(e, form, package);
+                }
+                continue;
+            }
             if self.own_trigger_keeps(form, &field) {
                 continue;
             }
@@ -2097,6 +2151,8 @@ fn apply_field(e: &mut Engine, form: u32, field: &Field) -> bool {
         },
         // A host's scene: played by the driver when it comes, never from here.
         Field::Custom { tag, .. } if *tag == SCENE_TAG || *tag == SAY_TAG => true,
+        // A greeting given: taken by the driver, which knows whose it was, never from here.
+        Field::Custom { tag, .. } if *tag == GREETED_TAG => true,
         // A host command: the actor evaluates its package again, as the host's script told its
         // own copy. One that is not in this game now picks its package when it loads anyway.
         Field::Custom { tag, .. } if *tag == EVALUATE_TAG => {

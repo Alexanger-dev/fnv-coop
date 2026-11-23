@@ -101,6 +101,14 @@ pub struct Talker {
     /// The actors whose copies came to greet this player since the last read: asked of the host,
     /// which has this player's game run them (it talks to whichever player comes to it).
     pub greet_asks: Vec<u32>,
+    /// Greetings this game's actors gave its player (actor, Dialogue package): told to every
+    /// game (taken by the caller).
+    pub greeted: Vec<(u32, u32)>,
+    /// Actors whose greeting was refused here, already given (taken by the caller: the player
+    /// told who had it).
+    pub greet_given: Vec<u32>,
+    /// Greetings refused here, already given.
+    pub greets_refused: u32,
     /// Lines of this player's conversations sent as picks.
     pub picks: u32,
     /// Other players' lines marked as said in this game.
@@ -222,7 +230,7 @@ struct Far {
     held: bool,
 }
 
-fn player_name(p: PlayerId) -> String {
+pub(crate) fn player_name(p: PlayerId) -> String {
     p.label()
 }
 
@@ -461,6 +469,13 @@ impl Talker {
                     self.not_greeted += 1;
                     if !self.greet_asks.contains(&npc) {
                         self.greet_asks.push(npc);
+                    }
+                }
+                Event::Greeted { npc, package } => self.greeted.push((npc, package)),
+                Event::GreetGiven { npc } => {
+                    self.greets_refused += 1;
+                    if !self.greet_given.contains(&npc) {
+                        self.greet_given.push(npc);
                     }
                 }
                 // Talking to the NPC of another player's conversation joins it (S42, D12); the

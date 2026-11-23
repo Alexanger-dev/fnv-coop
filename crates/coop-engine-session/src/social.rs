@@ -124,6 +124,16 @@ pub(crate) fn host_step(h: &mut HostDriver, e: &mut Engine, net: &mut dyn Transp
     for m in msgs {
         local(h, net, Msg::Dialogue(m));
     }
+    // A greeting given here: every game's (council 3-0, A).
+    for (npc, package) in std::mem::take(&mut h.social.talker.greeted) {
+        h.sync.write(
+            coop_core::ids::FormId(npc),
+            crate::greeted_field(package, PlayerId::HOST),
+        );
+    }
+    for npc in std::mem::take(&mut h.social.talker.greet_given) {
+        crate::tell_greet_given(e, &h.sync.store, npc);
+    }
     // An actor another game runs came to greet a player: that player's game runs it now, unless
     // it is talking with someone (the owner, 2026-11-16: Sunny waited for the player whose game
     // ran her while the other stood in front of her).
@@ -281,6 +291,16 @@ pub(crate) fn guest_step(
             "the host's run of this player's line took {taken} of {:08x} (asked {})",
             p.item, p.count
         ));
+    }
+    // A greeting given here: claimed, every game's (council 3-0, A).
+    for (npc, package) in std::mem::take(&mut g.social.talker.greeted) {
+        g.proposals_out.push((
+            coop_core::ids::FormId(npc),
+            crate::greeted_field(package, g.sync.live.rules.me()),
+        ));
+    }
+    for npc in std::mem::take(&mut g.social.talker.greet_given) {
+        crate::tell_greet_given(e, &g.sync.store, npc);
     }
     for npc in std::mem::take(&mut g.social.talker.greet_asks) {
         let m = Msg::Actor(coop_core::actors::ActorMsg::Greet {

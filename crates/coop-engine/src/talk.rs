@@ -24,7 +24,7 @@
 //!
 //! With sharing off, both wraps pass every call on untouched.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError, RwLock};
 
@@ -88,6 +88,21 @@ pub enum Event {
         /// The actor's reference id.
         npc: u32,
     },
+    /// An actor came to this game's player to talk (a force greet) and the conversation began:
+    /// it greeted with this package. Told to the other games ([`set_greeted`]).
+    Greeted {
+        /// The actor's reference id.
+        npc: u32,
+        /// The Dialogue package it runs.
+        package: u32,
+    },
+    /// An actor came to this game's player to talk with a package it had already greeted a
+    /// player with ([`set_greeted`]): refused, the greeting was given (PC run, 2026-11-23:
+    /// Ringo, who had thanked the host, ran to the guest and thanked her again).
+    GreetGiven {
+        /// The actor's reference id.
+        npc: u32,
+    },
 }
 
 /// The game-wide state (a lock-free shared slot, as the journal's).
@@ -112,6 +127,40 @@ pub struct Talk {
     /// The quests of the lines whose results are running now, innermost last (a line's result
     /// script names no owner quest: its info's quest is the one).
     results: Mutex<Vec<u32>>,
+    /// The greetings another player's game gave (an actor's reference id to the Dialogue package
+    /// it greeted with: [`set_greeted`]).
+    greeted: RwLock<BTreeMap<u32, u32>>,
+}
+
+/// Actor `npc` greeted another player with Dialogue package `package` in that player's game:
+/// its coming to greet this game's player with the same package is refused (council 3-0, A).
+/// This game's own greetings are its own game's to repeat or not, as in a game alone.
+pub fn set_greeted(e: &mut Engine, npc: u32, package: u32) {
+    e.ext_free::<Talk>()
+        .greeted
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(npc, package);
+}
+
+/// The Dialogue package `speaker` (a pointer) runs: it came to the player to talk (a force
+/// greet), rather than the player walking up to it. 0 when it runs none.
+fn greeting_package(e: &mut Engine, speaker: u32) -> u32 {
+    if !e.is_registered(addr::ACTOR_GET_CURRENT_EDITOR_PACKAGE)
+        || !e.is_registered(addr::PACKAGE_TYPE)
+    {
+        return 0;
+    }
+    let package = e
+        .call(addr::ACTOR_GET_CURRENT_EDITOR_PACKAGE, &args![speaker])
+        .u32();
+    if package != 0
+        && e.call(addr::PACKAGE_TYPE, &args![package]).u32() & 0xff == addr::PACKAGE_TYPE_DIALOGUE
+    {
+        e.mem.u32(package.wrapping_add(addr::FORM_ID_OFFSET))
+    } else {
+        0
+    }
 }
 
 impl Talk {
@@ -779,6 +828,20 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
             e.ext_free::<Talk>().push(Event::NotGreeted { npc });
             return Ret::default();
         }
+        // A greeting another player's game gave: not again here.
+        let package = greeting_package(e, speaker);
+        if package != 0
+            && e.ext_free::<Talk>()
+                .greeted
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&npc)
+                == Some(&package)
+        {
+            unqueue(e, speaker);
+            e.ext_free::<Talk>().push(Event::GreetGiven { npc });
+            return Ret::default();
+        }
         let t = e.ext_free::<Talk>();
         if t.busy
             .read()
@@ -798,8 +861,18 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
             return Ret::default();
         }
     }
+    let package = if speaker != 0 && e.ext_free::<Talk>().sharing.load(Ordering::SeqCst) {
+        greeting_package(e, speaker)
+    } else {
+        0
+    };
     let r = e.call_next(addr::DIALOG_MENU_CREATE, a);
     crate::choices::after_game(e);
+    // The greeting began: told to the other games.
+    if package != 0 && r.eax != 0 {
+        let npc = e.mem.u32(speaker.wrapping_add(addr::FORM_ID_OFFSET));
+        e.ext_free::<Talk>().push(Event::Greeted { npc, package });
+    }
     r
 }
 
@@ -1196,17 +1269,60 @@ mod tests {
         s.set_own_package(NPC, WANDER);
         assert!(s.talk_to(NPC));
         assert!(close_menu(&mut s.e));
-        // This game's own actor greets as ever.
+        // This game's own actor greets as ever (and the greeting is told to every game).
         s.set_own_package(NPC, GREET);
         crate::puppet::set_copies(&mut s.e, []);
         assert!(s.talk_to(NPC));
         assert!(close_menu(&mut s.e));
+        assert_eq!(
+            take_events(&mut s.e),
+            [Event::Greeted {
+                npc: NPC,
+                package: GREET
+            }]
+        );
         // Without sharing the game has it as ever.
         crate::puppet::set_copies(&mut s.e, [(NPC, 0)]);
         set_sharing(&mut s.e, false);
         assert!(s.talk_to(NPC));
         assert!(close_menu(&mut s.e));
         assert!(take_events(&mut s.e).is_empty());
+    }
+
+    /// PC run, 2026-11-23: Ringo thanked the host, then ran to the guest and thanked her again.
+    /// A greeting another player's game gave ([`set_greeted`]) is not given again with the same
+    /// package; with another package, or the player walking up, the conversation is had.
+    #[test]
+    fn a_greeting_given_is_not_given_again() {
+        let mut s = story();
+        set_sharing(&mut s.e, true);
+        s.set_package_type(GREET, addr::PACKAGE_TYPE_DIALOGUE);
+        s.place(NPC, CELL);
+        s.set_own_package(NPC, GREET);
+        set_greeted(&mut s.e, NPC, GREET);
+        assert!(!s.talk_to(NPC));
+        assert_eq!(menu_npc(&mut s.e), None);
+        assert_eq!(take_events(&mut s.e), [Event::GreetGiven { npc: NPC }]);
+        // The player walks up to it on another package: had.
+        s.set_own_package(NPC, WANDER);
+        assert!(s.talk_to(NPC));
+        assert!(close_menu(&mut s.e));
+        assert!(take_events(&mut s.e).is_empty());
+        // A greeting on another Dialogue package: had, and told.
+        set_greeted(&mut s.e, NPC, WANDER);
+        s.set_own_package(NPC, GREET);
+        assert!(s.talk_to(NPC));
+        assert!(close_menu(&mut s.e));
+        assert_eq!(
+            take_events(&mut s.e),
+            [Event::Greeted {
+                npc: NPC,
+                package: GREET
+            }]
+        );
+        // This game's own greeting is its own game's to give again.
+        assert!(s.talk_to(NPC));
+        assert!(close_menu(&mut s.e));
     }
 
     /// The owner, 2026-11-16: a refused conversation stayed in the game's queue of menus and
