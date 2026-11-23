@@ -85,6 +85,9 @@ pub const PACKAGE_ASK_MS: u64 = 3000;
 pub const PACKAGE_ASKS_AT_MOST: u32 = 5;
 /// A copy is brought from another space this many times at most.
 pub const BRING_AT_MOST: u32 = 3;
+/// A copy in this player's space whose host's actor has gone to a space this game has not loaded
+/// is given this long to walk out after it (as the host's did, PC run 13) before it is hidden.
+pub const HIDE_AFTER_MS: u64 = 3000;
 
 /// How much of the fights a run shares (`NV_COOP_FIGHT`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -366,6 +369,20 @@ pub struct Fight {
     elsewhere: BTreeSet<u32>,
     /// Guest: actors whose host's copy has left this player's space while this game's has not.
     left_behind: BTreeSet<u32>,
+    /// Guest: since when each followed actor's host's copy has been in a space this player is
+    /// not in.
+    away_since: BTreeMap<u32, u64>,
+    /// Guest: the copies hidden (disabled) here while their host's actor is in a space this game
+    /// has not loaded ([`Fight::hides`]).
+    hidden: BTreeSet<u32>,
+    /// Guest: the game's count of loads when last seen (`None`: not yet).
+    loads_seen: Option<u64>,
+    /// Guest: the host's actors whose copy was looked at since that load ([`Fight::after_load`]).
+    looked_at: BTreeSet<u32>,
+    /// Guest: copies hidden, and shown again.
+    pub hidings: u32,
+    /// See [`Fight::hidings`].
+    pub showings: u32,
     /// Hand-off: the nearest player's game runs an actor (`NV_COOP_HANDOFF=off`: the host's
     /// runs every one).
     pub handoff: bool,
@@ -520,6 +537,12 @@ impl Fight {
             takeover_brings: 0,
             elsewhere: BTreeSet::new(),
             left_behind: BTreeSet::new(),
+            away_since: BTreeMap::new(),
+            hidden: BTreeSet::new(),
+            loads_seen: None,
+            looked_at: BTreeSet::new(),
+            hidings: 0,
+            showings: 0,
             handoff: true,
             theirs: BTreeSet::new(),
             guest_run_moves: 0,
@@ -1795,8 +1818,13 @@ impl Fight {
         // The host's packages are this game's copies' too, once this player's opening is done.
         coop_engine::commands::set_packages_on(e, self.follow && self.packages_on && !waiting);
         let me = live::local(e).filter(|l| l.loaded && !waiting);
+        if me.is_some() {
+            self.after_load(e, sync);
+        }
         let mut holding = BTreeSet::new();
         let mut near_me = BTreeSet::new();
+        // The copies to hide this frame (their host's actor is where this game has not loaded).
+        let mut hide = BTreeSet::new();
         self.puppets_begin();
         self.following_begin(now_ms);
         let fed: Vec<(u32, Option<PlayerId>, ActorState)> = sync
@@ -1819,10 +1847,30 @@ impl Fight {
                     continue;
                 }
                 if s.cell.0 != me.cell {
+                    let here = actors::actor(e, id).map(|copy| fight::space_of(e, copy));
+                    // The host's actor is in a space this game has not loaded: its copy is hidden
+                    // until it is (PC run, 2026-11-23: the host's game walked Sunny, Cheyenne and
+                    // Ringo out of the gas station to fight; the guest, inside, still saw them
+                    // there; council 3-0, A). One in this player's space is given a little time to
+                    // walk out first; one in a conversation here is left to it.
+                    let since = *self.away_since.entry(id).or_insert(now_ms);
+                    let talking =
+                        coop_engine::talk::menu_npc(e) == Some(id) || fight::in_dialogue(e, id);
+                    if self.follow
+                        && a.alive
+                        && s.flags & FLAG_DEAD == 0
+                        && here.is_some()
+                        && !talking
+                        && (here != Some(me.cell)
+                            || now_ms.saturating_sub(since) >= HIDE_AFTER_MS
+                            || self.hidden.contains(&id))
+                    {
+                        hide.insert(id);
+                        continue;
+                    }
                     // The host's has left this player's space and this copy has not yet: it is
                     // asked to take the host's package, which walks it out as it did the host's
                     // (PC run 13: Joe Cobb's copy stood still when the host's left the saloon).
-                    let here = actors::actor(e, id).map(|copy| fight::space_of(e, copy));
                     if self.follow && here == Some(me.cell) {
                         self.ask_package(e, id, now_ms);
                         if self.left_behind.insert(id) {
@@ -1835,6 +1883,7 @@ impl Fight {
                     continue;
                 }
                 self.left_behind.remove(&id);
+                self.away_since.remove(&id);
                 near_me.insert(id);
                 // This game's copy is in another space than the host's actor (the host's walked
                 // out of a door, this one has not): moving it would change its place and not its
@@ -1852,6 +1901,16 @@ impl Fight {
                         .map_or(true, |t| now_ms.saturating_sub(*t) >= BRING_EVERY_MS);
                     let times = self.brought_times.get(&id).copied().unwrap_or(0);
                     let to = s.pos.map(dequant_pos);
+                    // Where this game has not loaded the host's place, the copy (in another space)
+                    // is hidden until it has; then shown, and brought there.
+                    let loaded = live::place_loaded(e, to);
+                    if self.follow && !loaded && a.alive && s.flags & FLAG_DEAD == 0 {
+                        hide.insert(id);
+                        continue;
+                    }
+                    if loaded {
+                        self.show(e, sync, id);
+                    }
                     // Only to a place this game has loaded (PC run 36): one it has not would be
                     // parked again at once, and would not count as a try.
                     if self.follow
@@ -1861,7 +1920,7 @@ impl Fight {
                         && a.alive
                         && s.flags & FLAG_DEAD == 0
                         && actors::dead(e, id) == Some(false)
-                        && live::place_loaded(e, to)
+                        && loaded
                     {
                         self.brought.insert(id, now_ms);
                         self.brought_times.insert(id, times + 1);
@@ -1987,6 +2046,9 @@ impl Fight {
         }
         self.puppets_end(e);
         self.following_end(e);
+        if me.is_some() {
+            self.hide_only(e, sync, &hide);
+        }
         // Only the actors the host runs near this player keep a "far since" time: one that is
         // seen again later starts afresh.
         self.far_since.retain(|id, _| near_me.contains(id));
@@ -2063,7 +2125,8 @@ impl Fight {
         // place is told of it then, only its package): asked to take that package too.
         if let Some(me) = me.filter(|_| self.follow) {
             for id in &followed {
-                if near_me.contains(id) || self.left_behind.contains(id) {
+                if near_me.contains(id) || self.left_behind.contains(id) || self.hidden.contains(id)
+                {
                     continue;
                 }
                 let here = actors::actor(e, *id).map(|copy| fight::space_of(e, copy));
@@ -2169,6 +2232,88 @@ impl Fight {
         }
         self.stamp(e, &mut sync.live.local);
         out
+    }
+
+    /// Whether this game's copy of actor `id` is hidden here while its host's actor is in a space
+    /// this game has not loaded: the story's word on whether it is disabled is not put back on it
+    /// meanwhile.
+    pub fn hides(&self, id: u32) -> bool {
+        self.hidden.contains(&id)
+    }
+
+    /// Hides the copies in `hide` and shows again every other one hidden.
+    fn hide_only(&mut self, e: &mut Engine, sync: &GuestSync, hide: &BTreeSet<u32>) {
+        for &id in hide {
+            // (Again when something else showed it: the story's word, a script.)
+            if actors::disabled(e, id) == Some(false) && actors::set_disabled(e, id, true) {
+                if self.hidden.insert(id) {
+                    self.hidings += 1;
+                    self.say(format!(
+                        "co-op fights: actor {id:08x} is where this game has not loaded on the host: hidden here until it has"
+                    ));
+                }
+            }
+        }
+        let shown: Vec<u32> = self.hidden.difference(hide).copied().collect();
+        for id in shown {
+            self.show(e, sync, id);
+        }
+    }
+
+    /// Shows again copy `id` if it was hidden here (not one the host's story has disabled). One
+    /// not in this game now stays marked, and is shown once it is.
+    fn show(&mut self, e: &mut Engine, sync: &GuestSync, id: u32) {
+        if !self.hidden.contains(&id) {
+            return;
+        }
+        if story_disabled(sync, id) == Some(true) {
+            self.hidden.remove(&id);
+            return;
+        }
+        match actors::disabled(e, id) {
+            Some(true) if actors::set_disabled(e, id, false) => {}
+            Some(_) => {}
+            None => return,
+        }
+        self.hidden.remove(&id);
+        self.showings += 1;
+        self.say(format!(
+            "co-op fights: actor {id:08x} is where this game has loaded on the host: shown again"
+        ));
+    }
+
+    /// Since a load (and the start): the copy of an actor the host runs in the world, the first
+    /// time the host tells of it, that is disabled here while the story does not say it is, was
+    /// hidden when the game saved: it is counted as hidden, and so shown again unless it is still
+    /// to be hidden.
+    fn after_load(&mut self, e: &mut Engine, sync: &GuestSync) {
+        let loads = coop_engine::saves::loads(e);
+        if self.loads_seen != Some(loads) {
+            self.loads_seen = Some(loads);
+            self.looked_at.clear();
+        }
+        let known: Vec<u32> = sync
+            .live
+            .actors
+            .iter()
+            .filter(|(f, a)| {
+                a.owner == Some(PlayerId::HOST)
+                    && a.alive
+                    && a.state.is_some_and(|s| s.flags & FLAG_DEAD == 0)
+                    && actors::shareable(f.0)
+            })
+            .map(|(f, _)| f.0)
+            .filter(|id| !self.looked_at.contains(id))
+            .collect();
+        for id in known {
+            let Some(off) = actors::disabled(e, id) else {
+                continue;
+            };
+            self.looked_at.insert(id);
+            if off && story_disabled(sync, id) != Some(true) {
+                self.hidden.insert(id);
+            }
+        }
     }
 
     /// Whether this game's copy of actor `id` is left to a conversation it is in here: for
@@ -2565,4 +2710,17 @@ mod tests {
         let x = f.place(id, 400).unwrap().pos[0];
         assert!((x - 510.0).abs() < 0.01, "{x}");
     }
+}
+
+/// What the host's story says of reference `id` being disabled, if it says anything.
+fn story_disabled(sync: &GuestSync, id: u32) -> Option<bool> {
+    sync.store
+        .get(
+            FormId(id),
+            &coop_core::schema::Field::RefDisabled { disabled: false },
+        )
+        .and_then(|en| match en.field {
+            coop_core::schema::Field::RefDisabled { disabled } => Some(disabled),
+            _ => None,
+        })
 }

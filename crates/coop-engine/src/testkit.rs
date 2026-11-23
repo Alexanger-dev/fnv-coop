@@ -1069,6 +1069,11 @@ impl Story {
         self.e.mem.u32(WARPS)
     }
 
+    /// How many times the game's `Disable` ran.
+    pub fn disables(&self) -> u32 {
+        self.e.mem.u32(DISABLES)
+    }
+
     /// Runs the script of quest `quest` (a quest script that names the quest as its owner, as every
     /// quest script in the game does): it runs on a host, and on a guest only for a quest of the
     /// player's own.

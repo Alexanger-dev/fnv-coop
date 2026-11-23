@@ -2314,3 +2314,133 @@ fn a_crouched_actors_copy_stays_crouched() {
     p.frames(2 * (fight::SETTLE_MS / 50) as u32);
     assert_eq!(p.guest.forced_moves(RAIDER), None);
 }
+
+/// PC run, 2026-11-23: the host's game walked Sunny, Cheyenne and Ringo out of the gas station to
+/// fight; the guest, inside, still saw them there (the outside not loaded in her game, they were
+/// never brought). A copy whose host's actor is in a space this game has not loaded is hidden
+/// (after a little time to walk out), the story's word does not show it meanwhile, and it is
+/// shown again and brought to the host's place once that space is loaded (council 3-0, A).
+#[test]
+fn a_copy_is_hidden_while_its_hosts_actor_is_where_this_game_has_not_loaded() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [300.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [300.0, 20.0, 0.0], 0.5);
+    // The story has a word on it being enabled (a quest switched it on).
+    let on = coop_core::schema::Field::RefDisabled { disabled: false };
+    p.hd.sync.write(FormId(RAIDER), on.clone());
+    p.frames(40);
+    assert!(p.gd.sync.store.get(FormId(RAIDER), &on).is_some());
+    // The host's actor goes out into the town; the guest's copy stays in the house.
+    p.host.place_actor(RAIDER, TOWN, [10.0, 20.0, 0.0], 0.5);
+    let grace = (fight::HIDE_AFTER_MS / 50) as u32;
+    p.frames(grace - 10);
+    assert_eq!(
+        p.guest.disabled(RAIDER),
+        Some(false),
+        "given time to walk out"
+    );
+    p.frames(20);
+    assert_eq!(p.guest.disabled(RAIDER), Some(true));
+    assert_eq!(p.guest_fight().hidings, 1);
+    assert!(p.guest_fight().hides(RAIDER));
+    // The heals come and go: it stays hidden.
+    p.frames(200);
+    assert_eq!(p.guest.disabled(RAIDER), Some(true));
+    assert_eq!((p.gd.healed, p.gd.refused), (0, 0));
+    // The players walk out into the town: shown, and brought to the host's place.
+    p.host.move_player(TOWN, [0.0; 3], 0.0);
+    p.guest.move_player(TOWN, [0.0; 3], 0.0);
+    p.frames(10);
+    assert_eq!(p.guest.disabled(RAIDER), Some(false));
+    assert_eq!(p.guest_fight().showings, 1);
+    assert_eq!(p.guest_fight().brings, 1);
+    assert!(close(p.guest.actor_view(RAIDER).pos, [10.0, 20.0, 0.0]));
+    // Together again: followed as ever, not hidden.
+    p.frames(200);
+    assert_eq!(p.guest.disabled(RAIDER), Some(false));
+    assert_eq!(p.guest_fight().hidings, 1);
+}
+
+/// A copy in another space while the host's actor is in this player's space but far outside the
+/// cells this game has loaded is hidden too, until the player comes within reach; one in a
+/// conversation here is left to it.
+#[test]
+fn a_copy_elsewhere_is_hidden_until_the_hosts_place_is_loaded() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    let well = [0.0, 14_000.0, 0.0];
+    p.host.move_player(DESERT, [0.0, 13_800.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, DESERT, well, 0.5);
+    p.guest.move_player(DESERT, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.frames(40);
+    assert_eq!(p.guest.disabled(RAIDER), Some(true));
+    p.guest.move_player(DESERT, [0.0, 9_000.0, 0.0], 0.0);
+    p.frames(80);
+    assert_eq!(p.guest.disabled(RAIDER), Some(false));
+    assert!(close(p.guest.actor_view(RAIDER).pos, well));
+    // In a conversation here when the host's leaves: left to it.
+    p.guest.set_in_dialogue(RAIDER, true);
+    p.host.place_actor(RAIDER, HOUSE, [10.0, 20.0, 0.0], 0.5);
+    p.frames(200);
+    assert_eq!(p.guest.disabled(RAIDER), Some(false));
+    assert_eq!(p.guest_fight().hidings, 1);
+    // Out of it: hidden.
+    p.guest.set_in_dialogue(RAIDER, false);
+    p.frames(80);
+    assert_eq!(p.guest.disabled(RAIDER), Some(true));
+}
+
+/// A guest's game saved while a copy was hidden: loaded again (or at the start), the copy of an
+/// actor the host has in the world is shown, where the story does not say it is disabled.
+#[test]
+fn a_copy_hidden_when_the_game_saved_is_shown_again() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    p.host.move_player(HOUSE, [0.0; 3], 0.0);
+    p.guest.move_player(HOUSE, [0.0; 3], 0.0);
+    p.host.place_actor(RAIDER, HOUSE, [300.0, 20.0, 0.0], 0.5);
+    p.guest.place_actor(RAIDER, HOUSE, [300.0, 20.0, 0.0], 0.5);
+    p.guest.set_disabled(RAIDER, true);
+    p.frames(40);
+    assert_eq!(p.guest.disabled(RAIDER), Some(false));
+    assert_eq!(p.guest_fight().showings, 1);
+}
+
+/// A hidden copy the host's story disables meanwhile (a quest took the actor away) is not shown
+/// again when its place is loaded: the story's word is the host's; nor does the story's later
+/// word that it is enabled show it while it is still to be hidden.
+#[test]
+fn a_hidden_copy_keeps_the_storys_word_on_it() {
+    let mut p = Pair::new();
+    p.gd.fight.as_mut().unwrap().follow = true;
+    let well = [0.0, 14_000.0, 0.0];
+    p.host.move_player(DESERT, [0.0, 13_800.0, 0.0], 0.0);
+    p.host.place_actor(RAIDER, DESERT, well, 0.5);
+    p.guest.move_player(DESERT, [0.0; 3], 0.0);
+    p.guest.place_actor(RAIDER, HOUSE, [900.0, 900.0, 0.0], 2.0);
+    p.frames(40);
+    assert_eq!(p.guest.disabled(RAIDER), Some(true));
+    // The story says it is enabled: still hidden here, never shown meanwhile.
+    let disables = p.guest.disables();
+    let on = coop_core::schema::Field::RefDisabled { disabled: false };
+    p.hd.sync.write(FormId(RAIDER), on.clone());
+    p.frames(40);
+    assert!(p.gd.sync.store.get(FormId(RAIDER), &on).is_some());
+    assert_eq!(p.guest.disabled(RAIDER), Some(true));
+    assert_eq!(p.guest.disables(), disables);
+    // The story disables it: the player comes within reach, and it is not shown.
+    p.hd.sync.write(
+        FormId(RAIDER),
+        coop_core::schema::Field::RefDisabled { disabled: true },
+    );
+    p.frames(40);
+    p.guest.move_player(DESERT, [0.0, 9_000.0, 0.0], 0.0);
+    p.frames(80);
+    assert_eq!(p.guest.disabled(RAIDER), Some(true));
+    assert_eq!(p.guest_fight().showings, 0);
+    assert!(!p.guest_fight().hides(RAIDER));
+}

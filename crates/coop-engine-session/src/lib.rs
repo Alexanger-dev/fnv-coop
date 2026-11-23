@@ -1939,7 +1939,13 @@ impl GuestDriver {
             self.relisted += quest::relist(e, id);
         }
         self.note_loads(e);
-        let mismatches = echo(e, &self.sync.store);
+        let mut mismatches = echo(e, &self.sync.store);
+        // A copy the fights hide while the host's actor is where this game has not loaded: not
+        // put back (shown again) by the story's word, nor counted (fights).
+        if let Some(f) = self.fight.as_ref() {
+            mismatches
+                .retain(|m| !(matches!(m.want, Field::RefDisabled { .. }) && f.hides(m.form)));
+        }
         // A game that loaded a save, or that differs from the story in many things at once, has
         // not been played into it: everything is put back, nothing proposed, for a while (PC run
         // 25: the guest's player died, the game loaded its last save, and the guest proposed the
@@ -2092,6 +2098,13 @@ impl GuestDriver {
                 continue;
             }
             if self.own_trigger_keeps(form, &field) {
+                continue;
+            }
+            // A copy the fights hide: shown again by them, when the host's actor is where this
+            // game has loaded (fights).
+            if matches!(field, Field::RefDisabled { disabled: false })
+                && self.fight.as_ref().is_some_and(|f| f.hides(form))
+            {
                 continue;
             }
             let key = (form, field.kind(), sub_of(&field));
