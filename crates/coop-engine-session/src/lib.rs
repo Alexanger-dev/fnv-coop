@@ -331,8 +331,9 @@ pub struct HostDriver {
     quests: BTreeSet<u32>,
     /// Host: collect passes so far (the variable sweep's clock).
     collects: u32,
-    /// Host: the quest variables are read again at the next collect, whatever the sweep's clock
-    /// says (a dialogue line's end result ran: its changes are told to the guests as settled).
+    /// Host: every shared quest (its record and its variables) is read again at the next collect,
+    /// whatever the sweep's clock says (a dialogue line's end result ran: its changes are told to
+    /// the guests as settled).
     sweep_vars_now: bool,
     /// Host: the game's loads seen so far ([`coop_engine::saves::loads`]).
     loads_seen: u64,
@@ -903,7 +904,15 @@ impl HostDriver {
         // guest's own greeting was refused as already done, and its game was put back to 0, so
         // its Sunny walked up to its player again and again).
         self.collects = self.collects.wrapping_add(1);
-        if self.collects % VAR_SWEEP_EVERY == 0 || std::mem::take(&mut self.sweep_vars_now) {
+        // A line's run ended (S42): every shared quest is read again now, its record (stage,
+        // flags, objectives) and its variables, so the revision the host then says holds all the
+        // line changed (PC run, 2026-11-23: a guest listed its options before the objectives the
+        // line had displayed reached it).
+        if std::mem::take(&mut self.sweep_vars_now) {
+            for id in self.quests.clone() {
+                self.write_quest(e, id);
+            }
+        } else if self.collects % VAR_SWEEP_EVERY == 0 {
             for id in self.quests.clone() {
                 for (var, bits) in vars::quest_vars(e, id).unwrap_or_default() {
                     if let Ok(index) = u16::try_from(var) {
@@ -1253,6 +1262,9 @@ pub struct GuestDriver {
     say_seen: std::collections::BTreeMap<u32, u8>,
     /// The host's lines said here.
     pub says_said: u32,
+    /// The story's changes applied to this game that conditions read (a quest's record, a quest
+    /// variable, a global), counted: a window listing options lists them again after one (S42).
+    pub story_changes: u64,
     /// Lines this game's own scripts had an actor say to its player, asked of the host.
     pub says_asked: u32,
     /// Such lines to ask at the next heal (after its proposals), and when each was last asked.
@@ -1354,6 +1366,7 @@ impl GuestDriver {
             scene_seen: std::collections::BTreeMap::new(),
             say_seen: std::collections::BTreeMap::new(),
             says_said: 0,
+            story_changes: 0,
             says_asked: 0,
             says_to_ask: Vec::new(),
             says_asked_at: BTreeMap::new(),
@@ -2019,6 +2032,9 @@ impl GuestDriver {
             }
             let key = (form, field.kind(), sub_of(&field));
             if apply_field(e, form, &field) {
+                if read_by_conditions(&field) {
+                    self.story_changes += 1;
+                }
                 self.unapplied.remove(&key);
             } else {
                 self.refused += 1;
@@ -2031,6 +2047,16 @@ impl GuestDriver {
         self.applied_upto = self.sync.store.rev();
         self.snapshots_applied = self.sync.snapshots_loaded;
         self.repairs_applied = self.sync.repairs_applied;
+    }
+}
+
+/// Whether a story field is one a line's conditions read: a quest's record (its stage, flags,
+/// objectives), a quest variable, a global (not the clock, which moves every second).
+fn read_by_conditions(field: &Field) -> bool {
+    match field {
+        Field::Custom { tag, .. } => *tag == record::QUEST_RECORD_TAG,
+        Field::ScriptVar { .. } | Field::Global { .. } => true,
+        _ => false,
     }
 }
 
@@ -2308,6 +2334,25 @@ pub fn echo(e: &mut Engine, store: &StateStore) -> Vec<Mismatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a line's conditions read makes an open list be built again (S42): a quest's record,
+    /// a quest variable, a global; the clock, which moves every second, and the rest do not.
+    #[test]
+    fn a_change_conditions_read_is_a_quests_record_a_variable_or_a_global() {
+        let record = record::encode(&coop_engine::quest::QuestRecord {
+            form: 0x10,
+            stage: 10,
+            flags: 1,
+            done: vec![10],
+            objectives: vec![],
+        })
+        .unwrap();
+        assert!(read_by_conditions(&record));
+        assert!(read_by_conditions(&Field::ScriptVar { index: 1, bits: 0 }));
+        assert!(read_by_conditions(&Field::Global { bits: 0 }));
+        assert!(!read_by_conditions(&clock_field(12.0)));
+        assert!(!read_by_conditions(&Field::Topic { known: true }));
+    }
 
     #[test]
     fn the_hello_is_sane_and_names_the_plugins_in_order() {

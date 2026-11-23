@@ -77,6 +77,9 @@ struct State {
     vote_lines: Arc<HashSet<u32>>,
     /// The lines each player has for itself (form ids): another player's copy is never shown.
     personal_lines: Arc<HashSet<u32>>,
+    /// The lines that check the player's S.P.E.C.I.A.L. or a skill: the only lines of another
+    /// player shown as options (none named: every line, as before the game's data is read).
+    check_lines: Option<Arc<HashSet<u32>>>,
     /// A row of a line voted on clicked: its info and its topic (0 for another player's row).
     voted: Option<(u32, u32)>,
     /// [`say`] runs: its click is said, not voted.
@@ -106,6 +109,8 @@ pub struct Choices {
     state: Mutex<State>,
     /// Option lists the game built.
     lists: AtomicU64,
+    /// Lists built again for a story change ([`list_again`]).
+    lists_again: AtomicU64,
     /// Rows added for the other players.
     rows_added: AtomicU64,
     /// Clicks not let through: an added row, or a row of a window showing another's conversation.
@@ -150,6 +155,29 @@ pub fn own(e: &mut Engine) -> Option<Vec<u32>> {
 /// The other players' options shown in the window now: (info, the owner's name).
 pub fn foreign(e: &mut Engine) -> Vec<(u32, String)> {
     state(e, |s| s.foreign.clone())
+}
+
+/// The open window lists its options (state 2), this game's own list: it is built again (the
+/// story changed under it: a line's change came after the list was made, S42). Whether it was.
+pub fn list_again(e: &mut Engine) -> bool {
+    let menu = e.mem.u32(addr::DIALOG_MENU_OPEN);
+    if menu == 0
+        || e.mem.u32(menu + addr::DIALOG_MENU_STATE_OFFSET) != 2
+        || !state(e, |s| s.menu == menu)
+        || !e.is_registered(addr::DIALOG_MENU_LOAD_TOPICS_LIST)
+    {
+        return false;
+    }
+    e.call(addr::DIALOG_MENU_LOAD_TOPICS_LIST, &args![menu]);
+    e.ext_free::<Choices>()
+        .lists_again
+        .fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+/// How many times an open window's list was built again for a story change ([`list_again`]).
+pub fn lists_again(e: &mut Engine) -> u64 {
+    e.ext_free::<Choices>().lists_again.load(Ordering::SeqCst)
 }
 
 /// The other players' options, each an info's form id and the name of the player it is said by:
@@ -254,6 +282,24 @@ pub fn set_vote_lines(e: &mut Engine, lines: HashSet<u32>) {
 /// person's dialogue option to open a trading window is exclusive to each player").
 pub fn set_personal_lines(e: &mut Engine, lines: HashSet<u32>) {
     state(e, |s| s.personal_lines = Arc::new(lines));
+}
+
+/// The lines that check the player's S.P.E.C.I.A.L. or a skill (form ids): another player's
+/// option is shown in this game's window only when it is one (the owner, 2026-11-23: "Only
+/// supposed to get the other person's lines IF they're SPECIAL related", as "[Strength 6] ...
+/// (Host)"; the host had seen "Goodbye. (Guest)").
+pub fn set_check_lines(e: &mut Engine, lines: HashSet<u32>) {
+    state(e, |s| s.check_lines = Some(Arc::new(lines)));
+}
+
+/// Whether another player's option `info` (a form id) is shown in this game's window: a check
+/// of the player's S.P.E.C.I.A.L. or a skill ([`set_check_lines`]), and not a line each player
+/// has for itself ([`is_personal`]).
+pub fn shows_foreign(e: &mut Engine, info: u32) -> bool {
+    state(e, |s| {
+        !s.personal_lines.contains(&info)
+            && s.check_lines.as_ref().map_or(true, |c| c.contains(&info))
+    })
 }
 
 /// Whether line `info` (a form id) is each player's own ([`set_personal_lines`]): another

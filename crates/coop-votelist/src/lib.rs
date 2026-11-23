@@ -308,6 +308,11 @@ pub struct LineSets {
     /// never shown as an option (the owner, 2026-11-22: "Each person's dialogue option to open a
     /// trading window is exclusive to each player").
     pub personal: HashSet<u32>,
+    /// A check of the player's S.P.E.C.I.A.L. or a skill (a condition on one, the success or the
+    /// failure line; a speech challenge): the only lines of another player shown as an option
+    /// (the owner, 2026-11-23: "Only supposed to get the other person's lines IF they're
+    /// SPECIAL related").
+    pub checks: HashSet<u32>,
 }
 
 /// [`LineSets`] of `order`, in one reading.
@@ -318,6 +323,13 @@ pub fn line_sets(order: &LoadOrder) -> LineSets {
 fn sets_of(lines: Vec<Line>) -> LineSets {
     let mut sets = LineSets::default();
     for l in lines {
+        let (Verdict::Vote(own) | Verdict::NoVote(own)) = &l.own;
+        if own
+            .iter()
+            .any(|r| matches!(r, Reason::SkillCheck | Reason::SpeechCheck))
+        {
+            sets.checks.insert(l.form);
+        }
         match (&l.verdict, &l.own) {
             (Verdict::Vote(_), _) => {
                 sets.vote.insert(l.form);
@@ -393,5 +405,38 @@ mod tests {
         ]);
         assert_eq!(sets.personal, HashSet::from([1]));
         assert_eq!(sets.vote, HashSet::from([2]));
+        assert!(sets.checks.is_empty());
+    }
+
+    /// Chet's "[Barter 25] The town's at stake." (its success and its failure line), a line
+    /// asking for a S.P.E.C.I.A.L., a speech challenge: checks, whatever else they are; a plain
+    /// line and Goodbye are not.
+    #[test]
+    fn a_line_that_checks_the_players_special_or_a_skill_is_a_check() {
+        let check = || Reason::SkillCheck;
+        let sets = sets_of(vec![
+            line(
+                1,
+                Verdict::Vote(vec![check()]),
+                Verdict::Vote(vec![check()]),
+            ),
+            line(
+                2,
+                Verdict::Vote(vec![check(), Reason::ChangesQuest("setstage".into())]),
+                Verdict::NoVote(vec![Reason::OwnQuest("vms16".into())]),
+            ),
+            line(
+                3,
+                Verdict::Vote(vec![Reason::SpeechCheck]),
+                Verdict::Vote(vec![Reason::SpeechCheck]),
+            ),
+            line(4, Verdict::NoVote(vec![]), Verdict::NoVote(vec![])),
+            line(
+                5,
+                Verdict::Vote(vec![Reason::EndsConversation]),
+                Verdict::Vote(vec![Reason::EndsConversation]),
+            ),
+        ]);
+        assert_eq!(sets.checks, HashSet::from([1, 2, 3]));
     }
 }

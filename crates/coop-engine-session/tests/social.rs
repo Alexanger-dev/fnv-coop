@@ -671,7 +671,8 @@ fn a_lines_changes_are_in_the_story_it_says(lead: u32) {
 
 /// The owner, 2026-11-22: the guest saw "Show me what you have for sale (Host)", which opened the
 /// host's trade window. A line that opens a menu for the player who picks it is each player's own:
-/// another player's copy is never shown (council 3-0, A).
+/// another player's copy is never shown (council 3-0, A). Of the others, only checks of the
+/// S.P.E.C.I.A.L. or a skill are (the owner, 2026-11-23; council 3-0, A).
 #[test]
 fn another_players_line_that_opens_a_menu_is_not_shown() {
     use coop_core::dialogue::{DialogueMsg, MenuItem};
@@ -712,6 +713,19 @@ fn another_players_line_that_opens_a_menu_is_not_shown() {
     );
     w.run(2);
     assert_eq!(shown(&mut w), [PLAIN_LINE]);
+    // The owner, 2026-11-23 (the host had seen "Goodbye. (Guest)"): another player's option is
+    // shown only when it checks the player's S.P.E.C.I.A.L. or a skill ("[Barter 25] ...
+    // (Host)"), the guest's to vote for.
+    coop_engine::choices::set_personal_lines(
+        &mut w.guests[0].game.e,
+        std::collections::HashSet::new(),
+    );
+    coop_engine::choices::set_check_lines(
+        &mut w.guests[0].game.e,
+        std::collections::HashSet::from([SHARED_LINE]),
+    );
+    w.run(2);
+    assert_eq!(shown(&mut w), [SHARED_LINE]);
 }
 
 /// The owner, 2026-11-22: an option whose text is its topic's name ("I wanted to ask you some
@@ -2276,4 +2290,81 @@ fn votes_show_on_the_row_clicked_when_two_topics_lead_to_one_line() {
     w.guests[0].game.click_vote_row(SHARED_LINE, READY);
     w.run(4);
     assert_eq!(w.hd.social.talker.votes_chosen, 1);
+}
+
+/// PC run, 2026-11-23: Trudy's line on Ringo needs a variable the line before had set; the
+/// guest's window listed its options before the variable reached it, and the guest saw the line
+/// only as the host's, "(Host)". The story changing under a list shown for the step makes it be
+/// built again, and its options offered again (council 2-1, C).
+#[test]
+fn a_list_shown_before_a_lines_change_came_is_built_again() {
+    let mut w = World::new(&["Sunny"]);
+    let var = coop_engine::vars::quest_vars(&mut w.host.e, SIDE).expect("the quest")[0].0;
+    w.guests[0].game.option_needs_var(SHARED_LINE, SIDE, var);
+    coop_engine::choices::set_check_lines(&mut w.guests[0].game.e, Default::default());
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(PLAIN_LINE, false);
+    w.guests[0].game.say(PLAIN_LINE, true);
+    w.run(10);
+    w.guests[0]
+        .game
+        .list_options_built(&[SHARED_LINE, PLAIN_LINE]);
+    w.run(4);
+    assert_eq!(
+        coop_engine::choices::own(&mut w.guests[0].game.e),
+        Some(vec![PLAIN_LINE]),
+        "the variable not yet here"
+    );
+    // The variable comes (as the line's change, late).
+    coop_engine::vars::set_quest_var(&mut w.host.e, SIDE, var, 1f64.to_bits());
+    w.run(20);
+    assert_eq!(w.guests[0].driver.social.talker.lists_again, 1);
+    assert_eq!(
+        coop_engine::choices::own(&mut w.guests[0].game.e),
+        Some(vec![SHARED_LINE, PLAIN_LINE])
+    );
+    let offered: Vec<u32> = w.guests[0]
+        .driver
+        .sync
+        .live
+        .dialogue
+        .menu()
+        .unwrap_or_default()
+        .iter()
+        .filter(|i| i.owners.contains(&PlayerId(1)))
+        .map(|i| i.choice)
+        .collect();
+    assert!(offered.contains(&SHARED_LINE), "offered again: {offered:?}");
+    // Nothing more a line's conditions read changes (the clock moves on): not built again.
+    w.run_every(6, 1_000);
+    assert_eq!(w.guests[0].driver.social.talker.lists_again, 1);
+}
+
+/// A line's end result changes a quest's record in a way that leaves nothing in the change
+/// journal: the host reads every shared quest again when the line's run ends, so the revision it
+/// says holds it (PC run, 2026-11-23: objectives the line displayed came after the guest's list).
+#[test]
+fn the_host_reads_every_quest_again_when_a_lines_run_ends() {
+    let mut w = World::new(&["Sunny"]);
+    w.host.set_info_quest_flags(SHARED_LINE, true, SIDE, 0x41);
+    w.run(20);
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    assert!(w.guests[0].game.talk_to(SUNNY));
+    w.guests[0].game.say(SHARED_LINE, false);
+    w.run(10);
+    w.guests[0].game.say(SHARED_LINE, true);
+    w.guests[0].game.leave();
+    w.run(3);
+    let wanted = coop_engine_session::record::encode(
+        &coop_engine::quest::record(&mut w.host.e, SIDE).expect("the quest"),
+    )
+    .expect("encodable");
+    let in_story =
+        w.hd.sync
+            .store
+            .iter()
+            .any(|(k, en)| k.form == coop_core::ids::FormId(SIDE) && en.field == wanted);
+    assert!(in_story, "the record as the line left it");
 }

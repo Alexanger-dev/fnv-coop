@@ -677,9 +677,10 @@ impl Coop {
             ..EndpointConfig::default()
         };
         let mut lines = vec![format!(
-            "co-op: {} dialogue lines are voted on, {} are each player's own (S42)",
+            "co-op: {} dialogue lines are voted on, {} are each player's own, {} check the player's S.P.E.C.I.A.L. or a skill (S42)",
             vote_lines.vote.len(),
-            vote_lines.personal.len()
+            vote_lines.personal.len(),
+            vote_lines.checks.len()
         )];
         // voice
         let (voice, line) = {
@@ -912,6 +913,7 @@ impl Coop {
         if let Some(lines) = self.vote_lines.take() {
             coop_engine::choices::set_vote_lines(e, lines.vote);
             coop_engine::choices::set_personal_lines(e, lines.personal);
+            coop_engine::choices::set_check_lines(e, lines.checks);
         }
         if let Some(perks) = self.personal_perks.take() {
             coop_engine::reward::set_personal_perks(e, perks);

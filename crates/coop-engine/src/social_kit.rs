@@ -41,6 +41,16 @@ const DIALOG_MENU: u32 = KIT + 0xc000;
 /// window's test game has it.
 const MENU_TOPICS: u32 = KIT + 0xc200;
 const MENU_TOPIC: u32 = KIT + 0xc240;
+/// The kit's option list as the game builds it (`LoadTopicsList`): the topic manager's saved
+/// current topic and index while it is walked, the list (a count, then up to 16 topics), their
+/// blocks, the lines a list is made of (a count, then their form ids), and the lines listed only
+/// while a quest variable is set (a count, then (info, quest, variable) each).
+const LIST_SAVED: u32 = KIT + 0xc300;
+const LIST: u32 = KIT + 0xc400;
+const LIST_TOPICS: u32 = KIT + 0xc500;
+const LIST_CANDIDATES: u32 = KIT + 0xc900;
+const LIST_NEEDS: u32 = KIT + 0xcc00;
+const LIST_MAX: u32 = 16;
 /// Dialogue topics made ([`Story::add_topic`]): how many, then each in a slot of its own.
 const TOPICS_MADE: u32 = KIT + 0xd000;
 const TOPIC_FORMS: u32 = KIT + 0xd040;
@@ -260,6 +270,19 @@ pub(crate) fn register(e: &mut Engine) {
         .set_u32(SLEEP_MENU + addr::SLEEP_WAIT_HOURS_TILE_OFFSET, HOURS_TILE);
     e.register(addr::INFO_RUN_RESULT, run_result);
     e.register(addr::TOPICS_CURRENT_TOPIC, |e, a| eax(e.mem.u32(a[0])));
+    e.register(addr::DIALOG_MENU_LOAD_TOPICS_LIST, load_topics_list);
+    // The list walked (`MenuTopicManager`'s first and next topic): the current topic its row,
+    // the talk's own current topic back once it is walked.
+    e.register(addr::TOPICS_FIRST_TOPIC, |e, a| {
+        e.mem.set_u32(LIST_SAVED, e.mem.u32(a[0]));
+        e.mem.set_u32(LIST_SAVED + 4, 0);
+        list_walk(e, a[0], 0)
+    });
+    e.register(addr::TOPICS_NEXT_TOPIC, |e, a| {
+        let n = e.mem.u32(LIST_SAVED + 4) + 1;
+        e.mem.set_u32(LIST_SAVED + 4, n);
+        list_walk(e, a[0], n)
+    });
     e.register(addr::MENU_TOPIC_CURRENT_RESPONSE, |e, a| {
         eax(e.mem.u32(a[0] + 0x20))
     });
@@ -438,6 +461,39 @@ impl Story {
         for (i, v) in [script, quest, var, value].into_iter().enumerate() {
             self.e.mem.set_u32(at + 4 * i as u32, v);
         }
+    }
+
+    /// Gives info `id`'s result (said, or `end`) a write of quest `quest`'s flags byte that leaves
+    /// nothing in the change journal (as a script's change no form flag records).
+    pub fn set_info_quest_flags(&mut self, id: u32, end: bool, quest: u32, flags: u8) {
+        self.set_info_var(id, end, quest, QUEST_FLAGS_SETTER, u32::from(flags));
+    }
+
+    /// Line `id` is listed ([`Story::list_options_built`]) only while quest `quest`'s variable
+    /// `var` is set (as Trudy's line on Ringo, which needs `bTrudyExplainedReputation`).
+    pub fn option_needs_var(&mut self, id: u32, quest: u32, var: u32) {
+        let n = self.e.mem.u32(LIST_NEEDS);
+        assert!(n < LIST_MAX, "a test story's needs fit");
+        self.e.mem.set_u32(LIST_NEEDS, n + 1);
+        let at = LIST_NEEDS + 4 + 12 * n;
+        for (i, v) in [id, quest, var].into_iter().enumerate() {
+            self.e.mem.set_u32(at + 4 * i as u32, v);
+        }
+    }
+
+    /// The open dialogue window lists its options as the game builds them (`LoadTopicsList`):
+    /// of the lines `ids`, those whose conditions hold ([`Story::option_needs_var`]).
+    pub fn list_options_built(&mut self, ids: &[u32]) {
+        assert!(ids.len() as u32 <= LIST_MAX);
+        self.e.mem.set_u32(LIST_CANDIDATES, ids.len() as u32);
+        for (k, id) in ids.iter().enumerate() {
+            self.e.mem.set_u32(LIST_CANDIDATES + 4 + 4 * k as u32, *id);
+        }
+        self.e
+            .mem
+            .set_u32(DIALOG_MENU + addr::DIALOG_MENU_STATE_OFFSET, 2);
+        self.e
+            .call(addr::DIALOG_MENU_LOAD_TOPICS_LIST, &args![DIALOG_MENU]);
     }
 
     /// Gives info `id`'s result (said, or `end`) a command opening `menu` with the reference it
@@ -778,7 +834,61 @@ pub(crate) fn run_var_setters(e: &mut Engine, script: u32) {
         let at = VAR_SETTERS + VAR_SETTER_SLOT * n;
         if e.mem.u32(at) == script {
             let (quest, var, value) = (e.mem.u32(at + 4), e.mem.u32(at + 8), e.mem.u32(at + 12));
-            crate::vars::set_quest_var(e, quest, var, f64::from(value).to_bits());
+            if var == QUEST_FLAGS_SETTER {
+                // The quest's flags byte, written as is: nothing in the change journal.
+                if let Some(q) = crate::forms::quest(e, quest) {
+                    e.mem.set_u8(q + addr::QUEST_FLAGS_OFFSET, value as u8);
+                }
+            } else {
+                crate::vars::set_quest_var(e, quest, var, f64::from(value).to_bits());
+            }
         }
+    }
+}
+
+/// A variable setter's "variable" that sets the quest's flags byte instead.
+const QUEST_FLAGS_SETTER: u32 = u32::MAX;
+
+/// `DialogMenu::LoadTopicsList` (the menu): the list made of the lines given
+/// ([`Story::list_options_built`]), each one that needs a quest variable only while it is set.
+fn load_topics_list(e: &mut Engine, _: &[u32]) -> Ret {
+    let mut listed = Vec::new();
+    for k in 0..e.mem.u32(LIST_CANDIDATES).min(LIST_MAX) {
+        let id = e.mem.u32(LIST_CANDIDATES + 4 + 4 * k);
+        let needs = (0..e.mem.u32(LIST_NEEDS).min(LIST_MAX))
+            .map(|n| LIST_NEEDS + 4 + 12 * n)
+            .filter(|at| e.mem.u32(*at) == id)
+            .map(|at| (e.mem.u32(at + 4), e.mem.u32(at + 8)))
+            .collect::<Vec<_>>();
+        let met = needs.into_iter().all(|(quest, var)| {
+            crate::vars::quest_vars(e, quest)
+                .unwrap_or_default()
+                .iter()
+                .any(|(v, bits)| *v == var && f64::from_bits(*bits) != 0.0)
+        });
+        if met {
+            listed.push(id);
+        }
+    }
+    e.mem.set_u32(LIST, listed.len() as u32);
+    for (k, id) in listed.into_iter().enumerate() {
+        let block = LIST_TOPICS + 0x40 * k as u32;
+        let info = crate::forms::form(e, id).unwrap_or(0);
+        e.mem.set_u32(block + addr::MENU_TOPIC_INFO_OFFSET, info);
+        e.mem.set_u32(block + addr::MENU_TOPIC_ORIG_TOPIC_OFFSET, 0);
+        e.mem.set_u32(LIST + 4 + 4 * k as u32, block);
+    }
+    Ret::default()
+}
+
+/// The list walked to topic `n`: made the manager's current one; past the last, the talk's own
+/// current topic back.
+fn list_walk(e: &mut Engine, topics: u32, n: u32) -> Ret {
+    if n < e.mem.u32(LIST) {
+        e.mem.set_u32(topics, e.mem.u32(LIST + 4 + 4 * n));
+        eax(1)
+    } else {
+        e.mem.set_u32(topics, e.mem.u32(LIST_SAVED));
+        eax(0)
     }
 }

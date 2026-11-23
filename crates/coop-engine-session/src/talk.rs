@@ -185,6 +185,14 @@ pub struct Talker {
     pub asks_failed: u32,
     /// The story's revision up to which this game holds every change (a guest's contiguous one).
     pub story_base: u64,
+    /// The story's changes conditions read, applied to this game so far (a guest's; the
+    /// driver's count).
+    pub story_changes: u64,
+    /// The list shown for a step (session, step) and the story's changes then: one after makes
+    /// the list be built again (S42; PC run, 2026-11-23: "(Host)" on a line the guest had too).
+    listed_at: Option<(u32, u32, u64)>,
+    /// Lists built again for a story change.
+    pub lists_again: u32,
     /// The step after which this player's window waits to list its options (session, step, the
     /// story's revision then, steps waited).
     settle: Option<(u32, u32, u64, u32)>,
@@ -802,14 +810,15 @@ impl Talker {
             self.list_mark = None;
             return;
         };
-        // Another player's options, but for the lines each player has for itself (a trade, ...):
-        // that player's copy would open its menu, not this player's (the owner, 2026-11-22).
+        // Another player's options: its checks of the S.P.E.C.I.A.L. or a skill this player has
+        // not (the owner, 2026-11-23), but for the lines each player has for itself (a trade,
+        // ...: that player's copy would open its menu, not this player's; the owner, 2026-11-22).
         let foreign: Vec<(u32, String)> = client
             .menu()
             .unwrap_or_default()
             .iter()
             .filter(|i| !i.owners.contains(&me))
-            .filter(|i| !coop_engine::choices::is_personal(e, i.choice))
+            .filter(|i| coop_engine::choices::shows_foreign(e, i.choice))
             .filter_map(|i| Some((i.choice, player_name(*i.owners.first()?))))
             .collect();
         self.foreign_set = !foreign.is_empty();
@@ -844,6 +853,24 @@ impl Talker {
         let settled = client.settled_rev(v.session, v.step);
         if list && self.settled(me, v, settled) && coop_engine::watch::show_topics(e) {
             self.windows_listed += 1;
+        }
+        // The story changed under the list shown for this step (a line's change came after the
+        // list was made: a quest variable, objectives): the list is built again, the options
+        // offered again from it (council 2-1, C).
+        if v.playing.is_none() {
+            match self.listed_at {
+                Some((s, step, at)) if (s, step) == (v.session, v.step) => {
+                    if self.story_changes > at && coop_engine::choices::list_again(e) {
+                        self.lists_again += 1;
+                        self.listed_at = Some((s, step, self.story_changes));
+                    }
+                }
+                _ => {
+                    if coop_engine::choices::own(e).is_some() {
+                        self.listed_at = Some((v.session, v.step, self.story_changes));
+                    }
+                }
+            }
         }
         let lists = coop_engine::choices::counts(e).0;
         let fresh = self.list_mark.map_or(true, |(s, step, at)| {
