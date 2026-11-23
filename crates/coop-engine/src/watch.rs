@@ -117,7 +117,7 @@ pub struct Watch {
     results_skipped: AtomicU64,
     /// Windows the player closed.
     left: AtomicU64,
-    /// Responses the window moved on to at once, the talker's game past them.
+    /// Responses the window skipped as on a click, the talker's game a whole response past.
     responses_caught_up: AtomicU64,
     /// Times the window waited on a response for the talker's game.
     responses_held: AtomicU64,
@@ -129,11 +129,12 @@ fn state<R>(e: &mut Engine, f: impl FnOnce(&mut State) -> R) -> R {
     f(&mut s)
 }
 
-/// The talker's game began response `n` (from 0) of line `info` (a form id): the window shows
-/// each response of it when that game begins it (the owner, 2026-11-22: the watching player's
-/// window was a response behind the talker's). Behind, it moves on to that response at once;
-/// ahead (its NPC done saying a response the talker's has not moved past), it waits, at most
-/// [`RESPONSE_HOLD_MS`].
+/// The talker's game began response `n` (from 0) of line `info` (a form id): the window keeps
+/// pace with it (the owner, 2026-11-22: the watching player's window was a response behind the
+/// talker's). A whole response or more behind, it skips on as a click would; behind by the rest
+/// of a response, it says it to its end (2026-11-23: cut at once, the next response's voice was
+/// lost); ahead (its NPC done saying a response the talker's has not moved past), it waits, at
+/// most [`RESPONSE_HOLD_MS`].
 pub fn set_response(e: &mut Engine, info: u32, n: u32) {
     state(e, |s| s.talker = Some((info, n)));
 }
@@ -143,7 +144,7 @@ pub fn talker_response(e: &mut Engine) -> Option<(u32, u32)> {
     state(e, |s| s.talker)
 }
 
-/// `(responses moved on to at once, waits on the talker's game)` since the game started.
+/// `(responses skipped as on a click, waits on the talker's game)` since the game started.
 pub fn response_counts(e: &mut Engine) -> (u64, u64) {
     let w = e.ext_free::<Watch>();
     (
@@ -170,28 +171,34 @@ fn keep_pace(e: &mut Engine, menu: u32, speaker: u32) {
     }
     let at = menu + addr::DIALOG_MENU_STATE_OFFSET;
     let done = e.mem.u8(speaker + addr::REF_LINE_DONE_OFFSET) != 0;
-    if index < n {
-        // Behind: the next response now, as `DoIdle` begins it once a response is said (the
-        // speaker's saying of this one, when it is still saying it, stopped first, as `DoIdle`
-        // stops it on a click).
-        if !done {
-            e.call(addr::MOBILE_STOP_CURRENT_DIALOGUE, &args![speaker]);
+    if index + 1 < n {
+        // A whole response or more behind: on to the next as a click on the window does (the
+        // game's `DoIdle` in state 1 stops the speaker's saying and begins the next response
+        // when it has stopped, its voice and lips with it). A response only part said behind is
+        // said to its end and the next begun after it (the owner, 2026-11-23: stopped and begun
+        // at once by this game, a response's voice was lost; council 2-1, C).
+        if e.mem.u32(at) == 3 {
+            e.mem.set_u32(at, 1);
+            e.ext_free::<Watch>()
+                .responses_caught_up
+                .fetch_add(1, Ordering::SeqCst);
+            state(e, |s| s.held = None);
+            log(|| {
+                format!(
+                    "line {info:08x}: response {} skipped as on a click (the talker's {n})",
+                    index
+                )
+            });
         }
-        e.mem.set_f32(menu + addr::DIALOG_MENU_ELAPSED_OFFSET, 0.0);
-        let st = e
-            .call(addr::DIALOG_MENU_LOAD_NEXT_SCREEN, &args![menu, 0u32])
-            .u32();
-        e.mem.set_u32(at, st);
-        e.ext_free::<Watch>()
-            .responses_caught_up
-            .fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    if index < n {
+        // Behind by the rest of this response: it ends here, then the next begins; one held
+        // done (above, its countdown long) begins it now.
+        if done && e.mem.u32(at) == 3 && state(e, |s| s.held.is_some()) {
+            e.mem.set_u32(at, 1);
+        }
         state(e, |s| s.held = None);
-        log(|| {
-            format!(
-                "line {info:08x}: response {} begun at once (the talker's {n})",
-                index + 1
-            )
-        });
         return;
     }
     // Ahead: done saying this response, the talker's game not past it: it waits.
@@ -1067,6 +1074,11 @@ mod tests {
                         .u32();
                     e.mem.set_u32(at, s);
                 }
+                // Still saying (a click): its saying stopped, the next begun once it has.
+                1 => {
+                    e.call(addr::MOBILE_STOP_CURRENT_DIALOGUE, &args![speaker]);
+                    e.mem.set_u8(speaker + addr::REF_LINE_DONE_OFFSET, 1);
+                }
                 // Fading out for half a second (a quarter a frame), then gone.
                 4 => {
                     let t = e.mem.f32(elapsed) + 0.25;
@@ -1525,20 +1537,35 @@ mod tests {
         idle(&mut e, 2);
         assert_eq!(said(&e), vec![INFOS[0], INFOS[0]]);
         assert_eq!(e.mem.u32(STOPS), 0, "nothing cut");
-        // Another line: behind this time (its first response still being said), it is cut and the
-        // second begun at once.
+        // Another line, of four responses: the talker's game begins its second while the
+        // window still says its first (the owner, 2026-11-23: cut there, the second's voice was
+        // lost). The window says its first to the end, then the second.
         watch_line(&mut e, NPC, IDS[1]);
         line_done(&mut e);
         idle(&mut e, 1);
         assert_eq!(said(&e).len(), 3);
-        idle(&mut e, 3);
-        assert_eq!(said(&e).len(), 3, "the talker's game not past it");
+        // (Three left to say after its first.)
+        let topic = current_topic(&mut e);
+        e.mem.set_u32(topic + 0x20, 3);
         e.mem.set_u8(ACTOR + addr::REF_LINE_DONE_OFFSET, 0);
         set_response(&mut e, IDS[1], 1);
-        idle(&mut e, 1);
-        assert_eq!(said(&e), vec![INFOS[0], INFOS[0], INFOS[1], INFOS[1]]);
+        idle(&mut e, 10);
+        assert_eq!(said(&e).len(), 3, "its first said to the end");
+        assert_eq!(e.mem.u32(STOPS), 0);
+        line_done(&mut e);
+        idle(&mut e, 2);
+        assert_eq!(said(&e).len(), 4);
+        // A whole response behind (the talker's game on the fourth, the window just begun the
+        // second): skipped as on a click, its saying stopped, the third begun after.
+        e.mem.set_u8(ACTOR + addr::REF_LINE_DONE_OFFSET, 0);
+        set_response(&mut e, IDS[1], 3);
+        idle(&mut e, 3);
+        assert_eq!(
+            said(&e),
+            vec![INFOS[0], INFOS[0], INFOS[1], INFOS[1], INFOS[1]]
+        );
         assert_eq!(e.mem.u32(STOPS), 1);
-        assert_eq!(response_counts(&mut e).0, 2);
+        assert_eq!(response_counts(&mut e).0, 1);
         // Another response's word for another line changes nothing.
         watch_line(&mut e, NPC, IDS[2]);
         line_done(&mut e);

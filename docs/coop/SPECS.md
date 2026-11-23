@@ -1838,9 +1838,11 @@ every other game shows it, holds, and lists its own options when the step is ove
   picker only, in order): `talk::Responses` reads the open dialogue menu once a frame, each move
   of its current topic's current response (`MenuTopic` `0083e170`, after `LoadNextScreen` said
   one, `bResponseShown`) the next response begun. A watching window (`watch::set_response`)
-  behind the talker's game begins the next response at once (the NPC's saying of the last
-  stopped, `MobileObject::StopCurrentDialogue`, then `LoadNextScreen`, as `DoIdle` begins one);
-  ahead (its NPC done with a response the talker's has not moved past) it waits, at most
+  behind by the rest of a response says it to its end and begins the next after it (the owner,
+  2026-11-23: begun at once, cut and begun by this game, a response's voice was lost, often in
+  the middle of a line; council 2-1, C); a whole response or more behind, it skips on as a click
+  does (`DoIdle` state 1: the speaker's saying stopped, the next begun when it has, voice and
+  lips with it); ahead (its NPC done with a response the talker's has not moved past) it waits, at most
   `RESPONSE_HOLD_MS` (3 s; a talker's line said outside a dialogue menu). As text, a line's start
   shows the chosen option and the first response, each other response when it is begun, in the
   place of what is left of the one before. Checked: unit tests (the table, the client, the
