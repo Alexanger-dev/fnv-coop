@@ -599,6 +599,10 @@ pub const TOPIC_GET_OWNER_TOPIC: u32 = 0x0061_a310;
 /// speaker and the target, or 0. `MenuTopicManager::Initialize` (`0083e620`) picks a dialogue
 /// window's first line with it.
 pub const TOPIC_GET_MATCHING_INFO: u32 = 0x0061_a760;
+/// `TESTopic::GetMatchingInfo` (`thiscall`: topic, speaker, target; `RET 8`; `0061a720`,
+/// `testopic.rs`): [`TOPIC_GET_MATCHING_INFO`]'s info, or 0. What an actor saying a topic picks
+/// its line with.
+pub const TOPIC_MATCHING_INFO: u32 = 0x0061_a720;
 /// The quest under which a topic holds an info (`thiscall`: topic, info; `RET 4`; `00619d00`,
 /// `run_00619b60.rs`), or 0.
 pub const TOPIC_INFO_QUEST: u32 = 0x0061_9d00;

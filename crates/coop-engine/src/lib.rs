@@ -120,6 +120,10 @@ pub fn install(e: &mut Engine) {
     if e.is_registered(addr::CMD_SAY_TO) {
         e.wrap(commands::SAY_TO, commands::say_to);
     }
+    // The line an actor saying a topic picks: a guest's game picks the host's (S28).
+    if e.is_registered(addr::TOPIC_MATCHING_INFO) {
+        e.wrap(commands::MATCHING_INFO, commands::matching_info);
+    }
     // Menus a line's result opens: on the host running a guest's line, for that guest
     // (docs/coop/SPECS.md S43).
     for (slot, wrap) in [

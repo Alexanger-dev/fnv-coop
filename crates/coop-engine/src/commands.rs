@@ -59,6 +59,77 @@ pub struct Commands {
     notes: Mutex<Vec<String>>,
     /// Guest: the (actor, package) pairs already written to the log.
     given_seen: Mutex<std::collections::BTreeSet<(u32, u32)>>,
+    /// The line (info) this game picked last for each speaker and topic (form ids) it said.
+    picked: Mutex<BTreeMap<(u32, u32), u32>>,
+    /// Guest: the line the host's game picked for a topic a speaker says here now (speaker and
+    /// topic references, the info's form): picked here too ([`matching_info`]).
+    forced: Mutex<Option<(u32, u32, u32)>>,
+    /// Guest: lines picked as the host's game picked them.
+    forced_picks: AtomicU32,
+}
+
+/// The wrap at `0061a720`, `TESTopic::GetMatchingInfo` (the topic, the speaker, the target).
+pub(crate) const MATCHING_INFO: WrapSlot = WrapSlot::new(Owner::Coop, addr::TOPIC_MATCHING_INFO);
+
+/// `TESTopic::GetMatchingInfo`: the line a speaker says for a topic. On a guest saying the
+/// host's line ([`say_to_player`] with the host's pick), the host's game's pick (PC run,
+/// 2026-11-23: Sunny's old "see those sarsaparilla bottles" on the guest's screen where the host's
+/// game had picked her gecko line: the guest's conditions read differently). Every pick of a
+/// speaker's is noted ([`picked_info`]).
+pub(crate) fn matching_info(e: &mut Engine, a: &[u32]) -> Ret {
+    let (topic, speaker) = (
+        a.first().copied().unwrap_or(0),
+        a.get(1).copied().unwrap_or(0),
+    );
+    let c = e.ext_free::<Commands>();
+    let forced = {
+        let mut f = c.forced.lock().unwrap_or_else(PoisonError::into_inner);
+        match *f {
+            Some((s, t, info)) if s == speaker && t == topic && topic != 0 => {
+                *f = None;
+                Some(info)
+            }
+            _ => None,
+        }
+    };
+    let r = match forced {
+        Some(info) => {
+            c.forced_picks.fetch_add(1, Ordering::SeqCst);
+            Ret {
+                eax: info,
+                ..Ret::default()
+            }
+        }
+        None => e.call_next(addr::TOPIC_MATCHING_INFO, a),
+    };
+    if r.eax != 0 && topic != 0 && speaker != 0 {
+        let id = |e: &mut Engine, f: u32| e.mem.u32(f.wrapping_add(addr::FORM_ID_OFFSET));
+        let key = (id(e, speaker), id(e, topic));
+        let info = id(e, r.eax);
+        e.ext_free::<Commands>()
+            .picked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, info);
+    }
+    r
+}
+
+/// The line (info's form id) this game last picked for `speaker` saying `topic` (form ids); 0
+/// when it picked none.
+pub fn picked_info(e: &mut Engine, speaker: u32, topic: u32) -> u32 {
+    e.ext_free::<Commands>()
+        .picked
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&(speaker, topic))
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Guest: the lines picked as the host's game picked them ([`say_to_player`]).
+pub fn forced_picks(e: &mut Engine) -> u32 {
+    e.ext_free::<Commands>().forced_picks.load(Ordering::SeqCst)
 }
 
 fn note(e: &mut Engine, line: String) {
@@ -539,12 +610,14 @@ pub fn drain_says(e: &mut Engine) -> Vec<Say> {
 /// high process that is not run at once: the line is said through its process. Its result runs
 /// in this game when it ends, unless `host_said`: the host's game said it to its own player and
 /// ran its result there (gave the items, moved the quest), so here the line is only heard
-/// ([`skips_echoed_result`]).
+/// ([`skips_echoed_result`]). `line`: the info the host's game picked for the topic, picked here
+/// too (0: this game picks its own).
 pub fn say_to_player(
     e: &mut Engine,
     speaker: u32,
     topic: u32,
     host_said: bool,
+    line: u32,
 ) -> Result<(), NoScene> {
     let (Some(a), Some(t)) = (actors::actor(e, speaker), crate::forms::form(e, topic)) else {
         return Err(NoScene::Absent);
@@ -581,6 +654,16 @@ pub fn say_to_player(
         echoes.remove(&speaker);
     }
     drop(echoes);
+    // The line the host's game picked for the topic, picked here too (0: this game's own pick).
+    let info = if line == 0 {
+        None
+    } else {
+        crate::forms::form(e, line)
+    };
+    *e.ext_free::<Commands>()
+        .forced
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = info.map(|i| (a, t, i));
     let sp = process(e, a);
     e.vcall(
         sp,

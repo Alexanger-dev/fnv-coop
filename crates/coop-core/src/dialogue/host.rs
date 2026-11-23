@@ -117,12 +117,14 @@ impl Session {
 }
 
 /// The players who vote in a conversation (D13, the owner): every player in the game but those
-/// who left it (a player away from the NPC is waited for too).
-fn voters(s: &Session, members: &[PlayerId]) -> Vec<PlayerId> {
+/// who left it (a player away from the NPC is waited for too), and those in a menu (the owner,
+/// 2026-11-23: a guest levelling up was in the skills menu while the host's vote waited for her;
+/// "being in a menu should count as busy", council 3-0, A).
+fn voters(s: &Session, members: &[PlayerId], in_menu: &BTreeSet<PlayerId>) -> Vec<PlayerId> {
     members
         .iter()
         .copied()
-        .filter(|p| !s.left.contains(p))
+        .filter(|p| !s.left.contains(p) && !in_menu.contains(p))
         .collect()
 }
 
@@ -318,14 +320,24 @@ impl DialogueHost {
             } => self.vote(from, session, step, (choice, row), now_ms, members),
             // D13: what a player is doing, told to everyone when it changes.
             DialogueMsg::Busy { busy } => {
-                if self.busy.get(&from).copied().unwrap_or_default() == busy {
+                let was = self.busy.get(&from).copied().unwrap_or_default();
+                if was == busy {
                     return vec![];
                 }
                 self.busy.insert(from, busy);
-                vec![out(
+                let mut res = vec![out(
                     Audience::All,
                     DialogueMsg::PlayerBusy { player: from, busy },
-                )]
+                )];
+                // In a menu, or out of one: a voter fewer or more; an open vote is counted again
+                // (decided when the voters left are all on one option).
+                if (was == Busy::Menu) != (busy == Busy::Menu) {
+                    let open: Vec<u32> = self.sessions.keys().copied().collect();
+                    for session in open {
+                        res.extend(self.recount(session, now_ms));
+                    }
+                }
+                res
             }
             DialogueMsg::Waiting { npc } => vec![out(
                 Audience::All,
@@ -737,8 +749,18 @@ impl DialogueHost {
         res
     }
 
+    /// The players in a menu now (D13): not voters.
+    fn in_menu(&self) -> BTreeSet<PlayerId> {
+        self.busy
+            .iter()
+            .filter(|(_, b)| **b == Busy::Menu)
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
     /// The votes so far, for everyone.
     fn votes_out(&self, session: u32, now_ms: u64, members: &[PlayerId]) -> DOut {
+        let in_menu = self.in_menu();
         let s = &self.sessions[&session];
         out(
             Audience::All,
@@ -747,7 +769,7 @@ impl DialogueHost {
                 step: s.step + 1,
                 votes: s.votes.clone(),
                 rows: s.vote_rows.clone(),
-                of: voters(s, members).len() as u8,
+                of: voters(s, members, &in_menu).len() as u8,
                 left_ms: s.vote_ends_ms.map_or(0, |end| end.saturating_sub(now_ms)),
             },
         )
@@ -780,6 +802,7 @@ impl DialogueHost {
         members: &[PlayerId],
         closing: bool,
     ) -> Vec<DOut> {
+        let in_menu = self.in_menu();
         let Some(s) = self.sessions.get_mut(&session) else {
             return vec![];
         };
@@ -787,7 +810,7 @@ impl DialogueHost {
             s.vote_ends_ms = None;
             return vec![];
         };
-        let voters = voters(s, members);
+        let voters = voters(s, members, &in_menu);
         let all = voters
             .iter()
             .all(|p| s.votes.iter().any(|(v, c)| v == p && *c == first_choice));
@@ -2418,6 +2441,39 @@ mod tests {
         assert!(o.is_empty(), "{o:?}");
     }
 
+    /// The owner, 2026-11-23: a guest levelling up was in the skills menu while a vote waited
+    /// for her. A player in a menu is not a voter: told as one fewer, and the vote decided when
+    /// the others are all on one option (alone: at once); out of the menu, a voter again.
+    #[test]
+    fn a_player_in_a_menu_is_not_waited_for_in_a_vote() {
+        let (mut h, s) = voting();
+        let o = h.on_msg(B, DialogueMsg::Busy { busy: Busy::Menu }, 0, &ALL);
+        assert_eq!(o.len(), 1, "told, no vote open: {o:?}");
+        let o = vote(&mut h, A, s, 3, 1_000);
+        assert!(
+            matches!(&o[0].msg, DialogueMsg::Votes { of: 2, .. }),
+            "{o:?}"
+        );
+        // H too goes into a menu: A alone, its vote goes through.
+        let o = h.on_msg(H, DialogueMsg::Busy { busy: Busy::Menu }, 2_000, &ALL);
+        assert!(
+            o.iter()
+                .any(|m| matches!(m.msg, DialogueMsg::Chosen { choice: 3, .. })),
+            "{o:?}"
+        );
+        // Out of the menu, a voter again; in a fight, still one.
+        let (mut h, s) = voting();
+        h.on_msg(B, DialogueMsg::Busy { busy: Busy::Menu }, 0, &ALL);
+        let o = h.on_msg(B, DialogueMsg::Busy { busy: Busy::Free }, 0, &ALL);
+        assert_eq!(o.len(), 1, "{o:?}");
+        h.on_msg(H, DialogueMsg::Busy { busy: Busy::Combat }, 0, &ALL);
+        let o = vote(&mut h, A, s, 3, 1_000);
+        assert!(
+            matches!(&o[0].msg, DialogueMsg::Votes { of: 3, .. }),
+            "{o:?}"
+        );
+    }
+
     #[test]
     fn a_player_out_of_the_game_is_a_voter_fewer_and_its_vote_goes() {
         // B, away, leaves the game: H and A on one option is everyone now.
@@ -2437,7 +2493,7 @@ mod tests {
         let (mut h, s) = voting();
         vote(&mut h, A, s, 3, 0);
         vote(&mut h, H, s, 4, 0);
-        h.on_msg(B, DialogueMsg::Busy { busy: Busy::Menu }, 5_000, &ALL);
+        h.on_msg(B, DialogueMsg::Busy { busy: Busy::Combat }, 5_000, &ALL);
         let o = h.on_disconnect(H);
         let told: Vec<_> = o
             .iter()

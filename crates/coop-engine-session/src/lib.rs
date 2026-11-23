@@ -100,8 +100,9 @@ pub const SCENE_TAG: u16 = 0x5343;
 /// played again: the guest came later to what the host had set off.
 pub const SCENE_AGAIN_MS: u64 = 10 * 60_000;
 /// The tag of a line an actor was made to say to the player (`SayTo`), on the speaker's form:
-/// a count, the topic, then whether the host's game said it to its own player (and ran its
-/// result). Every guest whose player the speaker is near says it there (the owner, 2026-11-22:
+/// a count, the topic, whether the host's game said it to its own player (and ran its result),
+/// then the line (info) the host's game picked for the topic (0: none; a guest's game picks the
+/// same, PC run 2026-11-23). Every guest whose player the speaker is near says it there (the owner, 2026-11-22:
 /// every player near an NPC hears what it says; Sunny's "see those sarsaparilla bottles" was
 /// heard by the host only), its result run there only when the host's game did not say it.
 pub const SAY_TAG: u16 = 0x5359;
@@ -111,12 +112,13 @@ pub const SAY_FAR: f32 = 1500.0;
 /// How near a guest's player a speaker must be for that guest's game to say the line.
 pub const SAY_NEAR: f32 = 2500.0;
 
-fn say_of(field: &Field) -> Option<(u8, u32, bool)> {
+fn say_of(field: &Field) -> Option<(u8, u32, bool, u32)> {
     match field {
-        Field::Custom { tag, data } if *tag == SAY_TAG && data.len() == 6 => Some((
+        Field::Custom { tag, data } if *tag == SAY_TAG && data.len() == 10 => Some((
             data[0],
             u32::from_le_bytes([data[1], data[2], data[3], data[4]]),
             data[5] != 0,
+            u32::from_le_bytes([data[6], data[7], data[8], data[9]]),
         )),
         _ => None,
     }
@@ -525,7 +527,7 @@ impl HostDriver {
             // everyone near (the owner, 2026-11-22: Sunny's trigger fired in both games and her
             // line and its rounds came twice). Not one said here lately (the trigger fired here
             // too).
-            if let Some((_, topic, _)) = say_of(&field) {
+            if let Some((_, topic, _, _)) = say_of(&field) {
                 // For the occasion it is asked for now (its quest's stage, the guest's story
                 // changes before it applied): the same line at a later stage is said again.
                 let say = (id, topic, commands::say_occasion(e, topic));
@@ -543,7 +545,7 @@ impl HostDriver {
                     ));
                     continue;
                 }
-                let said = commands::say_to_player(e, id, topic, false);
+                let said = commands::say_to_player(e, id, topic, false, 0);
                 self.claim_notes.push(format!(
                     "player {}'s game had actor {id:08x} say topic {topic:08x}: {}",
                     from.0,
@@ -554,7 +556,7 @@ impl HostDriver {
                 ));
                 commands::said_for_a_guest(e, say);
                 self.says_for_guests += 1;
-                self.tell_say(say, said.is_ok());
+                self.tell_say(e, say, said.is_ok());
                 continue;
             }
             // A scene a guest's own script started: played here, and so for everyone. Not one
@@ -636,7 +638,7 @@ impl HostDriver {
 
     /// Tells every guest that `speaker` says `topic` to the player (said here when `host_said`:
     /// its result ran here), and notes when.
-    fn tell_say(&mut self, say: commands::Say, host_said: bool) {
+    fn tell_say(&mut self, e: &mut Engine, say: commands::Say, host_said: bool) {
         let (speaker, topic, _) = say;
         self.says_played.insert(say, self.now_ms);
         let n = self.says.entry(speaker).or_insert(0);
@@ -644,6 +646,13 @@ impl HostDriver {
         let mut data = vec![*n];
         data.extend(topic.to_le_bytes());
         data.push(u8::from(host_said));
+        // The line this game picked for it, when it said it: every guest's game says that one.
+        let line = if host_said {
+            commands::picked_info(e, speaker, topic)
+        } else {
+            0
+        };
+        data.extend(line.to_le_bytes());
         self.sync
             .write(FormId(speaker), Field::Custom { tag: SAY_TAG, data });
     }
@@ -981,7 +990,7 @@ impl HostDriver {
                 "say: actor {speaker:08x} says topic {topic:08x} to the player{}: the guests near it say it",
                 if far { ", away from this game's (its result is theirs)" } else { "" }
             ));
-            self.tell_say(say, !far);
+            self.tell_say(e, say, !far);
         }
         // A conversation a script started between two actors: the guests' games play it too.
         for scene in commands::drain_scenes(e) {
@@ -1942,6 +1951,7 @@ impl GuestDriver {
             let mut data = vec![0];
             data.extend(topic.to_le_bytes());
             data.push(0);
+            data.extend(0u32.to_le_bytes());
             self.proposals_out
                 .push((FormId(speaker), Field::Custom { tag: SAY_TAG, data }));
             self.says_asked += 1;
@@ -1962,7 +1972,7 @@ impl GuestDriver {
             .map(|(k, en)| (k.form.0, en.field.clone()))
             .collect();
         for (form, field) in due {
-            if let Some((count, topic, host_said)) = say_of(&field) {
+            if let Some((count, topic, host_said, line)) = say_of(&field) {
                 let seen = self.say_seen.insert(form, count);
                 if !self.joined || seen == Some(count) {
                     continue;
@@ -1985,7 +1995,7 @@ impl GuestDriver {
                     ));
                     continue;
                 }
-                match commands::say_to_player(e, form, topic, host_said) {
+                match commands::say_to_player(e, form, topic, host_said, line) {
                     Ok(()) => {
                         self.says_said += 1;
                         self.healed_notes.push(format!(

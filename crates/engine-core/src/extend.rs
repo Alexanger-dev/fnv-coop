@@ -228,6 +228,13 @@ pub const WRAPS: &[Entry] = &[
         owners: COOP,
         step: "C-9",
     },
+    // TESTopic::GetMatchingInfo: the line an actor saying a topic picks; a co-op guest's game
+    // picks the one the host's game picked (docs/coop/SPECS.md S28).
+    Entry {
+        addr: 0x0061_a720,
+        owners: COOP,
+        step: "C-11",
+    },
     // TESTopic::GetMatchingInfo_ov2 (topic, said byte, speaker, target): the line a dialogue
     // window opens with. A window showing another player's conversation opens with that
     // player's line, not this game's own pick for the topic (S42).

@@ -26,7 +26,8 @@ use crate::social::SocialMsg;
 // 13 adds `DialogueMsg::Pay` (S30).
 // 14 adds karma and perks to `rules::Gift` (S30).
 // 15 adds the row voted for to `DialogueMsg::Vote` and `Votes` (S42).
-pub const PROTOCOL_VERSION: u16 = 15;
+// 16: a line an actor says (the session's say record) carries the host's pick (S28).
+pub const PROTOCOL_VERSION: u16 = 16;
 /// Largest datagram on the unreliable channel (fits a typical MTU).
 pub const MAX_UNRELIABLE_BYTES: usize = 1200;
 /// Largest single message on the reliable channel.

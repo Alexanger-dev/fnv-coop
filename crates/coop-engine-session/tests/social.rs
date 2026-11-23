@@ -2368,3 +2368,50 @@ fn the_host_reads_every_quest_again_when_a_lines_run_ends() {
             .any(|(k, en)| k.form == coop_core::ids::FormId(SIDE) && en.field == wanted);
     assert!(in_story, "the record as the line left it");
 }
+
+/// PC run, 2026-11-23: near Sunny at the geckos, the guest heard her old "see those sarsaparilla
+/// bottles" while the host heard the gecko line: the guest's game picked its own line for the
+/// topic (its conditions read differently). The host's game's pick goes with the line, and the
+/// guest's game says that one (council 3-0, A).
+#[test]
+fn a_guest_says_the_line_the_hosts_game_picked_for_a_topic() {
+    let mut w = World::new(&["Sunny"]);
+    // The topic's line: the gecko line in the host's game; the guest's would pick the bottles.
+    w.host.set_topic_line(SHARED_LINE, PLAIN_LINE);
+    w.run(20);
+    assert_eq!(w.host.script_say_to_player(SUNNY, SHARED_LINE), 6);
+    w.run(10);
+    assert_eq!(w.host.said_line(SUNNY), PLAIN_LINE);
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY), (1, SHARED_LINE));
+    assert_eq!(
+        w.guests[0].game.said_line(SUNNY),
+        PLAIN_LINE,
+        "the host's pick"
+    );
+    assert_eq!(
+        coop_engine::commands::forced_picks(&mut w.guests[0].game.e),
+        1
+    );
+    // Picked once: her next pick of the topic there is that game's own.
+    let g = &mut w.guests[0].game.e;
+    let (topic, sunny) = (
+        forms::form(g, SHARED_LINE).unwrap(),
+        coop_engine::actors::actor(g, SUNNY).unwrap(),
+    );
+    let player = g.mem.u32(coop_engine::addr::PLAYER_SINGLETON);
+    let own = g
+        .call(
+            coop_engine::addr::TOPIC_MATCHING_INFO,
+            &engine_core::args![topic, sunny, player],
+        )
+        .u32();
+    assert_eq!(own, topic, "its own pick again");
+    // Said away from the host's player (its game said nothing): the guest's own pick.
+    w.host.move_player(STORE, [0.0; 3], 0.0);
+    w.run(10);
+    w.guests[0].game.set_topic_line(SHARED_LINE, SHARED_LINE);
+    assert_eq!(w.host.script_say_to_player(SUNNY, SHARED_LINE), 6);
+    w.run(10);
+    assert_eq!(w.guests[0].game.said_to_player(SUNNY).0, 2);
+    assert_eq!(w.guests[0].game.said_line(SUNNY), SHARED_LINE);
+}

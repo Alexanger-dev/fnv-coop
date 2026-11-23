@@ -71,6 +71,13 @@ const END_DIALOGUE_FN: u32 = 0x0130_00b0;
 const SAY_TOPIC_FN: u32 = 0x0130_00c0;
 const SAID: u32 = 0xe00;
 const SAID_TOPIC: u32 = 0xe04;
+/// The line (info's form id) the speaker said for it: its pick through
+/// `TESTopic::GetMatchingInfo`, the topic's line in this game ([`Story::set_topic_line`]).
+const SAID_LINE: u32 = 0xe08;
+
+/// The kit's picks: each topic's line in this game (a topic without one picks itself).
+#[derive(Default)]
+struct TopicLines(std::sync::Mutex<std::collections::BTreeMap<u32, u32>>);
 /// Counters: real `HitMe` runs, starts of combat.
 const HITS: u32 = RAN + 32;
 const COMBATS: u32 = RAN + 36;
@@ -268,7 +275,29 @@ pub(super) fn register(e: &mut Engine) {
         bump(e, a[1] + SAID);
         let topic = e.mem.u32(a[2] + addr::FORM_ID_OFFSET);
         e.mem.set_u32(a[1] + SAID_TOPIC, topic);
+        let player = e.mem.u32(addr::PLAYER_SINGLETON);
+        let line = e
+            .call(addr::TOPIC_MATCHING_INFO, &args![a[2], a[1], player])
+            .u32();
+        let id = if line == 0 {
+            0
+        } else {
+            e.mem.u32(line + addr::FORM_ID_OFFSET)
+        };
+        e.mem.set_u32(a[1] + SAID_LINE, id);
         Ret::default()
+    });
+    // `TESTopic::GetMatchingInfo` (topic, speaker, target): the topic's line in this game.
+    e.register(addr::TOPIC_MATCHING_INFO, |e, a| {
+        let topic = e.mem.u32(a[0] + addr::FORM_ID_OFFSET);
+        let line = e
+            .ext_free::<TopicLines>()
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&topic)
+            .copied();
+        eax(line.and_then(|l| forms::form(e, l)).unwrap_or(a[0]))
     });
     e.register(addr::MOBILE_STOP_CURRENT_DIALOGUE, |_, _| Ret::default());
     e.register(addr::ACTOR_SAY_PAIR, |_, _| Ret::default());
@@ -529,6 +558,22 @@ impl Story {
     /// Reference `id` (an actor or an avatar) has its 3D, or none (it is not drawn).
     /// How many lines actor `id` was made to say to the player (`SayTo`), and the last one's
     /// topic.
+    /// Topic `topic`'s line in this game (its conditions' pick here): `line` (form ids).
+    pub fn set_topic_line(&mut self, topic: u32, line: u32) {
+        self.e
+            .ext_free::<TopicLines>()
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(topic, line);
+    }
+
+    /// The line (info) actor `id` said last for a topic it was made to say to the player.
+    pub fn said_line(&mut self, id: u32) -> u32 {
+        let a = forms::form(&mut self.e, id).expect("an actor of the story");
+        self.e.mem.u32(a + SAID_LINE)
+    }
+
     pub fn said_to_player(&mut self, id: u32) -> (u32, u32) {
         let a = forms::form(&mut self.e, id).expect("an actor of the story");
         (self.e.mem.u32(a + SAID), self.e.mem.u32(a + SAID_TOPIC))
