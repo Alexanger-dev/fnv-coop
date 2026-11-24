@@ -823,6 +823,21 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
                 "co-op talk: conversation with {npc:08x} asked of the game: a copy {copy}, came to greet {greets}, busy {busy}, queued {queued}"
             );
         }
+        // An NPC in another player's conversation: this player joins it (S42, D13), whatever
+        // package its copy here runs (PC run, 2026-11-24: the guest pressed E on Ringo, whose
+        // copy was on his thank-you greeting, and was refused as a greeting; she could not vote;
+        // council 3-0, C).
+        let joining = e
+            .ext_free::<Talk>()
+            .busy
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&npc);
+        if joining {
+            e.ext_free::<Talk>().push(Event::Blocked { npc });
+            unqueue(e, speaker);
+            return Ret::default();
+        }
         if crate::puppet::is_copy(e, npc) && greets(e, speaker) {
             unqueue(e, speaker);
             e.ext_free::<Talk>().push(Event::NotGreeted { npc });
@@ -843,15 +858,6 @@ pub(crate) fn create(e: &mut Engine, a: &[u32]) -> Ret {
             return Ret::default();
         }
         let t = e.ext_free::<Talk>();
-        if t.busy
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(&npc)
-        {
-            t.push(Event::Blocked { npc });
-            unqueue(e, speaker);
-            return Ret::default();
-        }
         // The conversation this player asked for waits for a busy player (D13).
         if t.held_npc
             .compare_exchange(npc, 0, Ordering::SeqCst, Ordering::SeqCst)

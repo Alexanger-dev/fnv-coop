@@ -86,6 +86,16 @@ fn is_skill_check(c: &Condition) -> bool {
         && (SKILLS.contains(&c.param) || SPECIAL.contains(&c.param))
 }
 
+/// Condition functions on the player that can differ between players: `GetActorValue`,
+/// `GetItemCount`, `GetLevel`, `GetBaseActorValue`, `HasPerk`, `GetPermanentActorValue`.
+const PLAYER_FUNCTIONS: [u32; 6] = [14, 47, 80, 277, 449, 495];
+
+/// Whether a condition tests something of the player that can differ between players.
+fn is_player_check(c: &Condition) -> bool {
+    let on_player = c.run_on == 1 || (c.run_on == RUN_ON_REFERENCE && c.reference == PLAYER_REF);
+    on_player && PLAYER_FUNCTIONS.contains(&c.function)
+}
+
 fn clean(text: &str) -> String {
     text.replace(['\t', '\r', '\n'], " ").trim().to_string()
 }
@@ -115,6 +125,9 @@ pub struct Line {
     pub verdict: Verdict,
     /// The owner's exception that decided the verdict, if one did.
     pub exception: String,
+    /// Its conditions test something of the player that can differ between players (an actor
+    /// value, items or caps held, a perk, the level): see [`LineSets::checks`].
+    pub player_check: bool,
 }
 
 /// A line as read, before its follow-ups are known.
@@ -238,6 +251,7 @@ pub fn lines(order: &LoadOrder) -> (Vec<Line>, usize) {
             .take(ANSWER_MAX)
             .collect();
         let own = classify(&facts);
+        let player_check = conditions.iter().any(is_player_check);
         read.push(Read {
             picked: topic.is_some(),
             follow_ups,
@@ -253,6 +267,7 @@ pub fn lines(order: &LoadOrder) -> (Vec<Line>, usize) {
                 follow: Verdict::NoVote(Vec::new()),
                 exception: String::new(),
                 own,
+                player_check,
             },
         });
     }
@@ -309,9 +324,11 @@ pub struct LineSets {
     /// trading window is exclusive to each player").
     pub personal: HashSet<u32>,
     /// A check of the player's S.P.E.C.I.A.L. or a skill (a condition on one, the success or the
-    /// failure line; a speech challenge): the only lines of another player shown as an option
-    /// (the owner, 2026-11-23: "Only supposed to get the other person's lines IF they're
-    /// SPECIAL related").
+    /// failure line; a speech challenge), or of anything else of the player that can differ
+    /// between players (items or caps held, a perk, the level, karma): the only lines of another
+    /// player shown as an option (the owner, 2026-11-23: "Only supposed to get the other
+    /// person's lines IF they're SPECIAL related"; 2026-11-24: Chet's "Fine. Here's 1000 caps."
+    /// the host could say, council 3-0, A).
     pub checks: HashSet<u32>,
 }
 
@@ -324,9 +341,10 @@ fn sets_of(lines: Vec<Line>) -> LineSets {
     let mut sets = LineSets::default();
     for l in lines {
         let (Verdict::Vote(own) | Verdict::NoVote(own)) = &l.own;
-        if own
-            .iter()
-            .any(|r| matches!(r, Reason::SkillCheck | Reason::SpeechCheck))
+        if l.player_check
+            || own
+                .iter()
+                .any(|r| matches!(r, Reason::SkillCheck | Reason::SpeechCheck))
         {
             sets.checks.insert(l.form);
         }
@@ -379,6 +397,7 @@ mod tests {
             follow: Verdict::NoVote(Vec::new()),
             verdict,
             exception: String::new(),
+            player_check: false,
         }
     }
 
